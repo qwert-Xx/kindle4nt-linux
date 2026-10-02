@@ -647,7 +647,7 @@
    $nodename:
 --- /dev/null
 +++ b/Documentation/devicetree/bindings/power/reset/amazon,kindle-k4-restart.yaml
-@@ -0,0 +1,29 @@
+@@ -0,0 +1,32 @@
 +# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
 +%YAML 1.2
 +---
@@ -666,16 +666,19 @@
 +    description: PMIC WDI, driven low only during the restart sequence.
 +  pinctrl-names:
 +    items:
++    - const: default
 +    - const: watchdog
 +    - const: reset
 +  pinctrl-0: true
 +  pinctrl-1: true
++  pinctrl-2: true
 +required:
 +- compatible
 +- reset-gpios
 +- pinctrl-names
 +- pinctrl-0
 +- pinctrl-1
++- pinctrl-2
 +additionalProperties: false
 --- /dev/null
 +++ b/Documentation/devicetree/bindings/power/supply/amazon,kindle-k4-mc13892-charger.yaml
@@ -1004,7 +1007,7 @@
 +dtb-$(CONFIG_K4_DIAGNOSTICS) += k4-debug/imx50-kindle-k4-debug.dtb
 --- /dev/null
 +++ b/arch/arm/boot/dts/nxp/imx/imx50-kindle-k4-common.dtsi
-@@ -0,0 +1,1340 @@
+@@ -0,0 +1,1341 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/* Kindle 4 NT D01100 LPDDR1: flat accepted board configuration.
 + * Fragment order and labels deliberately preserve the cold-accepted DTB.
@@ -2200,17 +2203,18 @@
 +		restart {
 +			compatible = "amazon,kindle-k4-restart";
 +			reset-gpios = <&gpio6 28 GPIO_ACTIVE_LOW>;
-+			/* No default state: preserve WDOG until reboot preparation. */
-+			pinctrl-names = "watchdog", "reset";
++			/* Own the WDI pad in hardware-watchdog mode until reboot. */
++			pinctrl-names = "default", "watchdog", "reset";
 +			pinctrl-0 = <&pinctrl_restart_watchdog>;
-+			pinctrl-1 = <&pinctrl_restart_gpio>;
++			pinctrl-1 = <&pinctrl_restart_watchdog>;
++			pinctrl-2 = <&pinctrl_restart_gpio>;
 +		};
 +	};
 +};
 +
 +&iomuxc {
 +	pinctrl_restart_watchdog: restart-watchdog-grp {
-+		fsl,pins = <MX50_PAD_WDOG__WDOG1_WDOG_RST_B_DEB 0x4>;
++		fsl,pins = <MX50_PAD_WDOG__WDOG1_WDOG_RST_B_DEB 0x0c>;
 +	};
 +	pinctrl_restart_gpio: restart-gpio-grp {
 +		/* Original high-drive push-pull/no keeper/no hysteresis. */

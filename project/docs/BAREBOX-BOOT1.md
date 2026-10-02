@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 # D01100 boot1 barebox
 
-这是独立 boot1 主题：上游 barebox v2026.09.0 + Kindle 板级修改。通用 MCI、MMC 与 watchdog 驱动不修改。默认不探卡、不读 idme、不加载持久环境，halt 等待 USB 串口/YMODEM RAM 上传。保留 MCI 写入能力，但没有默认存储写入动作。只覆盖 D01100/LPDDR1；不要套用于其它板型。
+这是独立 boot1 主题：上游 barebox v2026.09.0 + Kindle 板级修改。通用 MCI、MMC 与 watchdog 驱动不修改。v7 默认探测 non-removable eMMC，以 ext4 读取 p1 的 /boot/zImage 与 /boot/imx50-kindle-k4.dtb，无 initrd；不读 idme、不加载持久环境。按住高有效 GPIO1_20 “上”键进入 USB 串口/YMODEM RAM 上传。保留 MCI 写入能力，但没有默认存储写入动作。只覆盖 D01100/LPDDR1；不要套用于其它板型。
 
 ## 构建配方
 
@@ -12,7 +12,7 @@ sh barebox/boot1/build.sh /absolute/barebox-git barebox/boot1/barebox.config /ab
 sha256sum /absolute/new-boot1-build/plugin/barebox-boot1-plugin-candidate.img
 ```
 
-脚本仅解包上游、修改板级源码、交叉编译和包装镜像，不连接设备。记录外部输入SHA、编译器版本和输出 audit.json/SHA256SUMS。可设 KBUILD_BUILD_TIMESTAMP/KBUILD_BUILD_VERSION 固定版本元数据。公共源码已修正WDT诊断地址；本机旧v5的冷启动与5次reboot记录不构成此重建候选的硬件验收。新候选需另行冷验。
+脚本仅解包上游、修改板级源码、交叉编译和包装镜像，不连接设备。记录外部输入SHA、编译器版本和输出 audit.json/SHA256SUMS。可设 KBUILD_BUILD_TIMESTAMP/KBUILD_BUILD_VERSION 固定版本元数据。公共源码保留WDT半字诊断地址修正；v7 环境使用标准 emmc/host-ram boot 顺序、20次100ms上键采样。挂载、缺文件或 bootm 返回错误时回落主机加载；跳转后崩溃不保证回落。固定元数据可用 KBUILD_BUILD_TIMESTAMP="Fri Oct 2 20:48:05 CST 2026" 与 KBUILD_BUILD_VERSION=1。已部署的本机v7验证不自动覆盖任意外部输入重建候选。
 
 ## plugin/OCRAM 初始化
 
@@ -63,10 +63,20 @@ blockdev --setro /dev/mmcblk2
 trap - EXIT
 ```
 
-必须人工核对PARTITION_CONFIG=0x50，再冷复位观察串口、plugin/SRC/DDR诊断，上传外部DTB与RAM根核验正式功能与恢复。普通USB镜像启动不能证明MMC plugin/ROM helper运行。
+必须人工核对PARTITION_CONFIG=0x50，再冷复位观察串口、plugin/SRC/DDR诊断，核验自动加载eMMC根与正式功能及恢复。普通USB镜像启动不能证明MMC plugin/ROM helper运行。
 
 回退：下键+复位进ROM、普通USB恢复到Linux RAM，执行上述179命令组，把0x50改为0x48，确认读回后复位。只改变启动选择，不擦boot1，不改boot0、不改BOOT_BUS_WIDTH，不写永久硬件保护。
 
 低电3400/3600mV软件放行策略按用户决定不实现：MC13892硬件可在CPU不运行时充电；这不等于已验证完全耗尽电池的实际行为。
 
 离线配方已实际完成ARM构建；首段结构、序列表、ROM ABI/执行分支及头/表破坏检查7项通过。公共内容仅含源码/配置/说明，未包含stock镜像、设备身份、原始日志、固件、波形或凭据。构建成功不代替新候选冷验。
+
+## 当前状态（2026-10-03，既有实机记录）
+
+boot1 barebox v7 + eMMC p1 ext4 BusyBox 根已部署并读回核验，EXT_CSD[179]=0x50；无需电脑上传内核即可自动启动。按住“上”在两秒采样窗口进入 USB/YMODEM 主机加载；按住“下”配合复位进入 ROM 恢复。ath6kl_core/sdio 为模块，根挂载后由标准 modalias coldplug 加载固件；WDI 原厂方案 A 为 ALT2/0x0c，正常态由 restart pinctrl 持有。
+
+正式 A 的 10 轮 reboot 健康检查全部通过（25.812–26.578 秒到 SSH），800/160MHz 两次 RTC STOP、16MiB 内存保持、4MiB 文件 sync 后 reboot 哈希保持均通过。看门狗停喂方案 A 48.047 秒、旧 DTB 对照 41.156 秒均自行经 v7 回 eMMC；旧对照未复现 ROM，不能认定 A 已唯一修复历史故障。两次采集总长各180秒，停喂后有效窗口仅167/171秒。
+
+USB 物理拔线/电池独立冷启动、长时耐久及电源轨仍未验证；RAM 维护 guard 到期掉 ROM 的历史根因未定。新版模块 RAM 维护根尚未重新实机验证。Alpine feat/alpine-root 仅列路线图，未实机验证，未纳入本草案正式内容。
+
+完整部署顺序与 p1 回退见 [eMMC 根](EMMC-ROOT.md)。上键 USB 加载 Linux RAM 后也可修改179回boot0或重写p1；boot0回退仅在已有原厂系统布局仍可用时有效。

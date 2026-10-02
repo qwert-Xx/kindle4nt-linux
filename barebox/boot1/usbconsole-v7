@@ -1,0 +1,9 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Compiled environment only; no persistent eMMC environment.
+global.autoboot=boot
+global.boot.default="emmc host-ram"
+global k4.kernel=/boot/zImage
+global k4.dtb=/boot/imx50-kindle-k4.dtb
+usbserial || exit 1
+echo "K4 BOOT1 v7: hold UP for USB/YMODEM host loading"

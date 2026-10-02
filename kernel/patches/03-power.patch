@@ -230,7 +230,7 @@
  
  int mc13xxx_common_init(struct device *dev)
  {
-@@ -434,7 +504,34 @@
+@@ -434,7 +504,37 @@
  
  	mc13xxx->variant->print_revision(mc13xxx, revision);
  
@@ -255,8 +255,11 @@
 +	}
 +
 +	if (of_device_is_compatible(dev->of_node, "amazon,kindle-k4-mc13892"))
-+		/* Stock POWER_CTL2: normal watchdog reset enabled, restart enabled,
-+		 * STANDBY input active high (STANDBYINV=0).
++		/* Stock mx50_yoshi_pmic_mc13892.c:mc13892_regulator_init()
++		 * sets WDIRESET/RESTARTEN during the parent PMIC probe, before
++		 * registering children. Keep that normal-operation initialization
++		 * here; the board restart prepare callback clears WDIRESET later.
++		 * STANDBY input is active high (STANDBYINV=0).
 +		 */
 +		ret = mc13xxx_reg_rmw(mc13xxx, MC13XXX_PWRCTRL,
 +			MC13XXX_PWRCTRL_WDIRESET | BIT(0) | BIT(10),
@@ -266,7 +269,7 @@
  			MC13XXX_PWRCTRL_WDIRESET, MC13XXX_PWRCTRL_WDIRESET);
  	if (ret)
  		return ret;
-@@ -491,8 +588,55 @@
+@@ -491,8 +591,55 @@
  	if (mc13xxx->flags & MC13XXX_USE_ADC)
  		mc13xxx_add_subdevice(mc13xxx, "%s-adc");
  
@@ -701,12 +704,13 @@
 +obj-$(CONFIG_POWER_RESET_K4_MC13892) += k4-mc13892-restart.o
 --- /dev/null
 +++ b/drivers/power/reset/k4-mc13892-restart.c
-@@ -0,0 +1,405 @@
+@@ -0,0 +1,409 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/* Yoshi's PMIC RTC-assisted board restart; no GPIO change at probe. */
 +#include <linux/delay.h>
 +#include <linux/gpio/consumer.h>
 +#include <linux/ktime.h>
++#include <linux/kexec.h>
 +#include <linux/hrtimer.h>
 +#include <linux/mfd/mc13xxx.h>
 +#include <linux/module.h>
@@ -947,7 +951,10 @@
 +{
 +	struct k4_restart *k = container_of(nb, struct k4_restart, prepare_nb);
 +
-+	if (event != SYS_RESTART)
++	/* kexec calls restart preparation without resetting the board.
++	 * Leave the PMIC alarm, reboot flag and reset wiring for the new kernel.
++	 */
++	if (event != SYS_RESTART || kexec_in_progress)
 +		return NOTIFY_DONE;
 +	WRITE_ONCE(reboot_pending, true);
 +	k->last_error = k4_restart_prepare(k);

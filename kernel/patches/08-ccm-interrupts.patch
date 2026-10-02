@@ -1,25 +1,6 @@
-From a339290ae2b8fc4c769facb543ce3134f3ce839d Mon Sep 17 00:00:00 2001
-From: codex <codex@localhost>
-Date: Fri, 2 Oct 2026 16:25:41 +0800
-Subject: [PATCH] ARM: dts: imx50: fix CCM interrupts
-
-The i.MX50 CCM node inherits the TZIC interrupt controller, whose
-#interrupt-cells is one. The existing GIC-style triples are therefore
-interpreted as six interrupt specifiers instead of the two required by
-imx5-clock.yaml.
-
-Describe CCM interrupt requests 71 and 72 as two one-cell specifiers.
-This corrects the encoding without changing the interrupt controller
-or the clock configuration.
----
- arch/arm/boot/dts/nxp/imx/imx50.dtsi | 2 +-
- 1 file changed, 1 insertion(+), 1 deletion(-)
-
-diff --git a/arch/arm/boot/dts/nxp/imx/imx50.dtsi b/arch/arm/boot/dts/nxp/imx/imx50.dtsi
-index 909222856..0df664c00 100644
 --- a/arch/arm/boot/dts/nxp/imx/imx50.dtsi
 +++ b/arch/arm/boot/dts/nxp/imx/imx50.dtsi
-@@ -372,7 +372,7 @@ src: reset-controller@53fd0000 {
+@@ -372,7 +372,7 @@
  			clks: ccm@53fd4000 {
  				compatible = "fsl,imx50-ccm";
  				reg = <0x53fd4000 0x4000>;
@@ -28,6 +9,3 @@ index 909222856..0df664c00 100644
  				#clock-cells = <1>;
  			};
  
--- 
-2.43.0
-

@@ -9,3 +9,5 @@
 - 主机工具环境（包括dt-schema、外部SWIG/Python headers）仅核验工具，不是设备运行输入、不开系统安装/CI必需依赖。锁定版本记录与公开源码配方分开。
 
 本地draft不是已批准的GitHub发布；完整人工许可/隐私审阅与阶段4/5冷门槛通过前，不贴冷验release标签，不上传私有运行附件。
+
+- e2fsprogs 1.47.1 使用其各文件 GPL/LGPL/BSD/MIT 通知；mmc-utils v1.0 使用 GPL-2.0 系列，HMAC/SHA2保留BSD声明。锁文件给出源码归档SHA；构建维护包保留完整源码归档/NOTICE。静态glibc重分发还须履行LGPL对应源码与重新链接义务；当前公开草案只分发配方，不分发维护二进制或私有根tar。

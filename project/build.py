@@ -31,16 +31,16 @@ def main():
     elif 'kernel_source' in d: SOURCE=(pathlib.Path(a.inputs).resolve().parent/d['kernel_source']).resolve()
     if not (SOURCE/'Makefile').is_file():raise ValueError('Linux source missing; set --source or kernel_source')
     out = pathlib.Path(a.out).resolve()
-    if out == SOURCE or SOURCE in out.parents:
+    local_outputs = pathlib.Path(__file__).resolve().parents[1] / '.k4-build'
+    if out == SOURCE or (SOURCE in out.parents and local_outputs not in out.parents):
         raise ValueError('build output must be outside source tree')
     if a.check_only:
         print('INPUTS_OK'); return
     out.mkdir(parents=True, exist_ok=True)
     profile=d.get('kernel_profile','production')
-    if profile not in ('production','debug'): raise ValueError('unknown kernel profile')
-    config=d['inputs'].get('config',{}).get('resolved',str(pathlib.Path(__file__).resolve().parent/'configs'/('k4-'+profile+'.config')))
-    shutil.copyfile(config, out / '.config')
-    d.setdefault('release','6.6.157-k4-'+profile)
+    if profile not in ('production','debug','lifecycle','emmc-root'): raise ValueError('unknown kernel profile')
+    config=d['inputs'].get('config',{}).get('resolved',str(pathlib.Path(__file__).resolve().parent/'configs'/('k4-'+('production' if profile=='emmc-root' else profile)+'.config')))
+    d.setdefault('release','6.6.157-k4-'+('production' if profile=='emmc-root' else profile))
     d.setdefault('dtb','nxp/imx/imx50-kindle-k4.dtb')
     d.setdefault('metadata',{'KBUILD_BUILD_VERSION':'1','KBUILD_BUILD_TIMESTAMP':'2026-10-01 00:00:00 UTC','KBUILD_BUILD_USER':'k4','KBUILD_BUILD_HOST':'builder'})
     if not re.fullmatch(r'[A-Za-z0-9_.+-]{1,64}',d['release']):raise ValueError('invalid kernel release')
@@ -50,13 +50,26 @@ def main():
     cmd = ['make', '-C', str(SOURCE), 'O='+str(out), 'ARCH=arm',
            'CROSS_COMPILE='+d.get('cross_compile', 'arm-linux-gnueabihf-'),
            'KERNELRELEASE='+d['release']]
+    if d.get('profile') == 'private-replay':
+        shutil.copyfile(config, out / '.config')
+    else:
+        subprocess.run(cmd+['k4_defconfig'], env=env, check=True)
+        subprocess.run(['bash', str(SOURCE/'scripts/kconfig/merge_config.sh'),
+                        '-m', '-O', str(out), str(out/'.config'), config], env=env, check=True)
     subprocess.run(cmd+['olddefconfig'], env=env, check=True)
     if d.get('profile','public')!='private-replay':
         cfg=(out/'.config').read_text()
         for key in ('IMX50_OCRAM','IMX50_PM','K4_PM_HEALTH_CLOCK','POWER_RESET_K4_MC13892','CHARGER_K4_MC13892','USB_K4_PHY','IMX2_WDT'):
             if 'CONFIG_'+key+'=y\n' not in cfg:raise ValueError('required recovery builtin: '+key)
+        if ('CONFIG_ATH6KL_DEBUG=y\n' in cfg)!=(profile=='debug'):
+            raise ValueError('ath6kl debug selection mismatch')
         if ('CONFIG_K4_DIAGNOSTICS=y\n' in cfg)!=(profile=='debug'):
             raise ValueError('kernel profile diagnostic selection mismatch')
+    if profile=='emmc-root':
+        cfg=(out/'.config').read_text()
+        for key in ('EXT4_FS','MMC','MMC_BLOCK','MMC_SDHCI_ESDHC_IMX','DEVTMPFS','DEVTMPFS_MOUNT'):
+            if 'CONFIG_'+key+'=y\n' not in cfg:raise ValueError('direct root requires builtin: '+key)
+        if 'CONFIG_INITRAMFS_SOURCE=""\n' not in cfg:raise ValueError('emmc-root requires no embedded bootstrap')
     if 'baseline_metadata' in d:
         if d.get('profile') != 'private-replay':
             raise ValueError('baseline metadata override is private-replay only')
@@ -77,12 +90,17 @@ def main():
         module_root=out/'root-modules'
         subprocess.run(cmd+['modules_install','INSTALL_MOD_PATH='+str(module_root),'INSTALL_MOD_STRIP=1'],env=env,check=True)
         rd=rootfs.load(d['inputs']['ram_recipe']['resolved'])
-        if d.get('profile','public')!='private-replay' and profile=='production':
+        if d.get('profile','public')!='private-replay' and profile!='debug':
             if rd.get('automatic_diagnostics',False):raise ValueError('production root cannot auto-enable diagnostics')
             if any(e['name']=='rootfs.ext3' for e in rd['entries']) and 'filesystem_recipe' not in rd:
                 raise ValueError('production ext3 requires a structured filesystem recipe')
-        report_root = rootfs.build(d['inputs']['ram_recipe']['resolved'], out/'ram.cpio.gz',module_root,d['release'],modalias_coldplug=profile=='production' and 'CONFIG_KEYBOARD_GPIO=m\n' in (out/'.config').read_text(),formal_modules=profile=='production')
-        artifacts['ram_recipe'] = out/'ram.cpio.gz'
+        if profile=='emmc-root':
+            import emmc_root
+            report_root=emmc_root.build(d['inputs']['ram_recipe']['resolved'],out,module_root,d['release'],artifacts['zImage'],artifacts['dtb'])
+            artifacts['rootfs_tar']=out/'rootfs.tar.gz'
+        else:
+            report_root = rootfs.build(d['inputs']['ram_recipe']['resolved'], out/'ram.cpio.gz',module_root,d['release'],modalias_coldplug=profile in ('production','lifecycle') and 'CONFIG_KEYBOARD_GPIO=m\n' in (out/'.config').read_text(),formal_modules=profile!='debug')
+            artifacts['ram_recipe'] = out/'ram.cpio.gz'
     # Retain an explicitly supplied, private, accepted RAM payload byte-for-byte.
     # The builder does not unpack credentials or automatically execute diagnostics.
     for name in ('ram_root', 'barebox'):
