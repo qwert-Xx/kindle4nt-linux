@@ -1,0 +1,7 @@
+01-platform.patch
+02-clocks.patch
+03-power.patch
+04-usb.patch
+05-wifi-mmc.patch
+06-display-input.patch
+07-device-tree.patch
