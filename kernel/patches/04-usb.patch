@@ -1,0 +1,416 @@
+--- a/drivers/usb/chipidea/ci_hdrc_imx.c
++++ b/drivers/usb/chipidea/ci_hdrc_imx.c
+@@ -15,6 +15,7 @@
+ #include <linux/clk.h>
+ #include <linux/pinctrl/consumer.h>
+ #include <linux/pm_qos.h>
++#include <linux/regulator/consumer.h>
+ 
+ #include "ci.h"
+ #include "ci_hdrc_imx.h"
+@@ -103,6 +104,8 @@
+ 	struct pinctrl *pinctrl;
+ 	struct pinctrl_state *pinctrl_hsic_active;
+ 	struct regulator *hsic_pad_regulator;
++	struct regulator *phy_supply;
++	bool phy_supply_on;
+ 	/* SoC before i.mx6 (except imx23/imx28) needs three clks */
+ 	bool need_three_clks;
+ 	struct clk *clk_ipg;
+@@ -112,6 +115,27 @@
+ 	struct pm_qos_request pm_qos_req;
+ 	const struct ci_hdrc_imx_platform_flag *plat_data;
+ };
++
++static int imx_usb_phy_supply_set(struct ci_hdrc_imx_data *data, bool on)
++{
++	int ret;
++
++	if (!data->phy_supply || data->phy_supply_on == on)
++		return 0;
++	ret = on ? regulator_enable(data->phy_supply) :
++		   regulator_disable(data->phy_supply);
++	if (!ret)
++		data->phy_supply_on = on;
++	return ret;
++}
++
++static void imx_usb_phy_supply_release(void *arg)
++{
++	struct ci_hdrc_imx_data *data = arg;
++
++	if (imx_usb_phy_supply_set(data, false))
++		pr_err("imx_usb: failed to release PHY supply\n");
++}
+ 
+ /* Common functions shared by usbmisc drivers */
+ 
+@@ -440,6 +464,22 @@
+ 	if (ret)
+ 		goto qos_remove_request;
+ 
++	/* This supply must precede controller clocks, including on resume. */
++	if (of_property_read_bool(np, "phy-supply")) {
++		data->phy_supply = devm_regulator_get(dev, "phy");
++		if (IS_ERR(data->phy_supply)) {
++			ret = PTR_ERR(data->phy_supply);
++			data->phy_supply = NULL;
++			goto qos_remove_request;
++		}
++		ret = imx_usb_phy_supply_set(data, true);
++		if (ret)
++			goto qos_remove_request;
++		ret = devm_add_action_or_reset(dev, imx_usb_phy_supply_release, data);
++		if (ret)
++			goto qos_remove_request;
++	}
++
+ 	ret = imx_prepare_enable_clks(dev);
+ 	if (ret)
+ 		goto qos_remove_request;
+@@ -563,6 +603,7 @@
+ 	}
+ 	if (data->usbmisc_data)
+ 		put_device(data->usbmisc_data->dev);
++	imx_usb_phy_supply_release(data);
+ }
+ 
+ static void ci_hdrc_imx_shutdown(struct platform_device *pdev)
+@@ -633,27 +674,48 @@
+ 
+ static int __maybe_unused ci_hdrc_imx_suspend(struct device *dev)
+ {
++	int ret, rollback;
++
++	struct ci_hdrc_imx_data *data = dev_get_drvdata(dev);
++
++	if (data->in_lpm && !data->phy_supply)
++		return 0;
++	if (!data->in_lpm) {
++		ret = imx_controller_suspend(dev, PMSG_SUSPEND);
++		if (ret)
++			return ret;
++	}
++
++	/* Runtime PM and either level's wake request retain the PHY rail. */
++	if (!device_may_wakeup(dev) &&
++	    !device_may_wakeup(&data->ci_pdev->dev)) {
++		ret = imx_usb_phy_supply_set(data, false);
++		if (ret) {
++			rollback = imx_controller_resume(dev, PMSG_RESUME);
++			if (rollback)
++				dev_err(dev, "supply suspend rollback failed: %d\n", rollback);
++			return ret;
++		}
++		if (data->phy_supply)
++			dev_info(dev, "system sleep PHY supply vote off, state=%d\n",
++				 regulator_is_enabled(data->phy_supply));
++	}
++
++	pinctrl_pm_select_sleep_state(dev);
++	return 0;
++}
++
++static int __maybe_unused ci_hdrc_imx_resume(struct device *dev)
++{
++	struct ci_hdrc_imx_data *data = dev_get_drvdata(dev);
+ 	int ret;
+ 
+-	struct ci_hdrc_imx_data *data = dev_get_drvdata(dev);
+-
+-	if (data->in_lpm)
+-		/* The core's suspend doesn't run */
+-		return 0;
+-
+-	ret = imx_controller_suspend(dev, PMSG_SUSPEND);
++	ret = imx_usb_phy_supply_set(data, true);
+ 	if (ret)
+ 		return ret;
+-
+-	pinctrl_pm_select_sleep_state(dev);
+-	return ret;
+-}
+-
+-static int __maybe_unused ci_hdrc_imx_resume(struct device *dev)
+-{
+-	struct ci_hdrc_imx_data *data = dev_get_drvdata(dev);
+-	int ret;
+-
++	if (data->phy_supply)
++		dev_info(dev, "system resume PHY supply vote on, state=%d\n",
++			 regulator_is_enabled(data->phy_supply));
+ 	pinctrl_pm_select_default_state(dev);
+ 	ret = imx_controller_resume(dev, PMSG_RESUME);
+ 	if (!ret && data->supports_runtime_pm) {
+--- a/drivers/usb/chipidea/usbmisc_imx.c
++++ b/drivers/usb/chipidea/usbmisc_imx.c
+@@ -273,6 +273,58 @@
+ 
+ 	return 0;
+ }
++
++/* i.MX50 usb_common.c:708-712, 806-808: wrapper fields outside ARC. */
++static int usbmisc_imx50_init(struct imx_usbmisc_data *data)
++{
++	struct imx_usbmisc *usbmisc = dev_get_drvdata(data->dev);
++	unsigned long flags;
++	u32 ctrl, phy, clocks;
++
++	if (data->index > 1)
++		return -EINVAL;
++	spin_lock_irqsave(&usbmisc->lock, flags);
++	ctrl = readl(usbmisc->base);
++	phy = readl(usbmisc->base + MX53_USB_OTG_PHY_CTRL_0_OFFSET);
++	clocks = readl(usbmisc->base + MX53_USB_CLKONOFF_CTRL_OFFSET);
++	dev_dbg(data->dev, "imx50 USB%u before ctrl=%08x phy=%08x clocks=%08x\n",
++		data->index, ctrl, phy, clocks);
++	if (!data->index) {
++		ctrl &= ~BIT(24);
++		if (data->pwr_pol)
++			ctrl |= BIT(24);
++		writel(ctrl, usbmisc->base);
++	}
++	if (data->disable_oc) {
++		phy |= data->index ? MX53_BM_OVER_CUR_DIS_H1 :
++			MX53_BM_OVER_CUR_DIS_OTG;
++		writel(phy, usbmisc->base + MX53_USB_OTG_PHY_CTRL_0_OFFSET);
++	}
++	clocks &= ~BIT(17 + data->index);
++	writel(clocks, usbmisc->base + MX53_USB_CLKONOFF_CTRL_OFFSET);
++	spin_unlock_irqrestore(&usbmisc->lock, flags);
++	dev_info(data->dev, "imx50 USB%u ctrl=%08x phy=%08x clocks=%08x\n",
++		 data->index, ctrl, phy, clocks);
++	return 0;
++}
++
++/* Only documented configuration registers, with no FIFO or read-clear bits. */
++static ssize_t imx50_configuration_show(struct device *dev,
++				      struct device_attribute *attr, char *buf)
++{
++	struct imx_usbmisc *usbmisc = dev_get_drvdata(dev);
++
++	return sysfs_emit(buf, "CTRL=%08x PHY0=%08x PHY1=%08x CLKONOFF=%08x\n",
++		readl(usbmisc->base), readl(usbmisc->base + 0x08),
++		readl(usbmisc->base + 0x0c), readl(usbmisc->base + 0x24));
++}
++static DEVICE_ATTR_RO(imx50_configuration);
++static struct attribute *imx50_configuration_attrs[] = {
++	&dev_attr_imx50_configuration.attr, NULL,
++};
++static const struct attribute_group imx50_configuration_group = {
++	.attrs = imx50_configuration_attrs,
++};
+ 
+ static int usbmisc_imx53_init(struct imx_usbmisc_data *data)
+ {
+@@ -1025,6 +1077,10 @@
+ 	.init = usbmisc_imx27_init,
+ };
+ 
++static const struct usbmisc_ops imx50_usbmisc_ops = {
++	.init = usbmisc_imx50_init,
++};
++
+ static const struct usbmisc_ops imx51_usbmisc_ops = {
+ 	.init = usbmisc_imx53_init,
+ };
+@@ -1252,6 +1308,10 @@
+ 	{
+ 		.compatible = "fsl,imx27-usbmisc",
+ 		.data = &imx27_usbmisc_ops,
++	},
++	{
++		.compatible = "fsl,imx50-usbmisc",
++		.data = &imx50_usbmisc_ops,
+ 	},
+ 	{
+ 		.compatible = "fsl,imx51-usbmisc",
+@@ -1305,6 +1365,8 @@
+ 
+ 	data->ops = of_device_get_match_data(&pdev->dev);
+ 	platform_set_drvdata(pdev, data);
++	if (data->ops == &imx50_usbmisc_ops)
++		return devm_device_add_group(&pdev->dev, &imx50_configuration_group);
+ 
+ 	return 0;
+ }
+--- a/drivers/usb/phy/Kconfig
++++ b/drivers/usb/phy/Kconfig
+@@ -36,6 +36,15 @@
+ 	  Enable this to support Keystone USB phy. This driver provides
+ 	  interface to interact with USB 2.0 and USB 3.0 PHY that is part
+ 	  of the Keystone SOC.
++
++config USB_K4_PHY
++	tristate "Kindle K4 peripheral USB current budget"
++	depends on OF && SOC_IMX50 && POWER_SUPPLY
++	depends on NOP_USB_XCEIV
++	help
++	  Reuse the generic PHY clock handling and expose the gadget's USB
++	  current budget as a read-only power supply. This does not control
++	  the charger or measure VBUS. Intended for K4 peripheral mode only.
+ 
+ config NOP_USB_XCEIV
+ 	tristate "NOP USB Transceiver Driver"
+--- a/drivers/usb/phy/Makefile
++++ b/drivers/usb/phy/Makefile
+@@ -10,6 +10,7 @@
+ obj-$(CONFIG_AB8500_USB)		+= phy-ab8500-usb.o
+ obj-$(CONFIG_FSL_USB2_OTG)		+= phy-fsl-usb.o
+ obj-$(CONFIG_NOP_USB_XCEIV)		+= phy-generic.o
++obj-$(CONFIG_USB_K4_PHY)			+= phy-k4.o
+ obj-$(CONFIG_TAHVO_USB)			+= phy-tahvo.o
+ obj-$(CONFIG_AM335X_CONTROL_USB)	+= phy-am335x-control.o
+ obj-$(CONFIG_AM335X_PHY_USB)		+= phy-am335x.o
+--- a/drivers/usb/phy/phy-generic.c
++++ b/drivers/usb/phy/phy-generic.c
+@@ -138,14 +138,20 @@
+ 	int ret;
+ 
+ 	if (!IS_ERR(nop->vcc)) {
+-		if (regulator_enable(nop->vcc))
+-			dev_err(phy->dev, "Failed to enable power\n");
++		ret = regulator_enable(nop->vcc);
++		if (ret) {
++			dev_err(phy->dev, "Failed to enable power: %d\n", ret);
++			return ret;
++		}
+ 	}
+ 
+ 	if (!IS_ERR(nop->clk)) {
+ 		ret = clk_prepare_enable(nop->clk);
+-		if (ret)
++		if (ret) {
++			if (!IS_ERR(nop->vcc) && regulator_disable(nop->vcc))
++				dev_err(phy->dev, "Failed to roll back power\n");
+ 			return ret;
++		}
+ 	}
+ 
+ 	nop_reset(nop);
+--- /dev/null
++++ b/drivers/usb/phy/phy-k4.c
+@@ -0,0 +1,123 @@
++// SPDX-License-Identifier: GPL-2.0
++/* K4 peripheral PHY with a read-only gadget current budget provider. */
++#include <linux/atomic.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/power_supply.h>
++#include <linux/usb/phy.h>
++
++#include "phy-generic.h"
++
++struct k4_usb_phy {
++	/* Generic PHY callbacks retrieve this first member via dev_get_drvdata. */
++	struct usb_phy_generic nop;
++	struct power_supply *supply;
++	atomic_t current_ma;
++};
++
++static enum power_supply_property k4_usb_properties[] = {
++	POWER_SUPPLY_PROP_CURRENT_MAX,
++};
++
++static int k4_usb_get_property(struct power_supply *supply,
++			      enum power_supply_property property,
++			      union power_supply_propval *value)
++{
++	struct k4_usb_phy *k4 = power_supply_get_drvdata(supply);
++
++	if (property != POWER_SUPPLY_PROP_CURRENT_MAX)
++		return -EINVAL;
++
++	value->intval = atomic_read(&k4->current_ma) * 1000;
++	return 0;
++}
++
++static const struct power_supply_desc k4_usb_supply_desc = {
++	.name = "k4-usb-budget",
++	.type = POWER_SUPPLY_TYPE_USB,
++	.properties = k4_usb_properties,
++	.num_properties = ARRAY_SIZE(k4_usb_properties),
++	.get_property = k4_usb_get_property,
++};
++
++static int k4_usb_set_power(struct usb_phy *phy, unsigned int ma)
++{
++	struct k4_usb_phy *k4 = dev_get_drvdata(phy->dev);
++	unsigned int budget = min(ma, 500U);
++
++	/* May run under the UDC spinlock: no SPI/I2C/regulator access here. */
++	if (atomic_xchg(&k4->current_ma, budget) != budget) {
++		dev_info(phy->dev, "gadget current budget %u mA\n", budget);
++		power_supply_changed(k4->supply);
++	}
++	return 0;
++}
++
++static void k4_usb_shutdown(struct usb_phy *phy)
++{
++	k4_usb_set_power(phy, 0);
++	usb_gen_phy_shutdown(phy);
++}
++
++static int k4_usb_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct power_supply_config supply_config = {};
++	struct k4_usb_phy *k4;
++	int ret;
++
++	if (!of_machine_is_compatible("amazon,kindle-4"))
++		return -ENODEV;
++
++	k4 = devm_kzalloc(dev, sizeof(*k4), GFP_KERNEL);
++	if (!k4)
++		return -ENOMEM;
++	platform_set_drvdata(pdev, k4);
++	atomic_set(&k4->current_ma, 0);
++
++	ret = usb_phy_gen_create_phy(dev, &k4->nop);
++	if (ret)
++		return ret;
++
++	supply_config.drv_data = k4;
++	supply_config.of_node = dev->of_node;
++	/* A UDC suspend callback may lower the budget: do not wake ourselves. */
++	k4->supply = devm_power_supply_register_no_ws(dev, &k4_usb_supply_desc,
++						    &supply_config);
++	if (IS_ERR(k4->supply))
++		return dev_err_probe(dev, PTR_ERR(k4->supply),
++				     "cannot register USB current budget\n");
++
++	k4->nop.phy.init = usb_gen_phy_init;
++	k4->nop.phy.shutdown = k4_usb_shutdown;
++	k4->nop.phy.set_power = k4_usb_set_power;
++	k4->nop.phy.label = "k4-usb-phy";
++	return usb_add_phy_dev(&k4->nop.phy);
++}
++
++static void k4_usb_remove(struct platform_device *pdev)
++{
++	struct k4_usb_phy *k4 = platform_get_drvdata(pdev);
++
++	usb_remove_phy(&k4->nop.phy);
++}
++
++static const struct of_device_id k4_usb_match[] = {
++	{ .compatible = "amazon,k4-usb-phy" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, k4_usb_match);
++
++static struct platform_driver k4_usb_driver = {
++	.probe = k4_usb_probe,
++	.remove_new = k4_usb_remove,
++	.driver = {
++		.name = "k4-usb-phy",
++		.of_match_table = k4_usb_match,
++	},
++};
++module_platform_driver(k4_usb_driver);
++
++MODULE_DESCRIPTION("Kindle K4 USB PHY gadget current budget");
++MODULE_LICENSE("GPL");
