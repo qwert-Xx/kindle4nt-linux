@@ -1,0 +1,2642 @@
+--- a/arch/arm/boot/compressed/head.S
++++ b/arch/arm/boot/compressed/head.S
+@@ -174,6 +174,42 @@
+ #endif
+ 		.endm
+ 
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++		.macro	k4_trace, stage
++		.endm
++
++
+ 		.section ".start", "ax"
+ /*
+  * sort out different calling conventions
+@@ -228,6 +264,27 @@
+ #endif
+ 		mov	r7, r1			@ save architecture ID
+ 		mov	r8, r2			@ save atags pointer
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
+ 
+ #ifndef CONFIG_CPU_V7M
+ 		/*
+@@ -302,6 +359,7 @@
+ 		 */
+ 		ldr	sp, [r1]	@ get stack location
+ 		add	sp, sp, r1	@ apply relocation
++		k4_trace 1
+ 
+ 		/* Validate calculated start against passed DTB */
+ 		mov	r1, r8
+@@ -333,6 +391,7 @@
+ 		ldr	r6, [r0, #4]
+ 		add	sp, sp, r0
+ 		add	r6, r6, r0
++		k4_trace 2
+ 
+ 		get_inflated_image_size	r9, r10, lr
+ 
+@@ -627,11 +686,13 @@
+  *   r7  = architecture ID
+  *   r8  = atags pointer
+  */
++		k4_trace 3
+ 		mov	r0, r4
+ 		mov	r1, sp			@ malloc space above stack
+ 		add	r2, sp, #MALLOC_SIZE	@ 64k max
+ 		mov	r3, r7
+ 		bl	decompress_kernel
++		k4_trace 4
+ 
+ 		get_inflated_image_size	r1, r2, r3
+ 
+@@ -639,6 +700,7 @@
+ 		add	r1, r1, r0		@ end of inflated image
+ 		bl	cache_clean_flush
+ 		bl	cache_off
++		k4_trace 5
+ 
+ #ifdef CONFIG_ARM_VIRT_EXT
+ 		mrs	r0, spsr		@ Get saved CPU boot mode
+--- a/arch/arm/kernel/head-common.S
++++ b/arch/arm/kernel/head-common.S
+@@ -74,11 +74,36 @@
+  *  r9  = processor ID
+  */
+ 	__INIT
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++	.macro	k4_trace_mmu, stage, letter
++	.endm
++
++
+ __mmap_switched:
+ 
+ 	mov	r7, r1
+ 	mov	r8, r2
+ 	mov	r10, r0
++	k4_trace_mmu 12, 0x43		@ MMU on, before BSS clear
+ 
+ 	adr	r4, __mmap_switched_data
+ 	mov	fp, #0
+@@ -114,6 +139,7 @@
+ 	str	r8, [r2]			@ Save atags pointer
+ 	cmp	r3, #0
+ 	strne	r10, [r3]			@ Save control register values
++	k4_trace_mmu 13, 0x44		@ BSS and initial task ready
+ #ifdef CONFIG_KASAN
+ 	bl	kasan_early_init
+ #endif
+--- a/arch/arm/kernel/head.S
++++ b/arch/arm/kernel/head.S
+@@ -69,6 +69,31 @@
+ 	sub	\rd, \rd, #PG_DIR_SIZE
+ 	.endm
+ 
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++	.macro	k4_head_trace, stage, letter
++	.endm
++
++
+ /*
+  * Kernel startup entry point.
+  * ---------------------------
+@@ -104,11 +129,14 @@
+ 	@ ensure svc mode and all interrupts masked
+ 	safe_svcmode_maskall r9
+ 
++	k4_head_trace 6, 0x36		@ stext entry
++
+ 	mrc	p15, 0, r9, c0, c0		@ get processor id
+ 	bl	__lookup_processor_type		@ r5=procinfo r9=cpuid
+ 	movs	r10, r5				@ invalid processor (r5=0)?
+  THUMB( it	eq )		@ force fixup-able long branch encoding
+ 	beq	__error_p			@ yes, error 'p'
++	k4_head_trace 7, 0x37		@ supported CPU identified
+ 
+ #ifdef CONFIG_ARM_LPAE
+ 	mrc	p15, 0, r3, c0, c1, 4		@ read ID_MMFR0
+@@ -130,13 +158,16 @@
+ 	 * r8 = phys_offset, r9 = cpuid, r10 = procinfo
+ 	 */
+ 	bl	__vet_atags
++	k4_head_trace 8, 0x38		@ boot parameters vetted
+ #ifdef CONFIG_SMP_ON_UP
+ 	bl	__fixup_smp
+ #endif
+ #ifdef CONFIG_ARM_PATCH_PHYS_VIRT
+ 	bl	__fixup_pv_table
+ #endif
++	k4_head_trace 9, 0x39		@ physical/virtual patching done
+ 	bl	__create_page_tables
++	k4_head_trace 10, 0x41		@ initial page tables ready
+ 
+ 	/*
+ 	 * The following calls CPU specific code in a position independent
+@@ -169,7 +200,8 @@
+ 	ldr	r12, [r10, #PROCINFO_INITFUNC]
+ 	add	r12, r12, r10
+ 	ret	r12
+-1:	b	__enable_mmu
++1:	k4_head_trace 11, 0x42		@ CPU-specific init returned
++	b	__enable_mmu
+ ENDPROC(stext)
+ 	.ltorg
+ 
+@@ -307,6 +339,20 @@
+ 	strne	r6, [r3], #1 << PMD_ENTRY_ORDER
+ 	addne	r6, r6, #1 << SECTION_SHIFT
+ 	strne	r6, [r3]
++
++
++
++
++
++
++
++
++
++
++
++
++
++
+ 
+ #if defined(CONFIG_ARM_LPAE) && defined(CONFIG_CPU_ENDIAN_BE8)
+ 	sub	r4, r4, #4			@ Fixup page table pointer
+--- a/arch/arm/kernel/setup.c
++++ b/arch/arm/kernel/setup.c
+@@ -61,6 +61,9 @@
+ #include <asm/virt.h>
+ #include <asm/kasan.h>
+ 
++
++
++
+ #include "atags.h"
+ 
+ 
+@@ -1104,12 +1107,36 @@
+ 	const struct machine_desc *mdesc = NULL;
+ 	void *atags_vaddr = NULL;
+ 
++
++
++
++
++
++
++
++
++
+ 	if (__atags_pointer)
+ 		atags_vaddr = FDT_VIRT_BASE(__atags_pointer);
+ 
+ 	setup_processor();
++
++
++
+ 	if (atags_vaddr) {
++
++
++
++
++
++
++
+ 		mdesc = setup_machine_fdt(atags_vaddr);
++
++
++
++
++
+ 		if (mdesc)
+ 			memblock_reserve(__atags_pointer,
+ 					 fdt_totalsize(atags_vaddr));
+@@ -1127,6 +1154,9 @@
+ 
+ 	machine_desc = mdesc;
+ 	machine_name = mdesc->name;
++
++
++
+ 	dump_stack_set_arch_desc("%s", mdesc->name);
+ 
+ 	if (mdesc->reboot_mode != REBOOT_HARD)
+@@ -1159,6 +1189,9 @@
+ 	adjust_lowmem_bounds();
+ 
+ 	early_ioremap_reset();
++
++
++
+ 
+ 	paging_init(mdesc);
+ 	kasan_init();
+--- a/arch/arm/mach-imx/Kconfig
++++ b/arch/arm/mach-imx/Kconfig
+@@ -104,6 +104,60 @@
+ 	help
+ 	  This enables support for Freescale i.MX50 processor.
+ 
++config K4_DIAGNOSTICS
++	bool "Kindle K4 optional diagnostics"
++	depends on SOC_IMX50
++	help
++	  Debug-only probes and register/clock test controls. Keep disabled in
++	  production; watchdog, health clock, restart and STOP do not depend on it.
++
++config K4_BOOT_TRACE
++	bool "Kindle K4 RAM boot checkpoints"
++	depends on SOC_IMX50
++	depends on K4_DIAGNOSTICS
++	help
++	  Write early boot checkpoints to the last 8 KiB of the Kindle K4's
++	  256 MiB RAM. Enable only for a RAM-only K4 diagnostic kernel.
++	  The Amazon 2.6.31 kernel prints these records after watchdog reset.
++
++config IMX50_PM
++	bool "i.MX50 platform standby support"
++	depends on SOC_IMX50 && SUSPEND
++	help
++	  Provide clock-gated WAIT through the standard standby suspend state.
++	  A matching enabled fsl,imx50-pm DT node is required. Optional
++	  fsl,stop-with-ocram enables mem/deep through the OCRAM DDR/PLL path.
++	  Optional fsl,srpg-in-stop also enables ARM/NEON state retention power
++	  gating with sticky-status validation. PMIC standby voltage is not set.
++	  A bounded fsl,oscillator-startup-cycles also selects oscillator shutdown
++	  in STOP and programs the hardware wake stabilization delay.
++
++config K4_MC13892_STANDBY
++	bool "Kindle K4 explicit PMIC standby preparation"
++	depends on IMX50_PM && MFD_MC13XXX=y && SPI=y
++	help
++	  Prepare buck standby banks and retain LDO/GPO outputs before K4 STOP.
++	  Requires an explicit PMIC phandle and standby profile in the PM node.
++	  No changes are made unless the selected board DT requests this stage.
++
++config IMX50_OCRAM
++	bool "i.MX50 OCRAM DDR suspend core"
++	depends on SOC_IMX50 && SRAM_EXEC && !ARM_LPAE
++	help
++	  Add an explicit SRAM code/data/stack execution test for preparing DDR
++	  suspend support. Requires a separate DT node and SRAM pools. Optional
++	  explicit tests switch caches/page tables and round-trip manual DDR
++	  self-refresh during PM enter, optionally executing WAIT with PLL1
++	  restart and restoration from SRAM. The PM driver can prepare this
++	  path automatically for STOP, including optional ARM/NEON SRPG.
++
++config IMX50_OCRAM_PROBE
++	bool "i.MX50 explicit OCRAM diagnostics"
++	depends on IMX50_OCRAM
++	depends on K4_DIAGNOSTICS
++	help
++	  Optional run/state/cache sysfs test commands. Not required for STOP.
++
+ config SOC_IMX51
+ 	bool "i.MX51 support"
+ 	select PINCTRL_IMX51
+--- a/arch/arm/mach-imx/Makefile
++++ b/arch/arm/mach-imx/Makefile
+@@ -57,6 +57,10 @@
+ 
+ obj-$(CONFIG_SOC_IMX1) += mach-imx1.o
+ obj-$(CONFIG_SOC_IMX50) += mach-imx50.o
++obj-$(CONFIG_IMX50_PM) += pm-imx50.o
++obj-$(CONFIG_K4_MC13892_STANDBY) += k4-mc13892-standby.o
++obj-$(CONFIG_IMX50_OCRAM) += ocram-imx50-core.o ocram-imx50.o ocram-imx50-cache.o
++obj-$(CONFIG_IMX50_OCRAM_PROBE) += debug/ocram-imx50-probe.o
+ obj-$(CONFIG_SOC_IMX51) += mach-imx51.o
+ obj-$(CONFIG_SOC_IMX53) += mach-imx53.o
+ 
+--- a/arch/arm/mach-imx/common.h
++++ b/arch/arm/mach-imx/common.h
+@@ -8,6 +8,7 @@
+ #define __ASM_ARCH_MXC_COMMON_H__
+ 
+ #include <linux/reboot.h>
++#include <linux/errno.h>
+ 
+ struct irq_data;
+ struct platform_device;
+@@ -136,4 +137,15 @@
+ extern const struct smp_operations imx7_smp_ops;
+ extern const struct smp_operations ls1021a_smp_ops;
+ 
++#ifdef CONFIG_IMX50_OCRAM
++/* <0: failed; 0: no WFI performed; 1: SRAM WFI already returned. */
++int imx50_ocram_cache_enter(void);
++int imx50_ocram_stop_prepare(void);
++void imx50_ocram_stop_finish(void);
++#else
++static inline int imx50_ocram_cache_enter(void) { return 0; }
++static inline int imx50_ocram_stop_prepare(void) { return -ENODEV; }
++static inline void imx50_ocram_stop_finish(void) { }
+ #endif
++
++#endif
+--- /dev/null
++++ b/arch/arm/mach-imx/k4-mc13892-standby.c
+@@ -0,0 +1,230 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* K4 first VSTBY stage: retain LDO/GPO outputs, use explicit buck standby banks. */
++#include <linux/device.h>
++#include <linux/err.h>
++#include <linux/k4_ram_trace.h>
++#include <linux/mfd/mc13xxx.h>
++#include <linux/of.h>
++#include <linux/slab.h>
++#include <linux/spi/spi.h>
++#include "k4-mc13892-standby.h"
++
++#define K4_STBY_MODE0 (BIT(1) | BIT(4) | BIT(10) | BIT(13) | BIT(16) | BIT(19))
++#define K4_STBY_MODE1 (BIT(1) | BIT(7) | BIT(13) | BIT(16) | BIT(19))
++#define K4_STBY_MODE0_POWER_OFF (BIT(10) | BIT(13) | BIT(16) | BIT(19))
++
++struct k4_mc13892_standby {
++	struct mc13xxx *pmic;
++	u32 requested[3], raw[10], before[2], during[2], after[2];
++	u32 mode0_power_off;
++	unsigned int pending, prepares, restores;
++	bool armed;
++	int error, restore_error;
++};
++
++static const unsigned int k4_stby_regs[] = { 15, 24, 25, 26, 27, 28, 29, 32, 33, 34 };
++static const u32 k4_stby_masks[] = { K4_STBY_MODE0, K4_STBY_MODE1 };
++
++static u32 k4_stby_target(const struct k4_mc13892_standby *s,
++			  unsigned int index)
++{
++	u32 target = s->before[index] & ~k4_stby_masks[index];
++
++	if (!index)
++		target |= s->mode0_power_off;
++	return target;
++}
++
++static unsigned int k4_stby_voltage(u32 value, unsigned int id, bool standby)
++{
++	unsigned int base = id && (value & BIT(23)) ? 1100000 : 600000;
++
++	return base + ((value >> (standby ? 10 : 0)) & 31) * 25000;
++}
++
++static int k4_stby_validate(struct k4_mc13892_standby *s)
++{
++	unsigned int i, mode, speed;
++	u32 value;
++
++	/* K4 uses active-high requests; do not silently change board polarity. */
++	if (s->raw[0] & (BIT(10) | BIT(11)))
++		return -EOPNOTSUPP;
++	if (s->raw[5] & BIT(8)) /* SID changes the voltage-selection protocol. */
++		return -EOPNOTSUPP;
++	/* VIOHI and GPO outputs retain their existing board policy. */
++	if (s->mode0_power_off & ~K4_STBY_MODE0_POWER_OFF)
++		return -EINVAL;
++	for (i = 0; i < 4; i++) {
++		value = s->raw[1 + i];
++		if (i < 3 && k4_stby_voltage(value, i, true) != s->requested[i])
++			return -EINVAL;
++		/* Retain SW4; its full board load mapping is still being established. */
++		if (i == 3 && k4_stby_voltage(value, i, true) !=
++			     k4_stby_voltage(value, i, false))
++			return -EOPNOTSUPP;
++		mode = (s->raw[i < 2 ? 5 : 6] >> (i == 1 ? 10 : i == 3 ? 8 : 0)) & 15;
++		if (mode < 5 || mode == 7) /* Table 34: standby off or reserved. */
++			return -EOPNOTSUPP;
++		/* Bound even a full selector ramp, allowing DVFS after PM.begin. */
++		speed = i < 2 ? 2U << ((s->raw[5] >> (i ? 16 : 6)) & 3) : 4;
++		if (31 * speed > 16 * 1000000 / 32768)
++			return -ERANGE;
++	}
++	/* Keep already-powered LDOs on; no EN or voltage writes here. */
++	if ((s->raw[7] & (BIT(3) | BIT(9) | BIT(12) | BIT(15) | BIT(18))) !=
++	    (BIT(3) | BIT(9) | BIT(12) | BIT(15) | BIT(18)))
++		return -EOPNOTSUPP;
++	/* POWERMISC has special PWGT read semantics: inspect, never RMW it. */
++	for (i = 6; i <= 12; i += 2)
++		if ((s->raw[9] & BIT(i)) && (s->raw[9] & BIT(i + 1)))
++			return -EOPNOTSUPP;
++	return 0;
++}
++
++/* Caller holds the PMIC lock. A failed rollback stays pending for PM.end. */
++static int k4_stby_restore_locked(struct k4_mc13892_standby *s)
++{
++	int i, ret, error = 0;
++
++	s->armed = false;
++	for (i = 1; i >= 0; i--) {
++		if (!(s->pending & BIT(i)))
++			continue;
++		ret = mc13xxx_reg_rmw(s->pmic, 32 + i, k4_stby_masks[i],
++				      s->before[i] & k4_stby_masks[i]);
++		if (!ret)
++			ret = mc13xxx_reg_read(s->pmic, 32 + i, &s->after[i]);
++		if (!ret && ((s->after[i] ^ s->before[i]) & k4_stby_masks[i]))
++			ret = -EIO;
++		if (!ret)
++			s->pending &= ~BIT(i);
++		else if (!error)
++			error = ret;
++	}
++	s->restore_error = error;
++	return error;
++}
++
++int k4_mc13892_standby_prepare(struct k4_mc13892_standby *s)
++{
++	int i, ret;
++
++	if (!s)
++		return -ENODEV;
++	if (s->pending || s->armed)
++		return -EBUSY;
++	s->error = s->restore_error = 0;
++	mc13xxx_lock(s->pmic);
++	for (i = 0; i < ARRAY_SIZE(k4_stby_regs); i++) {
++		ret = mc13xxx_reg_read(s->pmic, k4_stby_regs[i], &s->raw[i]);
++		if (ret)
++			goto out;
++	}
++	ret = k4_stby_validate(s);
++	if (ret)
++		goto out;
++	for (i = 0; i < 2; i++) {
++		s->before[i] = s->raw[7 + i];
++		s->pending |= BIT(i); /* SPI error may still have reached the device. */
++		ret = mc13xxx_reg_rmw(s->pmic, 32 + i, k4_stby_masks[i],
++				      k4_stby_target(s, i) & k4_stby_masks[i]);
++		if (!ret)
++			ret = mc13xxx_reg_read(s->pmic, 32 + i, &s->during[i]);
++		if (!ret && s->during[i] != k4_stby_target(s, i))
++			ret = -EIO;
++		if (ret) {
++			k4_stby_restore_locked(s);
++			goto out;
++		}
++	}
++	s->armed = true;
++	s->prepares++;
++	k4_ram_trace_mark("K4_PMIC_STBY_ARMED");
++out:
++	s->error = ret;
++	mc13xxx_unlock(s->pmic);
++	return ret;
++}
++
++int k4_mc13892_standby_restore(struct k4_mc13892_standby *s)
++{
++	int ret;
++
++	if (!s || !s->pending)
++		return 0;
++	mc13xxx_lock(s->pmic);
++	ret = k4_stby_restore_locked(s);
++	mc13xxx_unlock(s->pmic);
++	if (!ret) {
++		s->restores++;
++		k4_ram_trace_mark("K4_PMIC_STBY_RESTORED");
++	}
++	return ret;
++}
++
++bool k4_mc13892_standby_armed(struct k4_mc13892_standby *s)
++{
++	return s && s->armed && !s->error;
++}
++
++ssize_t k4_mc13892_standby_show(struct k4_mc13892_standby *s, char *buf)
++{
++	if (!s)
++		return sysfs_emit(buf, "disabled\n");
++	return sysfs_emit(buf, "armed=%u pending=%u prepares=%u restores=%u error=%d restore_error=%d mode0_power_off=%06x\n"
++		"mode_before=%06x,%06x during=%06x,%06x after=%06x,%06x\n"
++		"powerctl2=%06x sw=%06x,%06x,%06x,%06x modes=%06x,%06x misc=%06x\n",
++		s->armed, s->pending, s->prepares, s->restores, s->error, s->restore_error,
++		s->mode0_power_off,
++		s->before[0], s->before[1], s->during[0], s->during[1], s->after[0], s->after[1],
++		s->raw[0], s->raw[1], s->raw[2], s->raw[3], s->raw[4], s->raw[5], s->raw[6], s->raw[9]);
++}
++
++static void k4_stby_put(void *data)
++{
++	put_device(data);
++}
++
++struct k4_mc13892_standby *k4_mc13892_standby_get(struct device *dev)
++{
++	struct k4_mc13892_standby *s;
++	struct device_node *node;
++	struct device *supplier;
++	int ret;
++
++	node = of_parse_phandle(dev->of_node, "amazon,standby-pmic", 0);
++	if (!node)
++		return ERR_PTR(-EINVAL);
++	if (!of_device_is_compatible(node, "amazon,kindle-k4-mc13892")) {
++		of_node_put(node);
++		return ERR_PTR(-EINVAL);
++	}
++	supplier = bus_find_device_by_of_node(&spi_bus_type, node);
++	of_node_put(node);
++	if (!supplier)
++		return ERR_PTR(-EPROBE_DEFER);
++	ret = devm_add_action_or_reset(dev, k4_stby_put, supplier);
++	if (ret)
++		return ERR_PTR(ret);
++	if (!supplier->driver || !dev_get_drvdata(supplier))
++		return ERR_PTR(-EPROBE_DEFER);
++	if (!device_link_add(dev, supplier, DL_FLAG_AUTOREMOVE_CONSUMER))
++		return ERR_PTR(-ENOMEM);
++	s = devm_kzalloc(dev, sizeof(*s), GFP_KERNEL);
++	if (!s)
++		return ERR_PTR(-ENOMEM);
++	s->pmic = dev_get_drvdata(supplier);
++	ret = of_property_read_u32_array(dev->of_node, "amazon,standby-microvolt",
++					 s->requested, 3);
++	if (ret)
++		return ERR_PTR(ret);
++	ret = of_property_read_u32(dev->of_node,
++				   "amazon,standby-mode0-power-off-mask",
++				   &s->mode0_power_off);
++	if (ret && ret != -EINVAL)
++		return ERR_PTR(ret);
++	if (s->mode0_power_off & ~K4_STBY_MODE0_POWER_OFF)
++		return ERR_PTR(-EINVAL);
++	return s;
++}
+--- /dev/null
++++ b/arch/arm/mach-imx/k4-mc13892-standby.h
+@@ -0,0 +1,25 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef __K4_MC13892_STANDBY_H
++#define __K4_MC13892_STANDBY_H
++
++struct device;
++struct k4_mc13892_standby;
++#if IS_ENABLED(CONFIG_K4_MC13892_STANDBY)
++struct k4_mc13892_standby *k4_mc13892_standby_get(struct device *dev);
++int k4_mc13892_standby_prepare(struct k4_mc13892_standby *s);
++int k4_mc13892_standby_restore(struct k4_mc13892_standby *s);
++bool k4_mc13892_standby_armed(struct k4_mc13892_standby *s);
++ssize_t k4_mc13892_standby_show(struct k4_mc13892_standby *s, char *buf);
++#else
++static inline struct k4_mc13892_standby *k4_mc13892_standby_get(struct device *dev)
++{ return ERR_PTR(-ENODEV); }
++static inline int k4_mc13892_standby_prepare(struct k4_mc13892_standby *s)
++{ return -ENODEV; }
++static inline int k4_mc13892_standby_restore(struct k4_mc13892_standby *s)
++{ return 0; }
++static inline bool k4_mc13892_standby_armed(struct k4_mc13892_standby *s)
++{ return false; }
++static inline ssize_t k4_mc13892_standby_show(struct k4_mc13892_standby *s, char *buf)
++{ return sysfs_emit(buf, "disabled\n"); }
++#endif
++#endif
+--- a/arch/arm/mach-imx/mach-imx50.c
++++ b/arch/arm/mach-imx/mach-imx50.c
+@@ -5,15 +5,116 @@
+  * Copyright 2011 Linaro Ltd.
+  */
+ 
++#include <linux/io.h>
++#include <linux/of.h>
++#include <linux/sizes.h>
+ #include <asm/mach/arch.h>
++#include <asm/proc-fns.h>
++#include <asm/system_misc.h>
+ 
+ #include "common.h"
+ #include "hardware.h"
+ 
++static void imx50_pm_idle(void)
++{
++	/* Resume can enable device IRQs after TZIC restored its wake masks. */
++	if (!tzic_enable_wake())
++		cpu_do_idle();
++	/* A rejected entry must not leave normal interrupt delivery held off. */
++	tzic_clear_wake_holdoff();
++}
++
+ static void __init imx50_init_early(void)
+ {
+ 	mxc_set_cpu_type(MXC_CPU_MX50);
++	arm_pm_idle = imx50_pm_idle;
+ }
++
++/* Original post_cpu_init sets AMC and OPACR before DDR power policy. */
++static int __init imx50_kindle_access_init(void)
++{
++	static const phys_addr_t aips[] = { 0x53f00000, 0x63f00000 };
++	void __iomem *cortex = ioremap(0x63fa0000, SZ_4K);
++	unsigned int i;
++	u32 before;
++
++	if (!cortex)
++		return -ENOMEM;
++	before = readl(cortex + 0x18);
++	/* AMC ALP=0, ALPEN=1; preserve all unrelated/reserved fields. */
++	writel((before & ~0xf) | 8, cortex + 0x18);
++	if ((readl(cortex + 0x18) & 0xf) != 8) {
++		iounmap(cortex);
++		return -EIO;
++	}
++	iounmap(cortex);
++	for (i = 0; i < ARRAY_SIZE(aips); i++) {
++		void __iomem *base = ioremap(aips[i], SZ_4K);
++
++		if (!base)
++			return -ENOMEM;
++		imx_set_aips(base);
++		iounmap(base);
++	}
++	return 0;
++}
++
++/* Stock cpu.c:post_cpu_init -> mx50_freq.c:init_ddr_settings, before devices.
++ * DDR timing/training and the live clock source stay owned by the loader.
++ * The port has no runtime DDR clock gate; the memory clock remains active.
++ */
++static int __init imx50_kindle_ddr_init(void)
++{
++	void __iomem *ddr, *qosc;
++	u32 ctl20, ctl21, ctl22, value;
++	int ret = 0;
++
++	if (!of_machine_is_compatible("amazon,kindle-4"))
++		return 0;
++	ret = imx50_kindle_access_init();
++	if (ret)
++		return ret;
++	ddr = ioremap(0x14000000, SZ_4K);
++	qosc = ioremap(0x41012000, SZ_4K);
++	if (!ddr || !qosc) {
++		ret = -ENOMEM;
++		goto out;
++	}
++	/* This board uses initialized LPDDR1; do not apply a different DDR type. */
++	value = readl(ddr);
++	if ((value & 0xf00) != 0x100 || !(value & 1)) {
++		ret = -EINVAL;
++		goto out;
++	}
++	ctl20 = readl(ddr + 0x50);
++	ctl21 = readl(ddr + 0x54);
++	ctl22 = readl(ddr + 0x58);
++	/* Original init clears QoS CTRL[31:30], preserving the other fields. */
++	value = readl(qosc);
++	writel(value & ~0xc0000000, qosc);
++	/* Preserve the stock order: auto-enable, external count, mode enable.
++	 * Mode 4 is bit 1, not numerical value 4. The old count write sets
++	 * the whole CTL21 word to 128 << 16, including SELF_REFRESH_CNT=0.
++	 */
++	writel((ctl22 & ~0x1f) | 2, ddr + 0x58);
++	writel(128 << 16, ddr + 0x54);
++	writel((ctl20 & ~0x1f) | 2, ddr + 0x50);
++	if (readl(ddr + 0x58) != ((ctl22 & ~0x1f) | 2) ||
++	    readl(ddr + 0x54) != (128 << 16) ||
++	    readl(ddr + 0x50) != ((ctl20 & ~0x1f) | 2) ||
++	    readl(qosc) != (value & ~0xc0000000))
++		ret = -EIO;
++	pr_info("Yoshi DDR mode4 postcore: %08x/%08x/%08x -> %08x/%08x/%08x error=%d\n",
++		ctl20, ctl21, ctl22, readl(ddr + 0x50), readl(ddr + 0x54),
++		readl(ddr + 0x58), ret);
++out:
++	if (qosc)
++		iounmap(qosc);
++	if (ddr)
++		iounmap(ddr);
++	return ret;
++}
++postcore_initcall(imx50_kindle_ddr_init);
+ 
+ static const char * const imx50_dt_board_compat[] __initconst = {
+ 	"fsl,imx50",
+--- a/arch/arm/mach-imx/mxc.h
++++ b/arch/arm/mach-imx/mxc.h
+@@ -75,6 +75,8 @@
+ };
+ 
+ int tzic_enable_wake(void);
++int tzic_suspend_wake(void);
++void tzic_clear_wake_holdoff(void);
+ 
+ extern struct cpu_op *(*get_cpu_op)(int *op);
+ #endif
+--- /dev/null
++++ b/arch/arm/mach-imx/ocram-imx50-cache.S
+@@ -0,0 +1,542 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/*
++ * i.MX50 cache transition and optional DDR self-refresh round trip.
++ * Optional WAIT and PLL1 restart execute with DDR in self-refresh.
++ * Cache set/way traversal follows ARMv7 and the original mx50_suspend.S
++ * (Copyright 2010-2012 Amazon.com, Inc.).
++ */
++#include <linux/linkage.h>
++
++	.text
++	.arm
++	.arch armv7-a
++	.align 3
++ENTRY(imx50_ocram_cache)
++	/* r0: SRAM result words; r1: SRAM SP; r2: Databahn virtual base. */
++	push	{r4-r11, r12, lr}
++	mov	r8, sp
++	mov	sp, r1
++	mov	r12, r0
++	str	r2, [r12, #124]
++	ldr	r3, [r2]		/* Prefill Databahn's translation. DDR stays on. */
++	adr	r3, .Lcache_snapshot
++	str	r3, [r12, #0]
++	mov	r3, sp
++	str	r3, [r12, #4]
++	mrc	p15, 0, r0, c1, c0, 0
++	str	r0, [r12, #8]
++	mrc	p15, 0, r1, c1, c0, 1
++	str	r1, [r12, #20]
++	mrc	p15, 2, r1, c0, c0, 0
++	str	r1, [r12, #40]
++	dsb
++	/* Disable I/D caches and branch prediction before cleaning all levels. */
++	bic	r0, r0, #(1 << 2)
++	bic	r0, r0, #(1 << 11)
++	bic	r0, r0, #(1 << 12)
++	mcr	p15, 0, r0, c1, c0, 0
++	isb
++	mrc	p15, 0, r0, c1, c0, 0
++	str	r0, [r12, #12]
++	mrc	p15, 1, r0, c0, c0, 1
++	str	r0, [r12, #36]
++	ands	r3, r0, #0x7000000
++	mov	r3, r3, lsr #23
++	mov	r6, #0
++	beq	.Lcache_clean_done
++	mov	r10, #0
++.Lcache_level:
++	add	r2, r10, r10, lsr #1
++	mov	r1, r0, lsr r2
++	and	r1, r1, #7
++	cmp	r1, #2
++	blt	.Lcache_next
++	mcr	p15, 2, r10, c0, c0, 0
++	isb
++	mrc	p15, 1, r1, c0, c0, 0
++	and	r2, r1, #7
++	add	r2, r2, #4
++	ubfx	r4, r1, #3, #10
++	clz	r5, r4
++	ubfx	r7, r1, #13, #15
++.Lcache_set:
++	mov	r9, r4
++.Lcache_way:
++	orr	r11, r10, r9, lsl r5
++	orr	r11, r11, r7, lsl r2
++	mcr	p15, 0, r11, c7, c14, 2
++	add	r6, r6, #1
++	subs	r9, r9, #1
++	bge	.Lcache_way
++	subs	r7, r7, #1
++	bge	.Lcache_set
++.Lcache_next:
++	add	r10, r10, #2
++	cmp	r3, r10
++	bgt	.Lcache_level
++.Lcache_clean_done:
++	dsb
++	str	r6, [r12, #32]
++	ldr	r0, [r12, #20]
++	bic	r0, r0, #(1 << 1)
++	mcr	p15, 0, r0, c1, c0, 1
++	isb
++	mrc	p15, 0, r0, c1, c0, 1
++	str	r0, [r12, #24]
++.Lcache_snapshot:
++	/* Optional SRAM-only page tables; both roots preserve the same VAs. */
++	ldr	r0, [r12, #112]
++	cmp	r0, #0
++	beq	.Lcache_read_ddr
++	mrc	p15, 0, r1, c2, c0, 0
++	str	r1, [r12, #80]
++	mrc	p15, 0, r1, c2, c0, 1
++	str	r1, [r12, #84]
++	mrc	p15, 0, r1, c2, c0, 2
++	str	r1, [r12, #104]
++	dsb
++	mcr	p15, 0, r0, c2, c0, 0
++	mcr	p15, 0, r0, c2, c0, 1
++	isb
++	mov	r1, #0
++	mcr	p15, 0, r1, c8, c7, 0
++	dsb
++	isb
++	mrc	p15, 0, r0, c2, c0, 0
++	str	r0, [r12, #88]
++	mrc	p15, 0, r0, c2, c0, 1
++	str	r0, [r12, #92]
++.Lcache_read_ddr:
++	/* Only documented, non-destructive PIO/status reads. */
++	ldr	r6, [r12, #124]
++	ldr	r0, [r6, #0]
++	str	r0, [r12, #48]
++	ldr	r0, [r6, #0x4c]
++	str	r0, [r12, #52]
++	ldr	r0, [r6, #0x50]
++	str	r0, [r12, #56]
++	ldr	r0, [r6, #0xfc]
++	str	r0, [r12, #60]
++	ldr	r0, [r6, #0x13c]
++	str	r0, [r12, #64]
++	mov	r1, #256
++.Lcache_busy_sample:
++	ldr	r0, [r6, #0x13c]
++	subs	r1, r1, #1
++	bne	.Lcache_busy_sample
++	str	r0, [r12, #68]
++	ldr	r0, [r6, #0x264]
++	str	r0, [r12, #72]
++	/* This range is also executed by the host ARM fault-injection test. */
++	.global imx50_srefresh_begin
++imx50_srefresh_begin:
++	ldr	r0, [r12, #116]
++	cmp	r0, #0
++	beq	.Lsrefresh_done
++	/* Private roots are mandatory before making DDR unavailable. */
++	ldr	r0, [r12, #112]
++	cmp	r0, #0
++	beq	.Lsrefresh_unsafe
++	ldr	r0, [r6]
++	tst	r0, #1
++	beq	.Lsrefresh_unsafe
++	ldr	r4, [r6, #0x4c]
++	tst	r4, #1
++	bne	.Lsrefresh_unsafe
++	ldr	r5, [r6, #0x50]
++	ldr	r0, [r6, #0x58]
++	str	r0, [r12, #176]
++	mov	r7, #0
++	mov	r0, #1
++	str	r0, [r12, #128]
++	/* RM: manual SREFRESH is only valid with LOWPOWER_CONTROL zero. */
++	bic	r0, r5, #31
++	str	r0, [r6, #0x50]
++	dsb
++	ldr	r1, [r6, #0x50]
++	str	r1, [r12, #132]
++	cmp	r0, r1
++	bne	.Lsrefresh_entry_failed
++	mov	r2, #0x100000
++.Lsrefresh_wait_ready:
++	ldr	r0, [r6, #0xfc]
++	tst	r0, #(1 << 16)
++	beq	.Lsrefresh_ready_retry
++	ldr	r1, [r6, #0x13c]
++	tst	r1, #(1 << 8)
++	beq	.Lsrefresh_request
++.Lsrefresh_ready_retry:
++	subs	r2, r2, #1
++	bne	.Lsrefresh_wait_ready
++	b	.Lsrefresh_entry_failed
++.Lsrefresh_request:
++	str	r0, [r12, #136]
++	/* RM 20.8: separate modes by >=15 memory cycles. Clocks stay fixed;
++	 * 256 uncached ARM loop iterations exceed that at either tested OPP.
++	 */
++	mov	r2, #256
++.Lsrefresh_mode_gap:
++	subs	r2, r2, #1
++	bne	.Lsrefresh_mode_gap
++	mov	r0, #2
++	str	r0, [r12, #128]
++	orr	r0, r4, #1
++	str	r0, [r6, #0x4c]
++	dsb
++	ldr	r1, [r6, #0x4c]
++	cmp	r0, r1
++	bne	.Lsrefresh_entry_failed
++	mov	r2, #0x100000
++.Lsrefresh_wait_low:
++	ldr	r0, [r6, #0xfc]
++	tst	r0, #(1 << 16)
++	beq	.Lsrefresh_hold
++	subs	r2, r2, #1
++	bne	.Lsrefresh_wait_low
++	b	.Lsrefresh_entry_failed
++.Lsrefresh_hold:
++	str	r0, [r12, #140]
++	mov	r0, #3
++	str	r0, [r12, #128]
++	/* Bounded SRAM-only dwell, then verify manual request and CKE again. */
++	mov	r2, #4096
++.Lsrefresh_dwell:
++	subs	r2, r2, #1
++	bne	.Lsrefresh_dwell
++	mov	r0, #4096
++	str	r0, [r12, #164]
++	ldr	r0, [r12, #180]
++	cmp	r0, #0
++	beq	.Lsrefresh_after_wfi
++	/* TZIC wake masks/holdoff and WAIT policy are set before this call.
++	 * IRQ/FIQ stay masked until DDR, the original tables and stack return.
++	 */
++	ldr	r0, [r6, #0xfc]
++	str	r0, [r12, #188]
++	tst	r0, #(1 << 16)
++	bne	.Lsrefresh_entry_failed
++	.global imx50_pll_prepare_begin
++imx50_pll_prepare_begin:
++	ldr	r0, [r12, #192]
++	cmp	r0, #0
++	beq	.Lpll_prepared
++	ldr	r9, [r12, #196]
++	ldr	r10, [r12, #200]
++	/* START cycling reinitializes the PHY DLL; it does not isolate traffic.
++	 * All clients are quiesced and DDR is already in manual self-refresh.
++	 */
++	ldr	r0, [r12, #48]
++	bic	r0, r0, #1
++	str	r0, [r6]
++	dsb
++	ldr	r1, [r6]
++	str	r1, [r12, #296]
++	cmp	r0, r1
++	bne	.Lpll_unsafe
++	/* Select OSC via lp_apm while STEP output is unused, then select STEP. */
++	ldr	r0, [r12, #204]
++	bic	r0, r0, #0x180
++	str	r0, [r9, #0x0c]
++	dsb
++	ldr	r1, [r9, #0x0c]
++	cmp	r0, r1
++	bne	.Lpll_unsafe
++	orr	r0, r0, #4
++	str	r0, [r9, #0x0c]
++	dsb
++	isb
++	ldr	r1, [r9, #0x0c]
++	str	r1, [r12, #244]
++	cmp	r0, r1
++	bne	.Lpll_unsafe
++	mov	r0, #1
++	str	r0, [r12, #304]
++	/* Normalize the active bank to ENGcm12051's MFD179/MFN180 recipe.
++	 * Disable AREN before modifying MFD. The inactive bank is untouched.
++	 */
++	ldr	r0, [r12, #216]
++	bic	r0, r0, #3
++	str	r0, [r10, #4]
++	dsb
++	ldr	r1, [r10, #4]
++	cmp	r0, r1
++	bne	.Lpll_unsafe
++	ldr	r0, [r12, #212]
++	mov	r11, r10
++	tst	r0, #0x80
++	addne	r11, r11, #0x14
++	ldr	r1, [r11, #12]
++	bfc	r1, #0, #27
++	orr	r1, r1, #179
++	str	r1, [r11, #12]
++	dsb
++	ldr	r2, [r11, #12]
++	cmp	r1, r2
++	bne	.Lpll_unsafe
++	ldr	r1, [r11, #0x10]
++	bfc	r1, #0, #27
++	orr	r1, r1, #180
++	str	r1, [r11, #0x10]
++	dsb
++	ldr	r2, [r11, #0x10]
++	cmp	r1, r2
++	bne	.Lpll_unsafe
++	bic	r0, r0, #1
++	orr	r0, r0, #0x16	/* RST, PLM and second-order BRM */
++	str	r0, [r10]
++	dsb
++	/* At <=24MHz, 128 iterations also let the restart cross clock domains. */
++	mov	r2, #128
++.Lpll_restart_delay:
++	subs	r2, r2, #1
++	bne	.Lpll_restart_delay
++	mov	r2, #0x100000
++.Lpll_wait_864:
++	ldr	r0, [r10]
++	tst	r0, #1
++	bne	.Lpll_locked_864
++	subs	r2, r2, #1
++	bne	.Lpll_wait_864
++	b	.Lpll_unsafe
++.Lpll_locked_864:
++	str	r0, [r12, #248]
++	mov	r0, #2
++	str	r0, [r12, #304]
++.Lpll_prepared:
++	.global imx50_pll_prepare_end
++imx50_pll_prepare_end:
++	dsb
++	.global imx50_srefresh_wfi
++imx50_srefresh_wfi:
++	wfi
++	isb
++	mov	r0, #1
++	str	r0, [r12, #184]
++	.global imx50_pll_restore_begin
++imx50_pll_restore_begin:
++	ldr	r0, [r12, #192]
++	cmp	r0, #0
++	beq	.Lpll_restored
++	mov	r2, #0x100000
++.Lpll_wake_lock:
++	ldr	r0, [r10]
++	tst	r0, #1
++	bne	.Lpll_wake_locked
++	subs	r2, r2, #1
++	bne	.Lpll_wake_lock
++	b	.Lpll_unsafe
++.Lpll_wake_locked:
++	/* The active clock is still OSC. Never select PLL before load + delay. */
++	ldr	r2, [r12, #212]
++	tst	r2, #0x80
++	ldreq	r0, [r12, #228]
++	ldrne	r0, [r12, #240]
++	bfc	r0, #0, #27
++	orr	r0, r0, #60
++	str	r0, [r11, #0x10]
++	dsb
++	ldr	r1, [r11, #0x10]
++	cmp	r0, r1
++	bne	.Lpll_unsafe
++	ldr	r0, [r12, #216]
++	bic	r0, r0, #3
++	orr	r0, r0, #1
++	str	r0, [r10, #4]
++	dsb
++	mov	r2, #0x100000
++.Lpll_wait_load:
++	ldr	r0, [r10, #4]
++	tst	r0, #1
++	beq	.Lpll_loaded
++	subs	r2, r2, #1
++	bne	.Lpll_wait_load
++	b	.Lpll_unsafe
++.Lpll_loaded:
++	/* Stock clock_mx50_yoshi.c:559 waits 10us after LDREQ.
++	 * >=10us at 24MHz OSC/PODF: >=1 cycle per iteration. */
++	mov	r2, #240
++.Lpll_stable_delay:
++	subs	r2, r2, #1
++	bne	.Lpll_stable_delay
++	ldr	r0, [r10]
++	tst	r0, #1
++	beq	.Lpll_unsafe
++	str	r0, [r12, #264]
++	ldr	r0, [r10, #4]
++	str	r0, [r12, #268]
++	/* Restore PLL1 selection before changing STEP_SEL (RM mux constraint). */
++	ldr	r0, [r9, #0x0c]
++	bic	r0, r0, #4
++	str	r0, [r9, #0x0c]
++	dsb
++	isb
++	ldr	r1, [r9, #0x0c]
++	cmp	r0, r1
++	bne	.Lpll_unsafe
++	ldr	r0, [r12, #204]
++	str	r0, [r9, #0x0c]
++	dsb
++	isb
++	ldr	r1, [r9, #0x0c]
++	str	r1, [r12, #256]
++	cmp	r0, r1
++	bne	.Lpll_unsafe
++	ldr	r0, [r9, #0x10]
++	str	r0, [r12, #260]
++	ldr	r0, [r10, #8]
++	str	r0, [r12, #272]
++	ldr	r0, [r10, #12]
++	str	r0, [r12, #276]
++	ldr	r0, [r10, #16]
++	str	r0, [r12, #280]
++	ldr	r0, [r10, #28]
++	str	r0, [r12, #284]
++	ldr	r0, [r10, #32]
++	str	r0, [r12, #288]
++	ldr	r0, [r10, #36]
++	str	r0, [r12, #292]
++	mov	r0, #3
++	str	r0, [r12, #304]
++	ldr	r0, [r12, #48]
++	str	r0, [r6]
++	dsb
++	ldr	r1, [r6]
++	str	r1, [r12, #300]
++	cmp	r0, r1
++	bne	.Lpll_unsafe
++	mov	r2, #0x100000
++.Lpll_wait_phy:
++	ldr	r0, [r6, #0x264]
++	tst	r0, #1
++	bne	.Lpll_phy_ready
++	subs	r2, r2, #1
++	bne	.Lpll_wait_phy
++	b	.Lpll_unsafe
++.Lpll_phy_ready:
++	mov	r0, #4
++	str	r0, [r12, #304]
++.Lpll_restored:
++	.global imx50_pll_restore_end
++imx50_pll_restore_end:
++.Lsrefresh_after_wfi:
++	ldr	r0, [r6, #0xfc]
++	str	r0, [r12, #168]
++	tst	r0, #(1 << 16)
++	bne	.Lsrefresh_entry_failed
++	ldr	r0, [r6, #0x4c]
++	str	r0, [r12, #172]
++	tst	r0, #1
++	beq	.Lsrefresh_entry_failed
++	b	.Lsrefresh_exit
++.Lsrefresh_entry_failed:
++	mvn	r7, #4		/* -EIO, but first make DDR accessible. */
++.Lsrefresh_exit:
++	str	r4, [r6, #0x4c]
++	dsb
++	ldr	r0, [r6, #0x4c]
++	str	r0, [r12, #148]
++	cmp	r0, r4
++	bne	.Lsrefresh_unsafe
++	mov	r2, #0x100000
++.Lsrefresh_wait_exit:
++	ldr	r0, [r6, #0xfc]
++	tst	r0, #(1 << 16)
++	beq	.Lsrefresh_exit_retry
++	ldr	r1, [r6, #0x13c]
++	tst	r1, #(1 << 8)
++	bne	.Lsrefresh_exit_retry
++	ldr	r3, [r6, #0x264]
++	tst	r3, #1
++	bne	.Lsrefresh_restore_mode
++.Lsrefresh_exit_retry:
++	subs	r2, r2, #1
++	bne	.Lsrefresh_wait_exit
++	b	.Lsrefresh_unsafe
++.Lsrefresh_restore_mode:
++	str	r0, [r12, #144]
++	str	r1, [r12, #160]
++	str	r3, [r12, #156]
++	mov	r2, #256
++.Lsrefresh_restore_gap:
++	subs	r2, r2, #1
++	bne	.Lsrefresh_restore_gap
++	str	r5, [r6, #0x50]
++	dsb
++	ldr	r0, [r6, #0x50]
++	str	r0, [r12, #152]
++	cmp	r0, r5
++	mvnne	r7, #4
++	str	r7, [r12, #120]
++	mov	r0, #4
++	str	r0, [r12, #128]
++	b	.Lsrefresh_done
++.Lsrefresh_unsafe:
++	mvn	r0, #109		/* -ETIMEDOUT: never resume using DDR. */
++	str	r0, [r12, #120]
++	dsb
++.Lsrefresh_park:
++	b	.Lsrefresh_park		/* Hardware watchdog remains running. */
++	/* A clock/PHY failure cannot safely return to the DDR-backed kernel. */
++.Lpll_unsafe:
++	mvn	r0, #109
++	str	r0, [r12, #252]
++	b	.Lsrefresh_unsafe
++.Lsrefresh_done:
++	.global imx50_srefresh_end
++imx50_srefresh_end:
++	/* DDR is available before the old roots and original stack are used. */
++	ldr	r0, [r12, #112]
++	cmp	r0, #0
++	beq	.Lcache_restore_controls
++	dsb
++	ldr	r0, [r12, #80]
++	mcr	p15, 0, r0, c2, c0, 0
++	ldr	r0, [r12, #84]
++	mcr	p15, 0, r0, c2, c0, 1
++	isb
++	mov	r0, #0
++	mcr	p15, 0, r0, c8, c7, 0
++	dsb
++	isb
++	mrc	p15, 0, r0, c2, c0, 0
++	str	r0, [r12, #96]
++	mrc	p15, 0, r0, c2, c0, 1
++	str	r0, [r12, #100]
++	mrc	p15, 0, r0, c2, c0, 2
++	str	r0, [r12, #108]
++.Lcache_restore_controls:
++	/* Restore CPU controls exactly, including the original cache selector. */
++	dsb
++	mov	r0, #0
++	mcr	p15, 0, r0, c7, c5, 0
++	mcr	p15, 0, r0, c7, c5, 6
++	ldr	r0, [r12, #40]
++	mcr	p15, 2, r0, c0, c0, 0
++	isb
++	mrc	p15, 2, r0, c0, c0, 0
++	str	r0, [r12, #44]
++	ldr	r0, [r12, #20]
++	mcr	p15, 0, r0, c1, c0, 1
++	isb
++	mrc	p15, 0, r0, c1, c0, 1
++	str	r0, [r12, #28]
++	ldr	r0, [r12, #8]
++	mcr	p15, 0, r0, c1, c0, 0
++	isb
++	mrc	p15, 0, r0, c1, c0, 0
++	str	r0, [r12, #16]
++	movw	r0, #1
++	movt	r0, #0xcace
++	str	r0, [r12, #76]
++	dsb
++	mov	sp, r8
++	mov	r0, #0
++	pop	{r4-r11, r12, pc}
++ENDPROC(imx50_ocram_cache)
++.Lcache_end:
++
++	.section .rodata
++	.align 2
++	.global imx50_ocram_cache_size
++imx50_ocram_cache_size:
++	.word .Lcache_end - imx50_ocram_cache
+--- /dev/null
++++ b/arch/arm/mach-imx/ocram-imx50-core.c
+@@ -0,0 +1,474 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++/* Explicit OCRAM execution prerequisite for i.MX50 DDR suspend work. */
++#include <linux/bitops.h>
++#include <linux/genalloc.h>
++#include <linux/io.h>
++#include <linux/k4_ram_trace.h>
++#include <linux/mm.h>
++#include <linux/mutex.h>
++#include <linux/of.h>
++#include <linux/of_platform.h>
++#include <linux/platform_device.h>
++#include <linux/sram.h>
++#include <linux/sizes.h>
++#include <asm/irqflags.h>
++#include <asm/pgtable.h>
++#include "common.h"
++
++extern int imx50_ocram_call(void __iomem *data, void __iomem *stack, u32 seed);
++extern const u32 imx50_ocram_call_size;
++extern int imx50_ocram_cache(void __iomem *data, void __iomem *stack,
++			    void __iomem *databahn);
++extern const u32 imx50_ocram_cache_size;
++
++#include "ocram-imx50-internal.h"
++
++static struct imx50_ocram_probe *cache_probe;
++
++static void imx50_ocram_free(void *arg)
++{
++	struct imx50_ocram_probe *p = arg;
++
++	if (cache_probe == p)
++		cache_probe = NULL;
++	if (p->tables)
++		gen_pool_free(p->tables_pool, p->tables, SZ_32K);
++	if (p->data)
++		gen_pool_free(p->data_pool, p->data, PAGE_SIZE);
++	if (p->code)
++		gen_pool_free(p->code_pool, p->code, PAGE_SIZE);
++}
++
++static bool imx50_cache_result_valid(const u32 *r, unsigned long code,
++				     unsigned long data, u32 size)
++{
++	return r[0] >= code && r[0] < code + size &&
++		r[1] == data + PAGE_SIZE - 16 &&
++		r[2] == r[4] && r[3] == (r[2] & ~(BIT(2) | BIT(11) | BIT(12))) &&
++		r[5] == r[7] && r[6] == (r[5] & ~BIT(1)) &&
++		r[8] && r[10] == r[11] && r[19] == 0xcace0001;
++}
++
++static bool imx50_cache_tables_valid(const u32 *r, u32 expected)
++{
++	if (r[28] != expected)
++		return false;
++	if (!expected)
++		return true;
++	return r[20] == r[24] && r[21] == r[25] &&
++		r[22] == expected && r[23] == expected &&
++		r[26] == r[27] && !(r[26] & (BIT(31) | BIT(4) | BIT(5)));
++}
++
++static bool imx50_srefresh_valid(const u32 *r)
++{
++	return r[29] == 1 && !r[30] && r[32] == 4 &&
++		r[33] == (r[14] & ~31U) && (r[34] & BIT(16)) &&
++		!(r[35] & BIT(16)) && (r[36] & BIT(16)) &&
++		r[37] == r[13] && r[38] == r[14] && (r[39] & 1) &&
++		!(r[40] & BIT(8)) && r[41] == 4096 &&
++		!(r[42] & BIT(16)) && r[43] == (r[13] | 1);
++}
++
++static bool imx50_srefresh_wait_valid(const u32 *r, bool wait)
++{
++	return r[45] == wait && r[46] == wait &&
++		(!wait || !(r[47] & BIT(16)));
++}
++
++/* Up to five accessible pages, each may need its own 1 MiB coarse table. */
++static int imx50_sram_map_page(void __iomem *tables, u32 phys, u32 *used,
++			      u32 va, u32 pte, u32 domain)
++{
++	u32 first = va >> 20, second = (va >> 12) & 255;
++	u32 desc = readl(tables + first * 4), offset, old;
++
++	if (!IS_ALIGNED(va, PAGE_SIZE) || !IS_ALIGNED(phys, SZ_16K) ||
++	    (pte & 2) != 2 || (domain & ~PMD_DOMAIN_MASK))
++		return -EINVAL;
++	if (!desc) {
++		if (*used >= 5)
++			return -ENOSPC;
++		offset = SZ_16K + (*used)++ * SZ_1K;
++		desc = (phys + offset) | PMD_TYPE_TABLE | domain;
++		writel(desc, tables + first * 4);
++	} else {
++		if ((desc & (PMD_TYPE_MASK | PMD_DOMAIN_MASK)) !=
++		    (PMD_TYPE_TABLE | domain))
++			return -EINVAL;
++		offset = (desc & ~1023U) - phys;
++		if (offset < SZ_16K || offset >= SZ_16K + *used * SZ_1K)
++			return -EINVAL;
++	}
++	old = readl(tables + offset + second * 4);
++	if (old && old != pte)
++		return -EEXIST;
++	writel(pte, tables + offset + second * 4);
++	return 0;
++}
++
++static int imx50_copy_mapping(struct imx50_ocram_probe *p, unsigned long va,
++			      phys_addr_t phys, bool executable)
++{
++	pgd_t *pgd = pgd_offset_k(va);
++	p4d_t *p4d = p4d_offset(pgd, va);
++	pud_t *pud = pud_offset(p4d, va);
++	pmd_t *pmd = pmd_offset(pud, va);
++	pte_t *pte;
++	u32 first, hardware;
++
++	/* Match existing memory types/permissions; do not guess TEX remapping. */
++	first = ((u32 *)pmd)[(va >> SECTION_SHIFT) & 1];
++	if ((first & PMD_TYPE_MASK) != PMD_TYPE_TABLE)
++		return -EINVAL;
++	pte = pte_offset_kernel(pmd, va);
++	/* ARM short-descriptor Linux PTEs precede hardware PTEs by 2048 bytes. */
++	hardware = READ_ONCE(*(u32 *)((char *)pte + PTE_HWTABLE_OFF));
++	if ((hardware & PAGE_MASK) != phys || !(hardware & PTE_TYPE_SMALL) ||
++	    !!(hardware & PTE_EXT_XN) == executable ||
++	    (executable && (!(hardware & PTE_EXT_APX) || (first & PMD_PXNTABLE))))
++		return -EINVAL;
++	return imx50_sram_map_page((void __iomem *)p->tables, p->tables_phys,
++		&p->table_count, va, hardware, first & PMD_DOMAIN_MASK);
++}
++
++static int imx50_prepare_tables(struct imx50_ocram_probe *p)
++{
++	u32 ttbcr;
++	int ret;
++
++	asm volatile("mrc p15, 0, %0, c2, c0, 2" : "=r" (ttbcr));
++	if (ttbcr & (BIT(31) | BIT(4) | BIT(5)))
++		return -EOPNOTSUPP;
++	memset_io((void __iomem *)p->tables, 0, SZ_32K);
++	p->table_count = 0;
++	ret = imx50_copy_mapping(p, p->code, p->code_phys, true);
++	if (!ret)
++		ret = imx50_copy_mapping(p, p->data, p->data_phys, false);
++	if (!ret)
++		ret = imx50_copy_mapping(p, (unsigned long)p->databahn, 0x14000000, false);
++	if (!ret && p->pll_wait)
++		ret = imx50_copy_mapping(p, (unsigned long)p->ccm, 0x53fd4000, false);
++	if (!ret && p->pll_wait)
++		ret = imx50_copy_mapping(p, (unsigned long)p->pll1, 0x63f80000, false);
++	/* Publish hardware descriptors before the noirq walker can use them. */
++	wmb();
++	return ret;
++}
++
++/* ENGcm12051's 800 MHz recipe: oscillator/4x, MFI8, fraction 1/3.
++ * Normalize an equivalent 1/3 fraction to MFD179/MFN60, PLM and AREN=0.
++ * Do not guess how to restore an unrelated PLL operating mode. The inactive
++ * bank and unrelated register bits are preserved, not matched to a sample.
++ */
++static bool imx50_pll_supported(const u32 *r)
++{
++	u32 ctrl = r[53], bank = (ctrl & BIT(7)) ? 58 : 55;
++	u32 mask = BIT(13) | BIT(12) | BIT(11) | BIT(10) | GENMASK(9, 8) |
++		BIT(6) | BIT(5) | BIT(4) | BIT(3) | BIT(0);
++	u32 required = BIT(12) | BIT(9) | BIT(5) | BIT(0);
++
++	return !(r[51] & (BIT(11) | BIT(10) | BIT(2))) &&
++		(ctrl & mask) == required && !(r[54] & 1) &&
++		(r[bank] & 255) == 0x80 &&
++		3 * (r[bank + 2] & GENMASK(26, 0)) ==
++		(r[bank + 1] & GENMASK(26, 0)) + 1 &&
++		!(r[80] & BIT(16)) && !r[81];
++}
++
++static bool imx50_pll_result_valid(const u32 *r)
++{
++	u32 expected, active = (r[53] & BIT(7)) ? 3 : 0;
++	unsigned int i;
++
++	if (r[48] != 1 || r[63] || r[76] != 4 ||
++	    r[61] != ((r[51] & ~GENMASK(8, 7)) | BIT(2)) ||
++	    !(r[62] & BIT(0)) || r[64] != r[51] || r[65] != r[52] ||
++	    r[66] != (r[53] | BIT(2) | BIT(1)) || r[67] != (r[54] & ~3U) ||
++	    r[74] != (r[12] & ~1U) || r[75] != r[12])
++		return false;
++	for (i = 0; i < 6; i++) {
++		expected = r[55 + i];
++		if (i == active + 1)
++			expected = (expected & ~GENMASK(26, 0)) | 179;
++		if (i == active + 2)
++			expected = (expected & ~GENMASK(26, 0)) | 60;
++		if (r[68 + i] != expected)
++			return false;
++	}
++	return true;
++}
++
++static int imx50_pll_prepare(struct imx50_ocram_probe *p)
++{
++	static const u32 offsets[] = { 0, 4, 8, 12, 16, 28, 32, 36 };
++	u32 *r = p->cache_result;
++	int i;
++
++	r[51] = readl(p->ccm + 0x0c);
++	r[52] = readl(p->ccm + 0x10);
++	for (i = 0; i < ARRAY_SIZE(offsets); i++)
++		r[53 + i] = readl(p->pll1 + offsets[i]);
++	r[80] = readl(p->pll1 + 0x28);
++	r[81] = readl(p->ccm + 0x48);
++	r[82] = readl(p->ccm + 0x14);
++	memcpy_toio((void __iomem *)p->data + 204, &r[51], 10 * sizeof(u32));
++	memcpy_toio((void __iomem *)p->data + 320, &r[80], 3 * sizeof(u32));
++	wmb();
++	return imx50_pll_supported(r) ? 0 : -EOPNOTSUPP;
++}
++
++/* PM .enter only: userspace frozen, one CPU, IRQs already disabled. */
++int imx50_ocram_cache_enter(void)
++{
++	struct imx50_ocram_probe *p = cache_probe;
++	void __iomem *data;
++	unsigned long flags;
++	u32 seed;
++	int ret, i;
++
++	if (!p || !READ_ONCE(p->cache_armed))
++		return 0;
++	WRITE_ONCE(p->cache_armed, false);
++	data = (void __iomem *)p->data;
++	/* Recheck the inherited gate at the actual noirq execution point. */
++	if (!(readl(p->ccm + 0x80) & GENMASK(3, 2))) {
++		ret = -EIO;
++		goto out;
++	}
++	if (p->pll_wait) {
++		ret = imx50_pll_prepare(p);
++		if (ret)
++			goto out;
++	}
++	p->ddr_checked = 0;
++	seed = 0x12345678 ^ p->cache_runs;
++	if (p->selfrefresh) {
++		for (i = 0; i < SZ_64K / sizeof(u32); i++) {
++			seed = seed * 1664525U + 1013904223U;
++			WRITE_ONCE(p->ddr_pattern[i], seed);
++		}
++		/* The assembly cleans these dirty cache lines before DDR entry. */
++		wmb();
++	}
++	k4_ram_trace_mark("IMX50_CACHE_CALL");
++	local_irq_save(flags);
++	local_fiq_disable();
++	ret = p->cache_call(data, data + PAGE_SIZE - 16, p->databahn);
++	local_irq_restore(flags);
++	k4_ram_trace_mark("IMX50_CACHE_RETURN");
++	memcpy_fromio(p->cache_result, data, sizeof(p->cache_result));
++	if (!ret && !imx50_cache_result_valid(p->cache_result,
++			p->code + IMX50_CACHE_CODE_OFFSET, p->data,
++			imx50_ocram_cache_size))
++		ret = -EIO;
++	if (!ret && !imx50_cache_tables_valid(p->cache_result,
++		p->cache_tables ? p->tables_phys | BIT(1) : 0))
++		ret = -EIO;
++	if (p->selfrefresh) {
++		if (!imx50_srefresh_valid(p->cache_result) ||
++		    !imx50_srefresh_wait_valid(p->cache_result, p->selfrefresh_wait))
++			ret = -EIO;
++		seed = 0x12345678 ^ p->cache_runs;
++		for (i = 0; i < SZ_64K / sizeof(u32); i++) {
++			seed = seed * 1664525U + 1013904223U;
++			if (READ_ONCE(p->ddr_pattern[i]) != seed) {
++				ret = -EILSEQ;
++				break;
++			}
++			p->ddr_checked += sizeof(u32);
++		}
++	}
++	if (!ret && p->pll_wait && !imx50_pll_result_valid(p->cache_result))
++		ret = -EIO;
++	for (i = 0; !ret && i < 16; i += sizeof(u32))
++		if (readl(data + 512 + i) != 0xa5a5a5a5 ||
++		    readl(data + PAGE_SIZE - 16 + i) != 0xa5a5a5a5)
++			ret = -EOVERFLOW;
++out:
++	p->cache_error = ret;
++	if (!ret)
++		p->cache_runs++;
++	/* Positive means WFI already returned; platform code must not sleep twice. */
++	return ret ? ret : (p->selfrefresh_wait ? 1 : 0);
++}
++
++int imx50_cache_command(struct imx50_ocram_probe *p, const char *buf)
++{
++	void __iomem *data = (void __iomem *)p->data;
++	int ret = 0;
++
++	if (!sysfs_streq(buf, "arm") && !sysfs_streq(buf, "arm-tables") &&
++	    !sysfs_streq(buf, "arm-selfrefresh") &&
++	    !sysfs_streq(buf, "arm-selfrefresh-wait") &&
++	    !sysfs_streq(buf, "arm-pll-wait") &&
++	    !sysfs_streq(buf, "cancel"))
++		return -EINVAL;
++	mutex_lock(&p->lock);
++	if (sysfs_streq(buf, "cancel")) {
++		WRITE_ONCE(p->cache_armed, false);
++		goto out;
++	}
++	if (p->cache_armed) {
++		ret = -EBUSY;
++		goto out;
++	}
++	if (!(readl(p->ccm + 0x80) & GENMASK(3, 2))) {
++		ret = -EIO;
++		goto out;
++	}
++	if (!p->cache_call) {
++		p->cache_call = sram_exec_copy(p->code_pool,
++			(void *)(p->code + IMX50_CACHE_CODE_OFFSET),
++			imx50_ocram_cache, imx50_ocram_cache_size);
++		if (!p->cache_call) {
++			ret = -EFAULT;
++			goto out;
++		}
++	}
++	p->pll_wait = sysfs_streq(buf, "arm-pll-wait");
++	p->selfrefresh_wait = sysfs_streq(buf, "arm-selfrefresh-wait") || p->pll_wait;
++	p->selfrefresh = sysfs_streq(buf, "arm-selfrefresh") || p->selfrefresh_wait;
++	p->cache_tables = sysfs_streq(buf, "arm-tables") || p->selfrefresh;
++	if (p->cache_tables) {
++		ret = imx50_prepare_tables(p);
++		if (ret)
++			goto out;
++	}
++	memset_io(data, 0xa5, PAGE_SIZE);
++	memset_io(data, 0, sizeof(p->cache_result));
++	if (p->cache_tables)
++		writel(p->tables_phys | BIT(1), data + 112);
++	if (p->selfrefresh)
++		writel(1, data + 116);
++	if (p->selfrefresh_wait)
++		writel(1, data + 180);
++	if (p->pll_wait) {
++		writel(1, data + 192);
++		writel((u32)p->ccm, data + 196);
++		writel((u32)p->pll1, data + 200);
++	}
++	/* The noirq callback may consume the buffer only after it is prepared. */
++	wmb();
++	WRITE_ONCE(p->cache_armed, true);
++out:
++	mutex_unlock(&p->lock);
++	return ret;
++}
++
++int imx50_ocram_stop_prepare(void)
++{
++	if (!cache_probe)
++		return -ENODEV;
++	return imx50_cache_command(cache_probe, "arm-pll-wait");
++}
++
++void imx50_ocram_stop_finish(void)
++{
++	if (cache_probe)
++		imx50_cache_command(cache_probe, "cancel");
++}
++
++static int imx50_ocram_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct device_node *node, *parent;
++	struct platform_device *supplier;
++	struct imx50_ocram_probe *p;
++	struct resource *res;
++	int ret;
++
++	BUILD_BUG_ON(sizeof(struct imx50_ocram_result) != 16);
++	if (cache_probe)
++		return -EBUSY;
++	if (!imx50_ocram_call_size || imx50_ocram_call_size > IMX50_CACHE_CODE_OFFSET ||
++	    !imx50_ocram_cache_size ||
++	    imx50_ocram_cache_size > PAGE_SIZE - IMX50_CACHE_CODE_OFFSET)
++		return -EINVAL;
++	p = devm_kzalloc(dev, sizeof(*p), GFP_KERNEL);
++	if (!p)
++		return -ENOMEM;
++	mutex_init(&p->lock);
++	p->ddr_pattern = devm_kmalloc(dev, SZ_64K, GFP_KERNEL);
++	if (!p->ddr_pattern)
++		return -ENOMEM;
++	p->code_pool = of_gen_pool_get(dev->of_node, "sram", 0);
++	p->data_pool = of_gen_pool_get(dev->of_node, "sram", 1);
++	p->tables_pool = of_gen_pool_get(dev->of_node, "sram", 2);
++	if (!p->code_pool || !p->data_pool || !p->tables_pool)
++		return -EPROBE_DEFER;
++	if (p->code_pool == p->data_pool || p->code_pool == p->tables_pool ||
++	    p->data_pool == p->tables_pool)
++		return -EINVAL;
++	/* sram_exec_copy changes permissions from the start of its partition. */
++	if (gen_pool_size(p->code_pool) != PAGE_SIZE ||
++	    gen_pool_size(p->data_pool) != PAGE_SIZE ||
++	    gen_pool_size(p->tables_pool) != SZ_32K)
++		return -EINVAL;
++	/* Keep the SRAM provider bound while the consumer owns pool memory. */
++	node = of_parse_phandle(dev->of_node, "sram", 0);
++	parent = of_get_parent(node);
++	of_node_put(node);
++	supplier = of_find_device_by_node(parent);
++	of_node_put(parent);
++	if (!supplier)
++		return -EPROBE_DEFER;
++	ret = device_link_add(dev, &supplier->dev, DL_FLAG_AUTOREMOVE_CONSUMER) ?
++		0 : -ENOMEM;
++	put_device(&supplier->dev);
++	if (ret)
++		return ret;
++	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++	if (!res || resource_size(res) < 0x84)
++		return -EINVAL;
++	p->ccm = devm_ioremap(dev, res->start, resource_size(res));
++	if (!p->ccm)
++		return -ENOMEM;
++	/* PLL1 is shared with CCF; it is touched only at the noirq PM point. */
++	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "pll1");
++	if (!res || resource_size(res) < 0x2c)
++		return -EINVAL;
++	p->pll1 = devm_ioremap(dev, res->start, resource_size(res));
++	if (!p->pll1)
++		return -ENOMEM;
++	p->databahn = devm_platform_ioremap_resource_byname(pdev, "databahn");
++	if (IS_ERR(p->databahn))
++		return PTR_ERR(p->databahn);
++	ret = devm_add_action_or_reset(dev, imx50_ocram_free, p);
++	if (ret)
++		return ret;
++	p->code = gen_pool_alloc(p->code_pool, PAGE_SIZE);
++	p->data = gen_pool_alloc(p->data_pool, PAGE_SIZE);
++	p->tables = gen_pool_alloc(p->tables_pool, SZ_32K);
++	if (!p->code || !p->data || !p->tables)
++		return -ENOMEM;
++	if (!PAGE_ALIGNED(p->code) || !PAGE_ALIGNED(p->data))
++		return -EINVAL;
++	p->code_phys = gen_pool_virt_to_phys(p->code_pool, p->code);
++	p->data_phys = gen_pool_virt_to_phys(p->data_pool, p->data);
++	p->tables_phys = gen_pool_virt_to_phys(p->tables_pool, p->tables);
++	if (!IS_ALIGNED(p->tables_phys, SZ_16K))
++		return -EINVAL;
++	platform_set_drvdata(pdev, p);
++	cache_probe = p;
++	dev_info(dev, "OCRAM probe ready; explicit run/arm required\n");
++	return 0;
++}
++
++static const struct of_device_id imx50_ocram_match[] = {
++	{ .compatible = "fsl,imx50-ocram-probe" },
++	{}
++};
++
++static struct platform_driver imx50_ocram_driver = {
++	.probe = imx50_ocram_probe,
++	.driver = {
++		.name = "imx50-ocram-probe",
++		.of_match_table = imx50_ocram_match,
++
++
++
++		.suppress_bind_attrs = true,
++	},
++};
++builtin_platform_driver(imx50_ocram_driver);
+--- /dev/null
++++ b/arch/arm/mach-imx/ocram-imx50-internal.h
+@@ -0,0 +1,47 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#ifndef IMX50_OCRAM_INTERNAL_H
++#define IMX50_OCRAM_INTERNAL_H
++#include <linux/genalloc.h>
++#include <linux/mutex.h>
++#define IMX50_CACHE_CODE_OFFSET 512
++#define IMX50_CACHE_WORDS 96
++
++struct imx50_ocram_result {
++	u32 pc, sp, value, iterations;
++};
++
++struct imx50_ocram_probe {
++	struct mutex lock;
++	struct gen_pool *code_pool, *data_pool;
++	unsigned long code, data;
++	phys_addr_t code_phys, data_phys;
++	void __iomem *ccm;
++	int (*call)(void __iomem *data, void __iomem *stack, u32 seed);
++	struct imx50_ocram_result result;
++	u32 runs, gate;
++	int error;
++	void __iomem *databahn;
++	int (*cache_call)(void __iomem *data, void __iomem *stack,
++			  void __iomem *databahn);
++	bool cache_armed;
++	u32 cache_result[IMX50_CACHE_WORDS], cache_runs;
++	int cache_error;
++	struct gen_pool *tables_pool;
++	unsigned long tables;
++	phys_addr_t tables_phys;
++	u32 table_count;
++	bool cache_tables;
++	bool selfrefresh;
++	bool selfrefresh_wait;
++	bool pll_wait;
++	void __iomem *pll1;
++	u32 *ddr_pattern;
++	u32 ddr_checked;
++};
++
++extern const u32 imx50_ocram_call_size, imx50_ocram_cache_size;
++int imx50_cache_command(struct imx50_ocram_probe *p, const char *buf);
++
++
++
++#endif
+--- /dev/null
++++ b/arch/arm/mach-imx/ocram-imx50.S
+@@ -0,0 +1,47 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/* Position-independent OCRAM call/stack check. DDR and caches stay enabled. */
++#include <linux/linkage.h>
++
++	.text
++	.arm
++	.arch armv7-a
++	.align 3
++ENTRY(imx50_ocram_call)
++	/* r0: result area, r1: SRAM stack top, r2: seed. */
++	push	{r4-r11, r12, lr}
++	mov	r12, sp
++	mov	sp, r1
++	adr	r3, .Locram_loop
++	str	r3, [r0, #0]
++	mov	r3, sp
++	str	r3, [r0, #4]
++	mov	r4, r2
++	mov	r5, #0
++.Locram_loop:
++	eor	r4, r4, r5
++	ror	r4, r4, #1
++	str	r4, [sp, #-8]!
++	ldr	r6, [sp], #8
++	cmp	r6, r4
++	bne	.Locram_error
++	add	r5, r5, #1
++	cmp	r5, #256
++	bne	.Locram_loop
++	str	r4, [r0, #8]
++	str	r5, [r0, #12]
++	mov	r0, #0
++	b	.Locram_return
++.Locram_error:
++	mvn	r0, #4		/* -EIO */
++.Locram_return:
++	dsb
++	mov	sp, r12
++	pop	{r4-r11, r12, pc}
++ENDPROC(imx50_ocram_call)
++.Locram_end:
++
++	.section .rodata
++	.align 2
++	.global imx50_ocram_call_size
++imx50_ocram_call_size:
++	.word .Locram_end - imx50_ocram_call
+--- /dev/null
++++ b/arch/arm/mach-imx/pm-imx50.c
+@@ -0,0 +1,558 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++/* i.MX50 WAIT standby and optional STOP with the Databahn/OCRAM path. */
++#include <linux/clk.h>
++#include <linux/io.h>
++#include <linux/k4_ram_trace.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/suspend.h>
++#include <asm/proc-fns.h>
++#include "common.h"
++#include "hardware.h"
++#include "k4-mc13892-standby.h"
++
++#define IMX50_CLPCR 0x54
++#define IMX50_ARM_LPC 0x0c
++#define IMX50_SRPG_ARM 0x2a0
++#define IMX50_SRPG_NEON 0x280
++#define IMX50_LPM_MASK 3
++#define IMX50_ARM_CLK_OFF BIT(5)
++#define IMX50_SBYOS BIT(6)
++#define IMX50_VSTBY BIT(8)
++#define IMX50_DSM (BIT(0) | BIT(1))
++#define IMX50_PCR BIT(0)
++#define IMX50_SRPG_PUP 0x04
++#define IMX50_SRPG_PDN 0x08
++#define IMX50_SRPG_STATUS 0x0c
++#define IMX50_SRPG_DEBUG 0x10
++#define IMX50_CCR 0x00
++#define IMX50_CSR 0x08
++#define IMX50_CISR 0x58
++#define IMX50_CIMR 0x5c
++#define IMX50_COSC_EN BIT(12)
++#define IMX50_COSC_READY BIT(5)
++#define IMX50_COSC_EVENT BIT(6)
++#define IMX50_COSC_PWRDOWN BIT(11)
++#define IMX50_PMIC_READY_BYPASS BIT(2)
++#define IMX50_STBY_COUNT_MASK (3 << 9)
++
++struct imx50_pm {
++	void __iomem *ccm, *cortex, *gpc;
++	u32 before[4], programmed[4], after[4];
++	unsigned int attempts, wfi_returns;
++	int last_error;
++	bool stop_enabled, stop_prepared, last_stop;
++	bool srpg_enabled, last_srpg;
++	u32 srpg_up[2], srpg_down[2], srpg_debug[2];
++	u32 srpg_before[2], srpg_cleared[2], srpg_after[2];
++	unsigned int power_cycles;
++	u32 osc_cycles;
++	bool last_osc, osc_saved;
++	u32 osc_ccr_before, osc_ccr_programmed, osc_ccr_after;
++	u32 osc_csr_before, osc_csr_after, osc_cimr;
++	u32 osc_event_before, osc_event_cleared, osc_event_after;
++	unsigned int osc_events;
++	struct k4_mc13892_standby *pmic_standby;
++	bool last_vstby;
++};
++
++static struct imx50_pm *imx50_pm;
++
++static void imx50_pm_read(struct imx50_pm *pm, u32 values[4])
++{
++	values[0] = readl(pm->ccm + IMX50_CLPCR);
++	values[1] = readl(pm->cortex + IMX50_ARM_LPC);
++	values[2] = readl(pm->gpc + IMX50_SRPG_ARM);
++	values[3] = readl(pm->gpc + IMX50_SRPG_NEON);
++}
++
++static void imx50_pm_restore(struct imx50_pm *pm)
++{
++	/* Stop making DSM requests before restoring the inherited power policy. */
++	writel(pm->before[1], pm->cortex + IMX50_ARM_LPC);
++	writel(pm->before[0], pm->ccm + IMX50_CLPCR);
++	writel(pm->before[2], pm->gpc + IMX50_SRPG_ARM);
++	writel(pm->before[3], pm->gpc + IMX50_SRPG_NEON);
++	imx50_pm_read(pm, pm->after);
++}
++
++static bool imx50_srpg_timing_valid(u32 up, u32 down, u32 debug)
++{
++	/* RM 50.4: all sequencing delays must be nonzero; no debug overrides. */
++	return !(debug & BIT(0)) && (up & 0x3f) && ((up >> 8) & 0x3f) &&
++		((up >> 16) & 0x3f) && ((up >> 24) & 3) &&
++		(down & 0x3f) && ((down >> 8) & 0x3f) &&
++		((down >> 16) & 3) && ((down >> 24) & 0x3f);
++}
++
++static int imx50_srpg_prepare(struct imx50_pm *pm)
++{
++	unsigned int i;
++	u32 offset;
++
++	for (i = 0; i < 2; i++) {
++		offset = i ? IMX50_SRPG_NEON : IMX50_SRPG_ARM;
++		pm->srpg_up[i] = readl(pm->gpc + offset + IMX50_SRPG_PUP);
++		pm->srpg_down[i] = readl(pm->gpc + offset + IMX50_SRPG_PDN);
++		pm->srpg_debug[i] = readl(pm->gpc + offset + IMX50_SRPG_DEBUG);
++		pm->srpg_before[i] = readl(pm->gpc + offset + IMX50_SRPG_STATUS);
++		pm->srpg_cleared[i] = pm->srpg_after[i] = 0;
++	}
++	for (i = 0; i < 2; i++)
++		if (!imx50_srpg_timing_valid(pm->srpg_up[i], pm->srpg_down[i],
++					   pm->srpg_debug[i]))
++			return -EOPNOTSUPP;
++	/* PSR is sticky W1C; clear and verify before each power-down request. */
++	for (i = 0; i < 2; i++) {
++		offset = i ? IMX50_SRPG_NEON : IMX50_SRPG_ARM;
++		writel(BIT(0), pm->gpc + offset + IMX50_SRPG_STATUS);
++		pm->srpg_cleared[i] = readl(pm->gpc + offset + IMX50_SRPG_STATUS);
++		if (pm->srpg_cleared[i] & BIT(0))
++			return -EIO;
++	}
++	return 0;
++}
++
++static int imx50_srpg_result(struct imx50_pm *pm)
++{
++	pm->srpg_after[0] = readl(pm->gpc + IMX50_SRPG_ARM + IMX50_SRPG_STATUS);
++	pm->srpg_after[1] = readl(pm->gpc + IMX50_SRPG_NEON + IMX50_SRPG_STATUS);
++	if (!(pm->srpg_after[0] & BIT(0)) || !(pm->srpg_after[1] & BIT(0)))
++		return -EAGAIN;
++	pm->power_cycles++;
++	k4_ram_trace_mark("IMX50_SRPG_POWERED");
++	return 0;
++}
++
++static int imx50_osc_prepare(struct imx50_pm *pm)
++{
++	pm->osc_ccr_before = readl(pm->ccm + IMX50_CCR);
++	pm->osc_csr_before = readl(pm->ccm + IMX50_CSR);
++	pm->osc_cimr = readl(pm->ccm + IMX50_CIMR);
++	pm->osc_event_before = readl(pm->ccm + IMX50_CISR);
++	pm->osc_event_cleared = pm->osc_event_after = 0;
++	pm->osc_csr_after = 0;
++	if (!(pm->osc_ccr_before & IMX50_COSC_EN) ||
++	    !(pm->osc_csr_before & IMX50_COSC_READY) ||
++	    (pm->before[0] & IMX50_COSC_PWRDOWN))
++		return -EOPNOTSUPP;
++	/* Do not consume an interrupt owned by another CCM user. */
++	if (!(pm->osc_cimr & IMX50_COSC_EVENT))
++		return -EBUSY;
++	pm->osc_ccr_programmed = (pm->osc_ccr_before & ~0xffU) | (pm->osc_cycles - 1);
++	pm->osc_saved = true;
++	writel(pm->osc_ccr_programmed, pm->ccm + IMX50_CCR);
++	if (readl(pm->ccm + IMX50_CCR) != pm->osc_ccr_programmed)
++		return -EIO;
++	/* W1C only the oscillator event; retain divider/PLL/temperature events. */
++	writel(IMX50_COSC_EVENT, pm->ccm + IMX50_CISR);
++	pm->osc_event_cleared = readl(pm->ccm + IMX50_CISR);
++	return (pm->osc_event_cleared & IMX50_COSC_EVENT) ? -EIO : 0;
++}
++
++static int imx50_osc_result(struct imx50_pm *pm)
++{
++	pm->osc_csr_after = readl(pm->ccm + IMX50_CSR);
++	pm->osc_event_after = readl(pm->ccm + IMX50_CISR);
++	if (!(pm->osc_csr_after & IMX50_COSC_READY) ||
++	    readl(pm->ccm + IMX50_CCR) != pm->osc_ccr_programmed ||
++	    readl(pm->ccm + IMX50_CIMR) != pm->osc_cimr)
++		return -EIO;
++	/* Event availability while masked is recorded, not assumed. */
++	if (pm->osc_event_after & IMX50_COSC_EVENT)
++		pm->osc_events++;
++	return 0;
++}
++
++static int imx50_standby_enter(suspend_state_t state)
++{
++	struct imx50_pm *pm = imx50_pm;
++	u32 clpcr, lpc, arm, neon;
++	int ret = 0;
++	bool stop = state == PM_SUSPEND_MEM;
++
++	if (!pm || (state != PM_SUSPEND_STANDBY && !stop))
++		return -EINVAL;
++	if (stop && (!pm->stop_enabled || !pm->stop_prepared))
++		return -EINVAL;
++	pm->last_stop = stop;
++	pm->last_srpg = stop && pm->srpg_enabled;
++	pm->last_osc = stop && pm->osc_cycles;
++	pm->last_vstby = stop && pm->pmic_standby;
++	pm->osc_saved = false;
++	pm->attempts++;
++	imx50_pm_read(pm, pm->before);
++	if (pm->last_vstby && !k4_mc13892_standby_armed(pm->pmic_standby)) {
++		ret = -EAGAIN;
++		goto restore;
++	}
++	if (pm->last_osc) {
++		ret = imx50_osc_prepare(pm);
++		if (ret)
++			goto restore;
++	}
++	if (pm->last_srpg) {
++		ret = imx50_srpg_prepare(pm);
++		if (ret)
++			goto restore;
++	}
++	clpcr = (pm->before[0] & ~(IMX50_LPM_MASK | IMX50_SBYOS | IMX50_VSTBY)) |
++		(stop ? 2 : 1) | IMX50_ARM_CLK_OFF;
++	if (pm->last_osc)
++		clpcr |= IMX50_SBYOS;
++	if (pm->last_vstby)
++		/* Stock Yoshi preserves the inherited ready policy (normally no bypass). */
++		clpcr |= IMX50_VSTBY | IMX50_STBY_COUNT_MASK;
++	lpc = pm->before[1] | IMX50_DSM;
++	arm = pm->before[2] & ~IMX50_PCR;
++	neon = pm->before[3] & ~IMX50_PCR;
++
++	if (pm->last_srpg) {
++		arm |= IMX50_PCR;
++		neon |= IMX50_PCR;
++	}
++	/* SRPG keeps architectural state in retention cells. PMIC voltage stays on. */
++	writel(arm, pm->gpc + IMX50_SRPG_ARM);
++	writel(neon, pm->gpc + IMX50_SRPG_NEON);
++	writel(clpcr, pm->ccm + IMX50_CLPCR);
++	writel(lpc, pm->cortex + IMX50_ARM_LPC);
++	imx50_pm_read(pm, pm->programmed);
++	if (pm->programmed[0] != clpcr || pm->programmed[1] != lpc ||
++	    pm->programmed[2] != arm || pm->programmed[3] != neon) {
++		ret = -EIO;
++		goto restore;
++	}
++	if (pm_wakeup_pending()) {
++		ret = -EAGAIN;
++		goto restore;
++	}
++	/* Preserve the wake-only masks installed by TZIC's syscore suspend. */
++	ret = tzic_suspend_wake();
++	if (ret)
++		goto restore;
++	if (pm->last_srpg)
++		k4_ram_trace_mark("IMX50_SRPG_ARMED");
++	/* An armed SRAM test may itself wait while DDR is in self-refresh. */
++	ret = imx50_ocram_cache_enter();
++	if (ret < 0)
++		goto restore;
++	if (ret > 0) {
++		pm->wfi_returns++;
++		k4_ram_trace_mark(stop ? "IMX50_SRAM_STOP_RETURN" : "IMX50_SRAM_WAIT_RETURN");
++		ret = pm->last_srpg ? imx50_srpg_result(pm) : 0;
++		if (pm->last_osc) {
++			int osc_ret = imx50_osc_result(pm);
++
++			if (osc_ret)
++				ret = osc_ret;
++		}
++	} else if (stop) {
++		/* Never fall back to WFI from DDR while CCM is configured for STOP. */
++		ret = -EIO;
++	} else {
++		k4_ram_trace_mark("IMX50_WAIT_WFI");
++		cpu_do_idle();
++		pm->wfi_returns++;
++		k4_ram_trace_mark("IMX50_WAIT_RETURN");
++	}
++restore:
++	/* Also clear holdoff on an aborted entry; otherwise IRQs can stay frozen. */
++	tzic_clear_wake_holdoff();
++	imx50_pm_restore(pm);
++	if (pm->osc_saved) {
++		writel(pm->osc_ccr_before, pm->ccm + IMX50_CCR);
++		pm->osc_ccr_after = readl(pm->ccm + IMX50_CCR);
++		if (pm->osc_ccr_after != pm->osc_ccr_before)
++			ret = -EIO;
++		pm->osc_saved = false;
++	}
++	if (memcmp(pm->before, pm->after, sizeof(pm->before)))
++		ret = -EIO;
++	pm->last_error = ret;
++	return ret;
++}
++
++static int imx50_standby_valid(suspend_state_t state)
++{
++	return state == PM_SUSPEND_STANDBY ||
++		(state == PM_SUSPEND_MEM && imx50_pm && imx50_pm->stop_enabled);
++}
++
++static int imx50_suspend_begin(suspend_state_t state)
++{
++	int ret;
++
++	if (state != PM_SUSPEND_MEM)
++		return 0;
++	if (!imx50_pm || !imx50_pm->stop_enabled)
++		return -EINVAL;
++	/* SRAM copy and page-table construction must run before noirq. */
++	ret = imx50_ocram_stop_prepare();
++	if (!ret && imx50_pm->pmic_standby) {
++		ret = k4_mc13892_standby_prepare(imx50_pm->pmic_standby);
++		if (ret)
++			imx50_ocram_stop_finish();
++	}
++	if (!ret)
++		imx50_pm->stop_prepared = true;
++	return ret;
++}
++
++static void imx50_suspend_end(void)
++{
++	if (imx50_pm && imx50_pm->pmic_standby) {
++		int ret = k4_mc13892_standby_restore(imx50_pm->pmic_standby);
++
++		if (ret) {
++			imx50_pm->last_error = ret;
++			pr_err("i.MX50 PMIC standby restore failed: %d\n", ret);
++		}
++	}
++	if (imx50_pm && imx50_pm->stop_prepared) {
++		imx50_ocram_stop_finish();
++		imx50_pm->stop_prepared = false;
++	}
++}
++
++static const struct platform_suspend_ops imx50_suspend_ops = {
++	.begin = imx50_suspend_begin,
++	.end = imx50_suspend_end,
++	.valid = imx50_standby_valid,
++	.enter = imx50_standby_enter,
++};
++
++static ssize_t state_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++	struct imx50_pm *pm = dev_get_drvdata(dev);
++
++	return sysfs_emit(buf,
++		"mode=%s attempts=%u wfi_returns=%u error=%d vstby=%u\n"
++		"before=%08x,%08x,%08x,%08x\n"
++		"programmed=%08x,%08x,%08x,%08x\n"
++		"after=%08x,%08x,%08x,%08x\n"
++		"srpg=%u power_cycles=%u psr_before=%08x,%08x cleared=%08x,%08x after=%08x,%08x\n"
++		"srpg_up=%08x,%08x down=%08x,%08x debug=%08x,%08x\n"
++		"osc=%u cycles=%u events=%u ccr=%08x,%08x,%08x csr=%08x,%08x cimr=%08x\n"
++		"osc_cisr=%08x,%08x,%08x\n",
++		pm->last_stop ? "stop" : "wait", pm->attempts, pm->wfi_returns, pm->last_error,
++		pm->last_vstby,
++		pm->before[0], pm->before[1], pm->before[2], pm->before[3],
++		pm->programmed[0], pm->programmed[1], pm->programmed[2], pm->programmed[3],
++		pm->after[0], pm->after[1], pm->after[2], pm->after[3],
++		pm->last_srpg, pm->power_cycles,
++		pm->srpg_before[0], pm->srpg_before[1], pm->srpg_cleared[0], pm->srpg_cleared[1],
++		pm->srpg_after[0], pm->srpg_after[1], pm->srpg_up[0], pm->srpg_up[1],
++		pm->srpg_down[0], pm->srpg_down[1], pm->srpg_debug[0], pm->srpg_debug[1],
++		pm->last_osc, pm->osc_cycles, pm->osc_events,
++		pm->osc_ccr_before, pm->osc_ccr_programmed, pm->osc_ccr_after,
++		pm->osc_csr_before, pm->osc_csr_after, pm->osc_cimr,
++		pm->osc_event_before, pm->osc_event_cleared, pm->osc_event_after);
++}
++static DEVICE_ATTR_RO(state);
++
++static ssize_t pmic_standby_show(struct device *dev,
++				struct device_attribute *attr, char *buf)
++{
++	struct imx50_pm *pm = dev_get_drvdata(dev);
++
++	return k4_mc13892_standby_show(pm->pmic_standby, buf);
++}
++static DEVICE_ATTR_RO(pmic_standby);
++
++static ssize_t srpg_snapshot_show(struct device *dev,
++				 struct device_attribute *attr, char *buf)
++{
++	struct imx50_pm *pm = dev_get_drvdata(dev);
++	u32 arm[4], neon[4];
++	unsigned int i;
++
++	/* SRPG registers require supervisor accesses; /dev/mem mmap is user mode. */
++	for (i = 0; i < 4; i++) {
++		arm[i] = readl(pm->gpc + IMX50_SRPG_ARM + 4 + 4 * i);
++		neon[i] = readl(pm->gpc + IMX50_SRPG_NEON + 4 + 4 * i);
++	}
++	return sysfs_emit(buf,
++		"arm_up=%08x down=%08x psr=%08x debug=%08x\n"
++		"neon_up=%08x down=%08x psr=%08x debug=%08x\n",
++		arm[0], arm[1], arm[2], arm[3], neon[0], neon[1], neon[2], neon[3]);
++}
++static DEVICE_ATTR_RO(srpg_snapshot);
++
++/* Explicit CCM control/status allowlist; no FIFO, SET/CLR or reserved gaps.
++ * GPC access stays in supervisor mode, using the already enabled owner clock.
++ */
++static ssize_t stock_registers_show(struct device *dev,
++				  struct device_attribute *attr, char *buf)
++{
++	static const u16 offsets[] = {
++		0x00, 0x04, 0x08, 0x0c, 0x10, 0x14, 0x18, 0x1c,
++		0x20, 0x24, 0x28, 0x2c, 0x30, 0x38, 0x48, 0x4c,
++		0x50, 0x54, 0x58, 0x5c, 0x60, 0x64, 0x68, 0x6c,
++		0x70, 0x74, 0x78, 0x7c, 0x80, 0x84, 0x88, 0x8c,
++		0x90, 0x94, 0x98, 0x9c, 0xa0, 0xa4, 0xa8,
++	};
++	struct imx50_pm *pm = dev_get_drvdata(dev);
++	unsigned int i;
++	int pos = 0;
++
++	for (i = 0; i < ARRAY_SIZE(offsets); i++)
++		pos += sysfs_emit_at(buf, pos, "CCM_%03x=%08x\n", offsets[i],
++				     readl(pm->ccm + offsets[i]));
++	pos += sysfs_emit_at(buf, pos, "CORTEX_AMC=%08x LPC=%08x\n",
++			     readl(pm->cortex + 0x18), readl(pm->cortex + IMX50_ARM_LPC));
++	return pos;
++}
++static DEVICE_ATTR_RO(stock_registers);
++
++/* K4 audit only: original cpu.c / mx50_freq.c and RM register maps.
++ * These blocks are shared, so map without claiming them or writing fields.
++ * Read only explicit configuration words; never FIFO, SET/CLR or reserved.
++ */
++static ssize_t stock_shared_registers_show(struct device *dev,
++				 struct device_attribute *attr, char *buf)
++{
++	static const struct {
++		const char *name;
++		phys_addr_t base;
++		u16 offsets[5];
++		u8 count;
++	} blocks[] = {
++		{ "DATABAHN", 0x14000000, { 0, 80, 84, 88 }, 4 },
++		{ "QOSC", 0x41012000, { 0 }, 1 },
++		{ "AIPS1", 0x53f00000, { 0x40, 0x44, 0x48, 0x4c, 0x50 }, 5 },
++		{ "AIPS2", 0x63f00000, { 0x40, 0x44, 0x48, 0x4c, 0x50 }, 5 },
++		{ "SRC", 0x53fd0000, { 0, 4, 8 }, 3 },
++	};
++	void __iomem *base;
++	unsigned int i, j;
++	int n = 0;
++
++	if (!of_machine_is_compatible("amazon,kindle-4"))
++		return -EOPNOTSUPP;
++	for (i = 0; i < ARRAY_SIZE(blocks); i++) {
++		base = ioremap(blocks[i].base, 0x100);
++		if (!base)
++			return -ENOMEM;
++		for (j = 0; j < blocks[i].count; j++)
++			n += sysfs_emit_at(buf, n, "%s_%03x=%08x\n", blocks[i].name,
++				blocks[i].offsets[j], readl(base + blocks[i].offsets[j]));
++		iounmap(base);
++	}
++	return n;
++}
++static DEVICE_ATTR_RO(stock_shared_registers);
++
++static struct attribute *imx50_pm_attrs[] = {
++	&dev_attr_state.attr, &dev_attr_stock_registers.attr, &dev_attr_stock_shared_registers.attr, &dev_attr_srpg_snapshot.attr, &dev_attr_pmic_standby.attr, NULL
++};
++ATTRIBUTE_GROUPS(imx50_pm);
++
++static void imx50_pm_cleanup(void *data)
++{
++	if (imx50_pm == data) {
++		suspend_set_ops(NULL);
++		imx50_pm = NULL;
++	}
++}
++
++static int imx50_pm_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct resource *res;
++	struct imx50_pm *pm;
++	struct clk *clk;
++	int ret;
++
++	if (imx50_pm)
++		return -EBUSY;
++	pm = devm_kzalloc(dev, sizeof(*pm), GFP_KERNEL);
++	if (!pm)
++		return -ENOMEM;
++	pm->cortex = devm_platform_ioremap_resource_byname(pdev, "cortex");
++	if (IS_ERR(pm->cortex))
++		return PTR_ERR(pm->cortex);
++	pm->gpc = devm_platform_ioremap_resource_byname(pdev, "gpc");
++	if (IS_ERR(pm->gpc))
++		return PTR_ERR(pm->gpc);
++	/* CCM is shared: own CLPCR and temporarily set CCR.OSCNT in noirq. */
++	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "ccm");
++	if (!res || resource_size(res) < IMX50_CIMR + sizeof(u32))
++		return -EINVAL;
++	pm->ccm = devm_ioremap(dev, res->start, resource_size(res));
++	if (!pm->ccm)
++		return -ENOMEM;
++	clk = devm_clk_get_enabled(dev, "gpc");
++	if (IS_ERR(clk))
++		return dev_err_probe(dev, PTR_ERR(clk), "GPC clock unavailable\n");
++	/* Stock post_cpu_init establishes these before any suspend request.
++	 * Only ARM/NEON blocks are used on this port; do not touch the unused
++	 * EMPGC blocks or rely on bootloader-retained timing registers.
++	 */
++	if (of_machine_is_compatible("amazon,kindle-4")) {
++		unsigned int i;
++
++		for (i = 0; i < 2; i++) {
++			u32 offset = i ? IMX50_SRPG_NEON : IMX50_SRPG_ARM;
++
++			dev_info(dev, "stock SRPG %s up=%08x down=%08x ->010f0201/01010101\n",
++				 i ? "NEON" : "ARM",
++				 readl(pm->gpc + offset + IMX50_SRPG_PUP),
++				 readl(pm->gpc + offset + IMX50_SRPG_PDN));
++			writel(0x010f0201, pm->gpc + offset + IMX50_SRPG_PUP);
++			writel(0x01010101, pm->gpc + offset + IMX50_SRPG_PDN);
++			if (readl(pm->gpc + offset + IMX50_SRPG_PUP) != 0x010f0201 ||
++			    readl(pm->gpc + offset + IMX50_SRPG_PDN) != 0x01010101)
++				return -EIO;
++		}
++	}
++	pm->stop_enabled = of_property_read_bool(dev->of_node, "fsl,stop-with-ocram");
++	pm->srpg_enabled = of_property_read_bool(dev->of_node, "fsl,srpg-in-stop");
++	if (pm->srpg_enabled && !pm->stop_enabled)
++		return -EINVAL;
++	if (of_property_present(dev->of_node, "fsl,oscillator-startup-cycles")) {
++		ret = of_property_read_u32(dev->of_node, "fsl,oscillator-startup-cycles",
++					   &pm->osc_cycles);
++		if (ret || !pm->stop_enabled || !pm->osc_cycles || pm->osc_cycles > 256)
++			return -EINVAL;
++	}
++	if (pm->stop_enabled) {
++		/* RM 5.3.4.3: WEIM must run to acknowledge its LPM handshake. */
++		clk = devm_clk_get_enabled(dev, "weim");
++		if (IS_ERR(clk))
++			return dev_err_probe(dev, PTR_ERR(clk), "WEIM clock unavailable\n");
++	}
++	if (of_property_present(dev->of_node, "amazon,standby-pmic")) {
++		if (!pm->stop_enabled || !pm->srpg_enabled || !pm->osc_cycles)
++			return -EINVAL;
++		pm->pmic_standby = k4_mc13892_standby_get(dev);
++		if (IS_ERR(pm->pmic_standby))
++			return dev_err_probe(dev, PTR_ERR(pm->pmic_standby),
++					     "PMIC standby preparation unavailable\n");
++	}
++	ret = devm_add_action_or_reset(dev, imx50_pm_cleanup, pm);
++	if (ret)
++		return ret;
++	platform_set_drvdata(pdev, pm);
++	imx50_pm = pm;
++	suspend_set_ops(&imx50_suspend_ops);
++	dev_info(dev, "WAIT standby registered; OCRAM STOP %s\n",
++		 pm->stop_enabled ? "enabled" : "disabled");
++	return 0;
++}
++
++static const struct of_device_id imx50_pm_match[] = {
++	{ .compatible = "fsl,imx50-pm" },
++	{}
++};
++
++/* Built-in platform suspend owner; no unbind while its global ops are in use. */
++static struct platform_driver imx50_pm_driver = {
++	.probe = imx50_pm_probe,
++	.driver = {
++		.name = "imx50-pm",
++		.of_match_table = imx50_pm_match,
++		.dev_groups = imx50_pm_groups,
++		.suppress_bind_attrs = true,
++	},
++};
++builtin_platform_driver(imx50_pm_driver);
+--- a/arch/arm/mach-imx/tzic.c
++++ b/arch/arm/mach-imx/tzic.c
+@@ -196,7 +196,7 @@
+ IRQCHIP_DECLARE(tzic, "fsl,tzic", tzic_init_dt);
+ 
+ /**
+- * tzic_enable_wake() - enable wakeup interrupt
++ * tzic_suspend_wake() - synchronize interrupts without changing wake masks
+  *
+  * @return			0 if successful; non-zero otherwise
+  *
+@@ -204,13 +204,28 @@
+  * by tzic enabled platforms before entering imx specific low power modes (ie,
+  * those low power modes beyond the WAIT_CLOCKED basic ARM WFI only mode).
+  */
+-int tzic_enable_wake(void)
+-{
+-	unsigned int i;
+-
++int tzic_suspend_wake(void)
++{
+ 	imx_writel(1, tzic_base + TZIC_DSMINT);
+ 	if (unlikely(imx_readl(tzic_base + TZIC_DSMINT) == 0))
+ 		return -EAGAIN;
++	return 0;
++}
++
++void tzic_clear_wake_holdoff(void)
++{
++	imx_writel(0, tzic_base + TZIC_DSMINT);
++	imx_readl(tzic_base + TZIC_DSMINT);
++}
++
++/* Idle wakes on all enabled interrupts; suspend keeps irq_suspend's wake_active. */
++int tzic_enable_wake(void)
++{
++	unsigned int i;
++	int ret = tzic_suspend_wake();
++
++	if (ret)
++		return ret;
+ 
+ 	for (i = 0; i < 4; i++)
+ 		imx_writel(imx_readl(tzic_base + TZIC_ENSET0(i)),
+--- a/init/main.c
++++ b/init/main.c
+@@ -107,12 +107,35 @@
+ #include <asm/sections.h>
+ #include <asm/cacheflush.h>
+ 
++
++
++
+ #define CREATE_TRACE_POINTS
+ #include <trace/events/initcall.h>
+ 
+ #include <kunit/test.h>
+ 
+ static int kernel_init(void *);
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
+ 
+ /*
+  * Debug helper: via this flag we know that we are in 'early bootup code'
+@@ -850,6 +873,9 @@
+ 	char *command_line;
+ 	char *after_dashes;
+ 
++
++
++
+ 	set_task_stack_end_magic(&init_task);
+ 	smp_setup_processor_id();
+ 	debug_objects_early_init();
+@@ -868,6 +894,9 @@
+ 	page_address_init();
+ 	pr_notice("%s", linux_banner);
+ 	early_security_init();
++
++
++
+ 	setup_arch(&command_line);
+ 	setup_boot_config();
+ 	setup_command_line(command_line);
+@@ -904,6 +933,9 @@
+ 	sort_main_extable();
+ 	trap_init();
+ 	mm_core_init();
++
++
++
+ 	poking_init();
+ 	ftrace_init();
+ 
+@@ -980,6 +1012,9 @@
+ 	 * this. But we do want output early, in case something goes wrong.
+ 	 */
+ 	console_init();
++
++
++
+ 	if (panic_later)
+ 		panic("Too many boot %s vars at `%s'", panic_later,
+ 		      panic_param);
+@@ -1413,6 +1448,9 @@
+ 	wait_for_completion(&kthreadd_done);
+ 
+ 	kernel_init_freeable();
++
++
++
+ 	/* need to finish all async __init code before freeing the memory */
+ 	async_synchronize_full();
+ 
+@@ -1524,6 +1562,9 @@
+ 
+ 	do_basic_setup();
+ 
++
++
++
+ 	kunit_run_all_tests();
+ 
+ 	wait_for_initramfs();
