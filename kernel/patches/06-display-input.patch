@@ -116,7 +116,7 @@
  obj-$(CONFIG_INPUT_PCAP)		+= pcap_keys.o
 --- /dev/null
 +++ b/drivers/input/misc/k4-mc13892-power-button.c
-@@ -0,0 +1,254 @@
+@@ -0,0 +1,251 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/* Kindle K4 power button on the MC13892 ONOFD1 input. */
 +
@@ -124,7 +124,6 @@
 +#include <linux/input.h>
 +#include <linux/interrupt.h>
 +#include <linux/jiffies.h>
-+#include <linux/k4_ram_trace.h>
 +#include <linux/mfd/mc13783.h>
 +#include <linux/module.h>
 +#include <linux/mutex.h>
@@ -213,7 +212,6 @@
 +		if (!ret) {
 +			button->wake_armed = false;
 +			button->wake_disarms++;
-+			k4_ram_trace_mark("K4_BUTTON_WAKE_DISARMED");
 +		}
 +	}
 +	mutex_lock(&button->lock);
@@ -247,7 +245,6 @@
 +		}
 +		button->wake_armed = true;
 +		button->wake_arms++;
-+		k4_ram_trace_mark("K4_BUTTON_WAKE_ARMED");
 +	} else {
 +		disable_irq(button->irq);
 +		button->irq_disabled = true;
@@ -2158,7 +2155,7 @@
 +MODULE_LICENSE("GPL");
 --- /dev/null
 +++ b/drivers/video/fbdev/imx50-epdc-hw.c
-@@ -0,0 +1,478 @@
+@@ -0,0 +1,462 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/* i.MX50 RM Rev.2 chapter 24: reset, K4 timing, serial DMA and IRQ drain. */
 +#include <linux/bitops.h>
@@ -2166,7 +2163,6 @@
 +#include <linux/io.h>
 +#include <linux/iopoll.h>
 +#include <linux/jiffies.h>
-+#include <linux/k4_ram_trace.h>
 +#include <linux/module.h>
 +
 +#include "imx50-epdc-hw.h"
@@ -2248,8 +2244,6 @@
 +{
 +	u32 value;
 +	int ret;
-+
-+	k4_ram_trace_mark("EPDC reset begin");
 +	/* Inherited CLKGATE must not satisfy the reset-assert handshake. */
 +	writel(E_RESET | E_GATE, hw->base + E_CTRL_CLR);
 +	ret = readl_poll_timeout(hw->base + E_CTRL, value,
@@ -2263,8 +2257,6 @@
 +	writel(E_RESET | E_GATE, hw->base + E_CTRL_CLR);
 +	ret = readl_poll_timeout(hw->base + E_CTRL, value,
 +				 !(value & (E_RESET | E_GATE)), 10, 1000);
-+	if (!ret)
-+		k4_ram_trace_mark("EPDC reset done");
 +	return ret;
 +}
 +
@@ -2308,7 +2300,6 @@
 +	ret = imx50_epdc_buffers_invalidate(buffers);
 +	if (ret)
 +		goto out;
-+	k4_ram_trace_mark("EPDC configure begin");
 +	/* Never reset an inherited DMA operation or discard its buffers. */
 +	ret = imx50_epdc_hw_inherited_idle(hw);
 +	if (ret)
@@ -2360,7 +2351,6 @@
 +	hw->configured = true;
 +	hw->drained = true; /* Reset/config only; no update has started. */
 +	spin_unlock_irqrestore(&hw->irq_lock, flags);
-+	k4_ram_trace_mark("EPDC configure done");
 +	ret = 0;
 +	goto out;
 +fault:
@@ -2368,7 +2358,6 @@
 +	       stage, ret, readl(hw->base + E_CTRL), readl(hw->base + E_IRQ),
 +	       readl(hw->base + E_STATUS), readl(hw->base + E_LUTS));
 +	hw->fault = ret;
-+	k4_ram_trace_mark("EPDC configure fault");
 +out:
 +	mutex_unlock(&hw->lock);
 +	return ret;
@@ -2537,9 +2526,7 @@
 +	hw->running = true;
 +	hw->drained = false;
 +	/* begin() did dma_wmb(); ordered writel of UPD_CTRL starts DMA last. */
-+	k4_ram_trace_mark("EPDC submit >");
 +	writel(command.control, hw->base + E_COMMAND);
-+	k4_ram_trace_mark("EPDC submit <");
 +	spin_unlock_irqrestore(&hw->irq_lock, flags);
 +	waited = wait_for_completion_timeout(&hw->done, msecs_to_jiffies(timeout_ms));
 +	spin_lock_irqsave(&hw->irq_lock, flags);
@@ -2571,9 +2558,7 @@
 +	hw->last_full = full;
 +	if (!waited) {
 +		hw->polled_completions++;
-+		k4_ram_trace_mark("EPDC deadline drained");
 +	}
-+	k4_ram_trace_mark("EPDC update drained");
 +	goto out;
 +abort:
 +	/* Withdraw only a command never written. An attempted command write, even
@@ -2581,12 +2566,10 @@
 +	 */
 +	if (imx50_epdc_buffers_abort_unsubmitted(hw->buffers))
 +		goto quarantine;
-+	k4_ram_trace_mark("EPDC unsubmitted abort");
 +	goto out;
 +quarantine:
 +	hw->fault = ret;
 +	imx50_epdc_buffers_complete(hw->buffers, ret);
-+	k4_ram_trace_mark("EPDC update fault");
 +out:
 +	mutex_unlock(&hw->lock);
 +	return ret;
@@ -2629,8 +2612,6 @@
 +	ret = readl_poll_timeout(hw->base + E_CTRL, value, value & E_GATE, 10, 1000);
 +	if (ret)
 +		hw->fault = ret;
-+	else
-+		k4_ram_trace_mark("EPDC controller gated");
 +out:
 +	mutex_unlock(&hw->lock);
 +	return ret;
@@ -3364,7 +3345,7 @@
 +#endif
 --- /dev/null
 +++ b/drivers/video/fbdev/imx50-epdc.c
-@@ -0,0 +1,572 @@
+@@ -0,0 +1,569 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/* K4 EPDC owner: clocks, panel supplies, firmware and serialized updates. */
 +#include <linux/clk.h>
@@ -3375,7 +3356,6 @@
 +#include <linux/imx50-epdc-image.h>
 +#include <linux/imx50-pxp.h>
 +#include <linux/k4-papyrus.h>
-+#include <linux/k4_ram_trace.h>
 +#include <linux/module.h>
 +#include <linux/k4-provider.h>
 +#include <linux/of_platform.h>
@@ -3524,7 +3504,6 @@
 +	if (ret)
 +		return ret;
 +	e->access_on = true;
-+	k4_ram_trace_mark("EPDC owner preflight");
 +	e->startup_stage = "inherited-idle";
 +	ret = imx50_epdc_hw_inherited_idle(&e->hw);
 +	if (ret) {
@@ -3705,7 +3684,6 @@
 +	return ret;
 +}
 +EXPORT_SYMBOL_GPL(imx50_epdc_powerdown);
-+
 +
 +struct imx50_epdc *devm_imx50_epdc_get(struct device *consumer, const char *property)
 +{

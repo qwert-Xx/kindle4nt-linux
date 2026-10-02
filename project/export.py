@@ -13,28 +13,28 @@ DEBUG_CONFIGS={'CONFIG_K4_DIAGNOSTICS','CONFIG_K4_BOOT_TRACE','CONFIG_K4_PM_RAM_
 DEBUG_ONLY={'drivers/soc/imx/k4-pm-trace.c','drivers/power/supply/k4-mc13892-monitor.c','arch/arm/include/asm/k4-boot-trace.h'}
 def git(*args):return subprocess.check_output(['git','-C',str(ROOT),*args]).replace(b'\r\n',b'\n')
 def fold_debug(text):
-    """Select disabled debug branches, preserving physical line numbers."""
+    """Select disabled debug branches, without placeholder padding."""
     stack=[];result=[]
     for line in text.splitlines(keepends=True):
         m=re.match(r'^\s*#\s*(ifdef|ifndef|if|else|elif|endif)\b(.*)',line)
         active=all(enabled for known,enabled in stack)
-        if not m:result.append(line if active else '\n');continue
+        if not m:result.append(line if active else '');continue
         op,expr=m.group(1),m.group(2).strip()
         if op in ('if','ifdef','ifndef'):
             selected=re.fullmatch(r'(?:defined|IS_ENABLED)\s*\(\s*(CONFIG_\w+)\s*\)',expr)
             config=selected.group(1) if selected else expr
             known=config in DEBUG_CONFIGS
-            result.append('\n' if known or not active else line)
+            result.append('' if known or not active else line)
             stack.append((known,op=='ifndef' if known else True))
         elif op=='endif':
             if not stack:raise ValueError('unbalanced conditional')
-            known,_=stack.pop();result.append('\n' if known or not all(v for _,v in stack) else line)
+            known,_=stack.pop();result.append('' if known or not all(v for _,v in stack) else line)
         elif op=='else':
             known,enabled=stack[-1];stack[-1]=(known,not enabled if known else True)
-            result.append('\n' if known or not all(v for _,v in stack[:-1]) else line)
+            result.append('' if known or not all(v for _,v in stack[:-1]) else line)
         else:
             if stack[-1][0]:raise ValueError('unsupported debug elif')
-            result.append(line if active else '\n')
+            result.append(line if active else '')
     if stack:raise ValueError('unclosed conditional')
     return ''.join(result)
 def patch(path,old,new):
@@ -45,22 +45,28 @@ def main():
     ap=argparse.ArgumentParser();ap.add_argument('--out',required=True);a=ap.parse_args();out=pathlib.Path(a.out).resolve()
     if out.exists():raise ValueError('export output must be new')
     files=git('diff','--name-only','v6.6.157','--','arch','drivers','include','init','Documentation/devicetree/bindings').decode().splitlines()
-    grouped={k:[] for k in GROUPS};debug=[]
+    grouped={k:[] for k in GROUPS};debug=[];ccm=[]
     for path in files:
         old=subprocess.run(['git','-C',str(ROOT),'show','v6.6.157:'+path],capture_output=True).stdout.decode().replace('\r\n','\n')
         p=ROOT/path;new=(p.read_text().rstrip('\n')+'\n') if p.exists() else ''
         formal='' if '/k4-debug/' in path or '/mach-imx/debug/' in path or path in DEBUG_ONLY else (fold_debug(new) if pathlib.Path(path).suffix in ('.c','.h','.S') else new)
+        if path=='arch/arm/boot/dts/nxp/imx/imx50.dtsi':
+            before= formal.replace('interrupts = <71>, <72>;', 'interrupts = <0 71 0x04 0 72 0x04>;')
+            ccm.append(patch(path,before,formal));formal=before
         group=next((k for k,v in GROUPS.items() if any(path.startswith(x) for x in v)),None)
         if group is None:raise ValueError('unclassified kernel path: '+path)
-        grouped[group].append(patch(path,old,formal));debug.append(patch(path,formal,new))
+        grouped[group].append(patch(path,old,formal));debug.append(patch(path,new if path=="arch/arm/boot/dts/nxp/imx/imx50.dtsi" else formal,new))
     out.mkdir();(out/'kernel/patches').mkdir(parents=True);(out/'kernel/debug-patches').mkdir()
     series=[]
     for group,parts in grouped.items():
         data=''.join(parts)
         if data:(out/'kernel/patches'/(group+'.patch')).write_text(data);series.append(group+'.patch')
+    if any(ccm):
+        (out/'kernel/patches/08-ccm-interrupts.patch').write_text(''.join(ccm));series.append('08-ccm-interrupts.patch')
     (out/'kernel/patches/series').write_text('\n'.join(series)+'\n')
     (out/'kernel/debug-patches/01-k4-diagnostics.patch').write_text(''.join(debug))
-    (out/'kernel/debug-patches/series').write_text('01-k4-diagnostics.patch\n')
+    shutil.copyfile(ROOT/'project/debug-patches/02-k4-trace-hooks.patch',out/'kernel/debug-patches/02-k4-trace-hooks.patch')
+    (out/'kernel/debug-patches/series').write_text('01-k4-diagnostics.patch\n02-k4-trace-hooks.patch\n')
     shutil.copytree(ROOT/'project',out/'project',ignore=shutil.ignore_patterns('__pycache__'))
     (out/'README.md').write_text('<!-- SPDX-License-Identifier: CC-BY-4.0 -->\n# Kindle 4 NT\n\nApply kernel/patches/series to a separate Linux v6.6.157 worktree. Debug additionally requires kernel/debug-patches/series. Build with make -C project images SOURCE=/path/to/linux INPUTS=/path/to/inputs.json OUT=/path/to/out. Read project/README.md. No device deployment is performed.\n')
     # A selected source overlay, not the frozen loader image or stock binaries.

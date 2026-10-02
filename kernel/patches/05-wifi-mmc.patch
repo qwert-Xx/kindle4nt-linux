@@ -1,6 +1,6 @@
 --- a/drivers/mmc/core/pwrseq_simple.c
 +++ b/drivers/mmc/core/pwrseq_simple.c
-@@ -17,12 +17,51 @@
+@@ -17,12 +17,28 @@
  #include <linux/gpio/consumer.h>
  #include <linux/delay.h>
  #include <linux/property.h>
@@ -14,31 +14,8 @@
  
  #include "pwrseq.h"
  
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
 +static const bool k4_diagnostic_snapshot;
 +static const unsigned int k4_diagnostic_cycle_ms, k4_cycle_epoch;
-+
 +
  struct mmc_pwrseq_simple {
 +	bool retain_board_power, cycle_active;
@@ -52,7 +29,7 @@
  	struct mmc_pwrseq pwrseq;
  	bool clk_enabled;
  	u32 post_power_on_delay_ms;
-@@ -58,9 +97,119 @@
+@@ -58,9 +74,96 @@
  	}
  }
  
@@ -86,29 +63,6 @@
 +	mutex_unlock(&p->diag_lock);
 +#endif
 +}
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
 +
 +#if IS_REACHABLE(CONFIG_MFD_MC13XXX) && IS_REACHABLE(CONFIG_SPI)
 +static void k4_put_pmic_device(void *data) { put_device(data); }
@@ -172,7 +126,7 @@
  
  	if (!IS_ERR(pwrseq->ext_clk) && !pwrseq->clk_enabled) {
  		clk_prepare_enable(pwrseq->ext_clk);
-@@ -74,6 +223,20 @@
+@@ -74,6 +177,20 @@
  {
  	struct mmc_pwrseq_simple *pwrseq = to_pwrseq_simple(host->pwrseq);
  
@@ -193,7 +147,7 @@
  	mmc_pwrseq_simple_set_gpios_value(pwrseq, 0);
  
  	if (pwrseq->post_power_on_delay_ms)
-@@ -83,6 +246,16 @@
+@@ -83,6 +200,16 @@
  static void mmc_pwrseq_simple_power_off(struct mmc_host *host)
  {
  	struct mmc_pwrseq_simple *pwrseq = to_pwrseq_simple(host->pwrseq);
@@ -210,7 +164,7 @@
  
  	mmc_pwrseq_simple_set_gpios_value(pwrseq, 1);
  
-@@ -104,6 +277,7 @@
+@@ -104,6 +231,7 @@
  
  static const struct of_device_id mmc_pwrseq_simple_of_match[] = {
  	{ .compatible = "mmc-pwrseq-simple",},
@@ -218,7 +172,7 @@
  	{/* sentinel */},
  };
  MODULE_DEVICE_TABLE(of, mmc_pwrseq_simple_of_match);
-@@ -112,10 +286,17 @@
+@@ -112,10 +240,17 @@
  {
  	struct mmc_pwrseq_simple *pwrseq;
  	struct device *dev = &pdev->dev;
@@ -236,7 +190,7 @@
  
  	pwrseq->ext_clk = devm_clk_get(dev, "ext_clock");
  	if (IS_ERR(pwrseq->ext_clk) && PTR_ERR(pwrseq->ext_clk) != -ENOENT)
-@@ -134,6 +315,21 @@
+@@ -134,6 +269,21 @@
  	device_property_read_u32(dev, "power-off-delay-us",
  				 &pwrseq->power_off_delay_us);
  
@@ -258,12 +212,10 @@
  	pwrseq->pwrseq.dev = dev;
  	pwrseq->pwrseq.ops = &mmc_pwrseq_simple_ops;
  	pwrseq->pwrseq.owner = THIS_MODULE;
-@@ -155,6 +351,9 @@
+@@ -155,6 +305,7 @@
  	.driver = {
  		.name = "pwrseq_simple",
  		.of_match_table = mmc_pwrseq_simple_of_match,
-+
-+
 +
  	},
  };
@@ -278,24 +230,16 @@
  #include <linux/scatterlist.h>
  
  #include <linux/mmc/host.h>
-@@ -14,6 +15,16 @@
+@@ -14,6 +15,8 @@
  
  #include "core.h"
  #include "sdio_ops.h"
 +
-+
-+
-+
-+
-+
-+
-+
 +#define sdio_init_diag false
-+
  
  int mmc_send_io_op_cond(struct mmc_host *host, u32 ocr, u32 *rocr)
  {
-@@ -81,6 +92,14 @@
+@@ -81,6 +84,14 @@
  	cmd.flags = MMC_RSP_SPI_R5 | MMC_RSP_R5 | MMC_CMD_AC;
  
  	err = mmc_wait_for_cmd(host, &cmd, 0);
@@ -310,7 +254,7 @@
  	if (err)
  		return err;
  
-@@ -214,4 +233,3 @@
+@@ -214,4 +225,3 @@
  
  	return mmc_io_rw_direct_host(host, 1, 0, SDIO_CCCR_ABORT, abort, NULL);
  }
@@ -395,66 +339,13 @@
  #include "sdhci-esdhc.h"
  #include "cqhci.h"
  
-@@ -332,7 +336,117 @@
+@@ -332,7 +336,64 @@
  	.quirks = SDHCI_QUIRK_NO_LED,
  };
  
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
 +static const bool clock_snapshot;
 +static const bool k4_diagnostic_legacy25;
 +static unsigned int esdhc_clock_test_select(struct device *dev, bool imx50) { return 0; }
-+
 +
 +struct esdhc_clock_snapshot {
 +	u32 samples;
@@ -513,7 +404,7 @@
  	u32 scratchpad;
  	struct pinctrl *pinctrl;
  	struct pinctrl_state *pins_100mhz;
-@@ -506,6 +620,8 @@
+@@ -506,6 +567,8 @@
  	}
  
  	if (unlikely(reg == SDHCI_CAPABILITIES)) {
@@ -522,7 +413,7 @@
  		/* ignore bit[0-15] as it stores cap_1 register val for mx6sl */
  		if (imx_data->socdata->flags & ESDHC_FLAG_HAVE_CAP1)
  			val &= 0xffff0000;
-@@ -923,6 +1039,155 @@
+@@ -923,6 +986,155 @@
  	return pltfm_host->clock / 256 / 16;
  }
  
@@ -678,7 +569,7 @@
  static inline void esdhc_pltfm_set_clock(struct sdhci_host *host,
  					 unsigned int clock)
  {
-@@ -934,6 +1199,9 @@
+@@ -934,6 +1146,9 @@
  	int div = 1;
  	int ret;
  	u32 temp, val;
@@ -688,7 +579,7 @@
  
  	if (esdhc_is_usdhc(imx_data)) {
  		val = readl(host->ioaddr + ESDHC_VENDOR_SPEC);
-@@ -957,13 +1225,34 @@
+@@ -957,13 +1172,34 @@
  		writel(val | BIT(10), host->ioaddr + ESDHC_DLL_CTRL);
  		temp = readl(host->ioaddr + ESDHC_DLL_CTRL);
  		writel(val, host->ioaddr + ESDHC_DLL_CTRL);
@@ -725,7 +616,7 @@
  	sdhci_writel(host, temp, ESDHC_SYSTEM_CONTROL);
  
  	if ((imx_data->socdata->flags & ESDHC_FLAG_ERR010450) &&
-@@ -986,6 +1275,11 @@
+@@ -986,6 +1222,11 @@
  	dev_dbg(mmc_dev(host->mmc), "desired SD clock: %d, actual: %d\n",
  		clock, host->mmc->actual_clock);
  
@@ -737,7 +628,7 @@
  	pre_div >>= 1;
  	div--;
  
-@@ -993,13 +1287,30 @@
+@@ -993,13 +1234,30 @@
  	temp |= (ESDHC_CLOCK_IPGEN | ESDHC_CLOCK_HCKEN | ESDHC_CLOCK_PEREN
  		| (div << ESDHC_DIVIDER_SHIFT)
  		| (pre_div << ESDHC_PREDIV_SHIFT));
@@ -768,7 +659,7 @@
  
  	if (esdhc_is_usdhc(imx_data)) {
  		val = readl(host->ioaddr + ESDHC_VENDOR_SPEC);
-@@ -1007,6 +1318,19 @@
+@@ -1007,6 +1265,19 @@
  			host->ioaddr + ESDHC_VENDOR_SPEC);
  	}
  
@@ -788,7 +679,7 @@
  }
  
  static unsigned int esdhc_pltfm_get_ro(struct sdhci_host *host)
-@@ -1375,6 +1699,20 @@
+@@ -1375,6 +1646,20 @@
  {
  	int cmd_error = 0;
  	int data_error = 0;
@@ -809,7 +700,15 @@
  
  	if (!sdhci_cqe_irq(host, intmask, &cmd_error, &data_error))
  		return intmask;
-@@ -1666,8 +2004,21 @@
+@@ -1579,7 +1864,6 @@
+ 		dev_err(mmc_dev(host->mmc),
+ 			"failed to exit halt state when enable CQE\n");
+ 
+-
+ 	sdhci_cqe_enable(mmc);
+ }
+ 
+@@ -1666,8 +1950,21 @@
  	pltfm_host = sdhci_priv(host);
  
  	imx_data = sdhci_pltfm_priv(pltfm_host);
@@ -831,7 +730,7 @@
  
  	host->quirks |= imx_data->socdata->quirks;
  	if (imx_data->socdata->flags & ESDHC_FLAG_PMQOS)
-@@ -1776,6 +2127,11 @@
+@@ -1776,6 +2073,11 @@
  
  	sdhci_esdhc_imx_hwinit(host);
  
@@ -843,7 +742,7 @@
  	err = sdhci_add_host(host);
  	if (err)
  		goto disable_ahb_clk;
-@@ -1793,6 +2149,21 @@
+@@ -1793,6 +2095,21 @@
  	pm_runtime_use_autosuspend(&pdev->dev);
  	pm_suspend_ignore_children(&pdev->dev, 1);
  	pm_runtime_enable(&pdev->dev);
@@ -865,7 +764,7 @@
  
  	return 0;
  
-@@ -1816,6 +2187,10 @@
+@@ -1816,6 +2133,10 @@
  	struct pltfm_imx_data *imx_data = sdhci_pltfm_priv(pltfm_host);
  	int dead;
  
@@ -887,7 +786,15 @@
  
  #include "debug.h"
  #include "hif-ops.h"
-@@ -348,7 +348,7 @@
+@@ -49,7 +49,6 @@
+ MODULE_PARM_DESC(recovery_enable, "Enable recovery from firmware error");
+ MODULE_PARM_DESC(heart_beat_poll,
+ 		 "Enable fw error detection periodic polling in msecs - Also set recovery_enable for this to be effective");
+-
+ 
+ void ath6kl_core_tx_complete(struct ath6kl *ar, struct sk_buff *skb)
+ {
+@@ -348,7 +347,7 @@
  
  	kfree(ar->fw_board);
  	kfree(ar->fw_otp);
@@ -906,12 +813,18 @@
  #include <linux/mmc/sdio_func.h>
  #include <linux/vmalloc.h>
  
-@@ -447,6 +448,37 @@
+@@ -213,7 +214,6 @@
+  * it sends a new connect event
+  */
+ #define WLAN_CONFIG_DISCONNECT_TIMEOUT 10
+-
  
- out:
+ #define ATH6KL_DATA_OFFSET    64
+ struct sk_buff *ath6kl_buf_alloc(int size)
+@@ -449,6 +449,37 @@
  	return status;
-+}
-+
+ }
+ 
 +static int ath6kl_config_antenna_diversity(struct ath6kl *ar)
 +{
 +	const char *property = "atheros,antenna-diversity-parameters";
@@ -941,10 +854,20 @@
 +			   "antenna diversity queued idle=%u rssi=%u enable=%u rate=%u\n",
 +			   params[0], params[1], params[2], params[3]);
 +	return ret;
- }
- 
++}
++
  static int ath6kl_target_config_wlan_params(struct ath6kl *ar, int idx)
-@@ -1768,6 +1800,8 @@
+ {
+ 	int ret;
+@@ -1619,7 +1650,6 @@
+ 
+ 	return NULL;
+ }
+-
+ 
+ static const struct fw_capa_str_map {
+ 	int id;
+@@ -1768,6 +1798,8 @@
  	}
  
  	/* Wait for Wmi event to be ready */
@@ -953,7 +876,7 @@
  	timeleft = wait_event_interruptible_timeout(ar->event_wq,
  						    test_bit(WMI_READY,
  							     &ar->flag),
-@@ -1807,6 +1841,13 @@
+@@ -1807,6 +1839,13 @@
  	if ((ath6kl_set_host_app_area(ar)) != 0)
  		ath6kl_err("unable to set the host app area\n");
  
@@ -967,7 +890,7 @@
  	for (i = 0; i < ar->vif_max; i++) {
  		ret = ath6kl_target_config_wlan_params(ar, i);
  		if (ret)
-@@ -1846,6 +1887,20 @@
+@@ -1846,6 +1885,20 @@
  
  	ath6kl_hif_stop(ar);
  
@@ -988,7 +911,7 @@
  	ath6kl_bmi_reset(ar);
  
  	ret = ath6kl_hif_power_off(ar);
-@@ -1904,6 +1959,10 @@
+@@ -1904,6 +1957,10 @@
  		spin_unlock_bh(&ar->list_lock);
  		ath6kl_cfg80211_vif_stop(vif, test_bit(WMI_READY, &ar->flag));
  		rtnl_lock();

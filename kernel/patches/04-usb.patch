@@ -203,7 +203,15 @@
  
  static int usbmisc_imx53_init(struct imx_usbmisc_data *data)
  {
-@@ -1025,6 +1077,10 @@
+@@ -541,7 +593,6 @@
+ 	return 0;
+ }
+ 
+-
+ static int usbmisc_imx6sx_init(struct imx_usbmisc_data *data)
+ {
+ 	void __iomem *reg = NULL;
+@@ -1025,6 +1076,10 @@
  	.init = usbmisc_imx27_init,
  };
  
@@ -214,7 +222,7 @@
  static const struct usbmisc_ops imx51_usbmisc_ops = {
  	.init = usbmisc_imx53_init,
  };
-@@ -1252,6 +1308,10 @@
+@@ -1252,6 +1307,10 @@
  	{
  		.compatible = "fsl,imx27-usbmisc",
  		.data = &imx27_usbmisc_ops,
@@ -225,7 +233,7 @@
  	},
  	{
  		.compatible = "fsl,imx51-usbmisc",
-@@ -1305,6 +1365,8 @@
+@@ -1305,6 +1364,8 @@
  
  	data->ops = of_device_get_match_data(&pdev->dev);
  	platform_set_drvdata(pdev, data);
@@ -264,7 +272,15 @@
  obj-$(CONFIG_AM335X_PHY_USB)		+= phy-am335x.o
 --- a/drivers/usb/phy/phy-generic.c
 +++ b/drivers/usb/phy/phy-generic.c
-@@ -138,14 +138,20 @@
+@@ -97,7 +97,6 @@
+ 	nop->mA = mA;
+ }
+ 
+-
+ static irqreturn_t nop_gpio_vbus_thread(int irq, void *data)
+ {
+ 	struct usb_phy_generic *nop = data;
+@@ -138,14 +137,20 @@
  	int ret;
  
  	if (!IS_ERR(nop->vcc)) {

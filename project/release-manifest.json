@@ -1,30 +1,24 @@
 {
   "scope": "Kindle 4 NT D01100 only",
-  "status": "local draft; stage4 and stage5 cold gates pending",
-  "source_commit": "187f9a9173cc1f890d737f568876f592749677fe",
+  "status": "local draft; trace cleanup strict code-generation exception under review; cold gates pending",
+  "source_commit": "870945c3560e1375cdbb95cfe5a8a5b8cd5d502c",
   "upstream": "79643295eba17affbd16ca97f3ef04c90266b28c",
   "compiler": "arm-linux-gnueabihf-gcc 13.3.0",
   "binutils": "2.42",
   "patches": {
-    "kernel/debug-patches/01-k4-diagnostics.patch": "043045d2866fdeadf82d0a6fdc048a3b15a600bf93647a398762772643b9fc61",
-    "kernel/patches/01-platform.patch": "0e910d3a56b05cb2051fbaca20e3df909c74ddc15b8a0d73c8888696e4ea8949",
+    "kernel/debug-patches/01-k4-diagnostics.patch": "813c5c545c2eea8cbb12d31eca9b025adcee15f50a3fdff6fd6135848e580915",
+    "kernel/debug-patches/02-k4-trace-hooks.patch": "86351b9fab3ac4b276661533c234073991567f60429db3fd94face9041a3765e",
+    "kernel/patches/01-platform.patch": "8341d518c1a76a141c158d5c43c8384bd2225398a6218d20ba1c8d35ac35d0e4",
     "kernel/patches/02-clocks.patch": "376fa8178816f7af80da17abb9fae8fd980f6d8581212fa922a1d827329fc420",
-    "kernel/patches/03-power.patch": "642704622964111ef18143cc65a9c03100d9a77d229eb329061db4e8ac88e212",
-    "kernel/patches/04-usb.patch": "e022d526a5e5e74e2a4d008f67c738e21198d28f0b56072eb4a0a7fdd70f187a",
-    "kernel/patches/05-wifi-mmc.patch": "b95824b80b218531852dad9f93dee6101a5ba40d2aad10c2e347e7239bc88782",
-    "kernel/patches/06-display-input.patch": "b3918d3cade16b6300bc4e7118f589869b82db0de179063efe0740752b1ff22b",
+    "kernel/patches/03-power.patch": "d69fe78d623c719c1f6288529ce18653bfaa161e3f5eeec77444aee228867b6e",
+    "kernel/patches/04-usb.patch": "191cd1a2a7fa4f00457bfc38dbae8bf92815b38a3350432a0085d1f0576d331f",
+    "kernel/patches/05-wifi-mmc.patch": "515c618a5346edcfa1d5595bca5928d91af90ad403ec90de2526b6045ef04c45",
+    "kernel/patches/06-display-input.patch": "05fdc569ba1bc46a3862322f4051e7418f753238be2c5da7d9e4b2b951dfcffb",
     "kernel/patches/07-device-tree.patch": "2c3730b24b21ece9429a5add12ebe9e27aa09710f9ceabadd37cbea6cf481749",
     "kernel/patches/08-ccm-interrupts.patch": "40a5abd4b0a4c98362ed7f8ea8b1badfa7c1b4f8568cee7c90f26d306aa3f40d"
   },
   "private_inputs_included": false,
   "device_operations_performed": false,
-  "offline_clean_build": {
-    "production_zimage_sha256": "e554228c647a22b9e7b79afb1d6fbe2f827e735e32938ced23e9e4381e052e3d",
-    "formal_dtb_sha256": "c8bd73fea78e70d2e807385b3208c4c2cd19c1305835a3863254e73cd523e88a",
-    "modules": 234,
-    "two_unseeded_builds_exact": true,
-    "device_acceptance": "stage4 then stage5 pending; not cold accepted release"
-  },
   "ccm_interrupt_fix": {
     "source_commit": "a339290ae2b8fc4c769facb543ce3134f3ce839d",
     "old_dtb_sha256": "c8bd73fea78e70d2e807385b3208c4c2cd19c1305835a3863254e73cd523e88a",
@@ -32,5 +26,25 @@
     "zimage_unchanged": true,
     "full_k4_schema_errors": 0,
     "cold_acceptance": "pending stage4 -> stage5 -> separate CCM RAM cold session"
+  },
+  "historical_before_trace_cleanup_build": {
+    "production_zimage_sha256": "e554228c647a22b9e7b79afb1d6fbe2f827e735e32938ced23e9e4381e052e3d",
+    "formal_dtb_sha256": "c8bd73fea78e70d2e807385b3208c4c2cd19c1305835a3863254e73cd523e88a",
+    "modules": 234,
+    "two_unseeded_builds_exact": true,
+    "device_acceptance": "stage4 then stage5 pending; not cold accepted release"
+  },
+  "trace_cleanup": {
+    "production_zimage_sha256": "a53dd1c08d2f156a50b7c1b91f281958b7316261f0ef2772cd1a758c81a8f612",
+    "formal_dtb_sha256": "e0aa481e1c857441a62578b5c5570bd95fca08d23254f53949c7554377b67486",
+    "config_changed": false,
+    "modules": 234,
+    "preprocessing_units_equal": 23,
+    "fixed_line_object_disassembly_equal": 22,
+    "object_disassembly_exception": "PxP equality comparison register assignment exchange",
+    "only_line_number_gate": false,
+    "two_unseeded_builds_for_cleaned_sources": "not run; defconfig work scheduled separately",
+    "public_patch_roundtrip": true,
+    "debug_source_roundtrip": true
   }
 }

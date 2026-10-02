@@ -1,327 +1,3 @@
---- a/arch/arm/boot/compressed/head.S
-+++ b/arch/arm/boot/compressed/head.S
-@@ -174,6 +174,42 @@
- #endif
- 		.endm
- 
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+		.macro	k4_trace, stage
-+		.endm
-+
-+
- 		.section ".start", "ax"
- /*
-  * sort out different calling conventions
-@@ -228,6 +264,27 @@
- #endif
- 		mov	r7, r1			@ save architecture ID
- 		mov	r8, r2			@ save atags pointer
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
- 
- #ifndef CONFIG_CPU_V7M
- 		/*
-@@ -302,6 +359,7 @@
- 		 */
- 		ldr	sp, [r1]	@ get stack location
- 		add	sp, sp, r1	@ apply relocation
-+		k4_trace 1
- 
- 		/* Validate calculated start against passed DTB */
- 		mov	r1, r8
-@@ -333,6 +391,7 @@
- 		ldr	r6, [r0, #4]
- 		add	sp, sp, r0
- 		add	r6, r6, r0
-+		k4_trace 2
- 
- 		get_inflated_image_size	r9, r10, lr
- 
-@@ -627,11 +686,13 @@
-  *   r7  = architecture ID
-  *   r8  = atags pointer
-  */
-+		k4_trace 3
- 		mov	r0, r4
- 		mov	r1, sp			@ malloc space above stack
- 		add	r2, sp, #MALLOC_SIZE	@ 64k max
- 		mov	r3, r7
- 		bl	decompress_kernel
-+		k4_trace 4
- 
- 		get_inflated_image_size	r1, r2, r3
- 
-@@ -639,6 +700,7 @@
- 		add	r1, r1, r0		@ end of inflated image
- 		bl	cache_clean_flush
- 		bl	cache_off
-+		k4_trace 5
- 
- #ifdef CONFIG_ARM_VIRT_EXT
- 		mrs	r0, spsr		@ Get saved CPU boot mode
---- a/arch/arm/kernel/head-common.S
-+++ b/arch/arm/kernel/head-common.S
-@@ -74,11 +74,36 @@
-  *  r9  = processor ID
-  */
- 	__INIT
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+	.macro	k4_trace_mmu, stage, letter
-+	.endm
-+
-+
- __mmap_switched:
- 
- 	mov	r7, r1
- 	mov	r8, r2
- 	mov	r10, r0
-+	k4_trace_mmu 12, 0x43		@ MMU on, before BSS clear
- 
- 	adr	r4, __mmap_switched_data
- 	mov	fp, #0
-@@ -114,6 +139,7 @@
- 	str	r8, [r2]			@ Save atags pointer
- 	cmp	r3, #0
- 	strne	r10, [r3]			@ Save control register values
-+	k4_trace_mmu 13, 0x44		@ BSS and initial task ready
- #ifdef CONFIG_KASAN
- 	bl	kasan_early_init
- #endif
---- a/arch/arm/kernel/head.S
-+++ b/arch/arm/kernel/head.S
-@@ -69,6 +69,31 @@
- 	sub	\rd, \rd, #PG_DIR_SIZE
- 	.endm
- 
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+	.macro	k4_head_trace, stage, letter
-+	.endm
-+
-+
- /*
-  * Kernel startup entry point.
-  * ---------------------------
-@@ -104,11 +129,14 @@
- 	@ ensure svc mode and all interrupts masked
- 	safe_svcmode_maskall r9
- 
-+	k4_head_trace 6, 0x36		@ stext entry
-+
- 	mrc	p15, 0, r9, c0, c0		@ get processor id
- 	bl	__lookup_processor_type		@ r5=procinfo r9=cpuid
- 	movs	r10, r5				@ invalid processor (r5=0)?
-  THUMB( it	eq )		@ force fixup-able long branch encoding
- 	beq	__error_p			@ yes, error 'p'
-+	k4_head_trace 7, 0x37		@ supported CPU identified
- 
- #ifdef CONFIG_ARM_LPAE
- 	mrc	p15, 0, r3, c0, c1, 4		@ read ID_MMFR0
-@@ -130,13 +158,16 @@
- 	 * r8 = phys_offset, r9 = cpuid, r10 = procinfo
- 	 */
- 	bl	__vet_atags
-+	k4_head_trace 8, 0x38		@ boot parameters vetted
- #ifdef CONFIG_SMP_ON_UP
- 	bl	__fixup_smp
- #endif
- #ifdef CONFIG_ARM_PATCH_PHYS_VIRT
- 	bl	__fixup_pv_table
- #endif
-+	k4_head_trace 9, 0x39		@ physical/virtual patching done
- 	bl	__create_page_tables
-+	k4_head_trace 10, 0x41		@ initial page tables ready
- 
- 	/*
- 	 * The following calls CPU specific code in a position independent
-@@ -169,7 +200,8 @@
- 	ldr	r12, [r10, #PROCINFO_INITFUNC]
- 	add	r12, r12, r10
- 	ret	r12
--1:	b	__enable_mmu
-+1:	k4_head_trace 11, 0x42		@ CPU-specific init returned
-+	b	__enable_mmu
- ENDPROC(stext)
- 	.ltorg
- 
-@@ -307,6 +339,20 @@
- 	strne	r6, [r3], #1 << PMD_ENTRY_ORDER
- 	addne	r6, r6, #1 << SECTION_SHIFT
- 	strne	r6, [r3]
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
- 
- #if defined(CONFIG_ARM_LPAE) && defined(CONFIG_CPU_ENDIAN_BE8)
- 	sub	r4, r4, #4			@ Fixup page table pointer
---- a/arch/arm/kernel/setup.c
-+++ b/arch/arm/kernel/setup.c
-@@ -61,6 +61,9 @@
- #include <asm/virt.h>
- #include <asm/kasan.h>
- 
-+
-+
-+
- #include "atags.h"
- 
- 
-@@ -1104,12 +1107,36 @@
- 	const struct machine_desc *mdesc = NULL;
- 	void *atags_vaddr = NULL;
- 
-+
-+
-+
-+
-+
-+
-+
-+
-+
- 	if (__atags_pointer)
- 		atags_vaddr = FDT_VIRT_BASE(__atags_pointer);
- 
- 	setup_processor();
-+
-+
-+
- 	if (atags_vaddr) {
-+
-+
-+
-+
-+
-+
-+
- 		mdesc = setup_machine_fdt(atags_vaddr);
-+
-+
-+
-+
-+
- 		if (mdesc)
- 			memblock_reserve(__atags_pointer,
- 					 fdt_totalsize(atags_vaddr));
-@@ -1127,6 +1154,9 @@
- 
- 	machine_desc = mdesc;
- 	machine_name = mdesc->name;
-+
-+
-+
- 	dump_stack_set_arch_desc("%s", mdesc->name);
- 
- 	if (mdesc->reboot_mode != REBOOT_HARD)
-@@ -1159,6 +1189,9 @@
- 	adjust_lowmem_bounds();
- 
- 	early_ioremap_reset();
-+
-+
-+
- 
- 	paging_init(mdesc);
- 	kasan_init();
 --- a/arch/arm/mach-imx/Kconfig
 +++ b/arch/arm/mach-imx/Kconfig
 @@ -104,6 +104,60 @@
@@ -400,7 +76,12 @@
  
 --- a/arch/arm/mach-imx/common.h
 +++ b/arch/arm/mach-imx/common.h
-@@ -8,6 +8,7 @@
+@@ -3,11 +3,11 @@
+  * Copyright 2004-2014 Freescale Semiconductor, Inc. All Rights Reserved.
+  */
+ 
+-
+ #ifndef __ASM_ARCH_MXC_COMMON_H__
  #define __ASM_ARCH_MXC_COMMON_H__
  
  #include <linux/reboot.h>
@@ -408,7 +89,7 @@
  
  struct irq_data;
  struct platform_device;
-@@ -136,4 +137,15 @@
+@@ -136,4 +136,15 @@
  extern const struct smp_operations imx7_smp_ops;
  extern const struct smp_operations ls1021a_smp_ops;
  
@@ -426,12 +107,11 @@
 +#endif
 --- /dev/null
 +++ b/arch/arm/mach-imx/k4-mc13892-standby.c
-@@ -0,0 +1,230 @@
+@@ -0,0 +1,227 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/* K4 first VSTBY stage: retain LDO/GPO outputs, use explicit buck standby banks. */
 +#include <linux/device.h>
 +#include <linux/err.h>
-+#include <linux/k4_ram_trace.h>
 +#include <linux/mfd/mc13xxx.h>
 +#include <linux/of.h>
 +#include <linux/slab.h>
@@ -569,7 +249,6 @@
 +	}
 +	s->armed = true;
 +	s->prepares++;
-+	k4_ram_trace_mark("K4_PMIC_STBY_ARMED");
 +out:
 +	s->error = ret;
 +	mc13xxx_unlock(s->pmic);
@@ -587,7 +266,6 @@
 +	mc13xxx_unlock(s->pmic);
 +	if (!ret) {
 +		s->restores++;
-+		k4_ram_trace_mark("K4_PMIC_STBY_RESTORED");
 +	}
 +	return ret;
 +}
@@ -1362,13 +1040,12 @@
 +	.word .Lcache_end - imx50_ocram_cache
 --- /dev/null
 +++ b/arch/arm/mach-imx/ocram-imx50-core.c
-@@ -0,0 +1,474 @@
+@@ -0,0 +1,469 @@
 +// SPDX-License-Identifier: GPL-2.0-or-later
 +/* Explicit OCRAM execution prerequisite for i.MX50 DDR suspend work. */
 +#include <linux/bitops.h>
 +#include <linux/genalloc.h>
 +#include <linux/io.h>
-+#include <linux/k4_ram_trace.h>
 +#include <linux/mm.h>
 +#include <linux/mutex.h>
 +#include <linux/of.h>
@@ -1616,12 +1293,10 @@
 +		/* The assembly cleans these dirty cache lines before DDR entry. */
 +		wmb();
 +	}
-+	k4_ram_trace_mark("IMX50_CACHE_CALL");
 +	local_irq_save(flags);
 +	local_fiq_disable();
 +	ret = p->cache_call(data, data + PAGE_SIZE - 16, p->databahn);
 +	local_irq_restore(flags);
-+	k4_ram_trace_mark("IMX50_CACHE_RETURN");
 +	memcpy_fromio(p->cache_result, data, sizeof(p->cache_result));
 +	if (!ret && !imx50_cache_result_valid(p->cache_result,
 +			p->code + IMX50_CACHE_CODE_OFFSET, p->data,
@@ -1831,15 +1506,13 @@
 +		.name = "imx50-ocram-probe",
 +		.of_match_table = imx50_ocram_match,
 +
-+
-+
 +		.suppress_bind_attrs = true,
 +	},
 +};
 +builtin_platform_driver(imx50_ocram_driver);
 --- /dev/null
 +++ b/arch/arm/mach-imx/ocram-imx50-internal.h
-@@ -0,0 +1,47 @@
+@@ -0,0 +1,45 @@
 +// SPDX-License-Identifier: GPL-2.0-or-later
 +#ifndef IMX50_OCRAM_INTERNAL_H
 +#define IMX50_OCRAM_INTERNAL_H
@@ -1883,8 +1556,6 @@
 +
 +extern const u32 imx50_ocram_call_size, imx50_ocram_cache_size;
 +int imx50_cache_command(struct imx50_ocram_probe *p, const char *buf);
-+
-+
 +
 +#endif
 --- /dev/null
@@ -1939,12 +1610,11 @@
 +	.word .Locram_end - imx50_ocram_call
 --- /dev/null
 +++ b/arch/arm/mach-imx/pm-imx50.c
-@@ -0,0 +1,558 @@
+@@ -0,0 +1,551 @@
 +// SPDX-License-Identifier: GPL-2.0-or-later
 +/* i.MX50 WAIT standby and optional STOP with the Databahn/OCRAM path. */
 +#include <linux/clk.h>
 +#include <linux/io.h>
-+#include <linux/k4_ram_trace.h>
 +#include <linux/of.h>
 +#include <linux/platform_device.h>
 +#include <linux/suspend.h>
@@ -2062,7 +1732,6 @@
 +	if (!(pm->srpg_after[0] & BIT(0)) || !(pm->srpg_after[1] & BIT(0)))
 +		return -EAGAIN;
 +	pm->power_cycles++;
-+	k4_ram_trace_mark("IMX50_SRPG_POWERED");
 +	return 0;
 +}
 +
@@ -2172,15 +1841,12 @@
 +	ret = tzic_suspend_wake();
 +	if (ret)
 +		goto restore;
-+	if (pm->last_srpg)
-+		k4_ram_trace_mark("IMX50_SRPG_ARMED");
 +	/* An armed SRAM test may itself wait while DDR is in self-refresh. */
 +	ret = imx50_ocram_cache_enter();
 +	if (ret < 0)
 +		goto restore;
 +	if (ret > 0) {
 +		pm->wfi_returns++;
-+		k4_ram_trace_mark(stop ? "IMX50_SRAM_STOP_RETURN" : "IMX50_SRAM_WAIT_RETURN");
 +		ret = pm->last_srpg ? imx50_srpg_result(pm) : 0;
 +		if (pm->last_osc) {
 +			int osc_ret = imx50_osc_result(pm);
@@ -2192,10 +1858,8 @@
 +		/* Never fall back to WFI from DDR while CCM is configured for STOP. */
 +		ret = -EIO;
 +	} else {
-+		k4_ram_trace_mark("IMX50_WAIT_WFI");
 +		cpu_do_idle();
 +		pm->wfi_returns++;
-+		k4_ram_trace_mark("IMX50_WAIT_RETURN");
 +	}
 +restore:
 +	/* Also clear holdoff on an aborted entry; otherwise IRQs can stay frozen. */
@@ -2542,101 +2206,3 @@
  
  	for (i = 0; i < 4; i++)
  		imx_writel(imx_readl(tzic_base + TZIC_ENSET0(i)),
---- a/init/main.c
-+++ b/init/main.c
-@@ -107,12 +107,35 @@
- #include <asm/sections.h>
- #include <asm/cacheflush.h>
- 
-+
-+
-+
- #define CREATE_TRACE_POINTS
- #include <trace/events/initcall.h>
- 
- #include <kunit/test.h>
- 
- static int kernel_init(void *);
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
- 
- /*
-  * Debug helper: via this flag we know that we are in 'early bootup code'
-@@ -850,6 +873,9 @@
- 	char *command_line;
- 	char *after_dashes;
- 
-+
-+
-+
- 	set_task_stack_end_magic(&init_task);
- 	smp_setup_processor_id();
- 	debug_objects_early_init();
-@@ -868,6 +894,9 @@
- 	page_address_init();
- 	pr_notice("%s", linux_banner);
- 	early_security_init();
-+
-+
-+
- 	setup_arch(&command_line);
- 	setup_boot_config();
- 	setup_command_line(command_line);
-@@ -904,6 +933,9 @@
- 	sort_main_extable();
- 	trap_init();
- 	mm_core_init();
-+
-+
-+
- 	poking_init();
- 	ftrace_init();
- 
-@@ -980,6 +1012,9 @@
- 	 * this. But we do want output early, in case something goes wrong.
- 	 */
- 	console_init();
-+
-+
-+
- 	if (panic_later)
- 		panic("Too many boot %s vars at `%s'", panic_later,
- 		      panic_param);
-@@ -1413,6 +1448,9 @@
- 	wait_for_completion(&kthreadd_done);
- 
- 	kernel_init_freeable();
-+
-+
-+
- 	/* need to finish all async __init code before freeing the memory */
- 	async_synchronize_full();
- 
-@@ -1524,6 +1562,9 @@
- 
- 	do_basic_setup();
- 
-+
-+
-+
- 	kunit_run_all_tests();
- 
- 	wait_for_initramfs();

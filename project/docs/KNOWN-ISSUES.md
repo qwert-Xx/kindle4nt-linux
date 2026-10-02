@@ -12,3 +12,5 @@
 
 - 阶段5 EPDC/PxP/Papyrus provider引用与module owner已离线验证，默认显示链仍内建；EPDC/PxP/fb候选模块无卸载入口（故障DMA/open fb生命周期），阶段5冷验须阶段4先通过。树外构建只证明同一内核ABI可链接，不证明热卸载或跨版本ABI。
 - 新诊断早期标记位于OCRAM f8007b00；静态布局与C单测通过，新位置尚待实机确认。不进入production。
+
+- 正式 trace 已清理，debug 必须先应用单独 overlay；源码预处理等价，PxP有一处等值比较寄存器分配交换，不能宣称机器码仅行号变化，见 DEBUG-CLEANUP.md。合并 defconfig 后的回归由主管安排。

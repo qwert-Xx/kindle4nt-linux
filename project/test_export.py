@@ -2,7 +2,7 @@
 import export,subprocess,unittest
 class ExportFold(unittest.TestCase):
  def equivalent(self,s):
-  t=export.fold_debug(s);self.assertEqual(len(s.splitlines()),len(t.splitlines()))
+  t=export.fold_debug(s);self.assertNotIn("\n\n",t)
   command=['cc','-E','-P','-x','c','-']
   a=subprocess.check_output(command,input=s.encode());b=subprocess.check_output(command,input=t.encode())
   self.assertEqual(a,b)

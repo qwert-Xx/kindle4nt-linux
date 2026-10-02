@@ -1,0 +1,3667 @@
+--- a/arch/arm/boot/compressed/head.S
++++ b/arch/arm/boot/compressed/head.S
+@@ -174,6 +174,42 @@
+ #endif
+ 		.endm
+ 
++#ifdef CONFIG_K4_BOOT_TRACE
++/*
++ * K4 RAM-only boot trace. The old Yoshi kernel prints this buffer after a
++ * watchdog reset. Keep each stage in a separate 96-byte record. The
++ * decompressor uses an identity map for the 256 MiB DDR window.
++ */
++		.macro	k4_trace, stage
++		stmdb	sp!, {r0-r3, r12, lr}
++		movw	r0, #0xe000
++		movt	r0, #0x7fff
++		add	r0, r0, #(\stage * 96)
++		movw	r1, #0x344b
++		movt	r1, #(0x305f + \stage * 0x100)
++		str	r1, [r0]
++		mov	r1, #10
++		strb	r1, [r0, #4]
++		mov	r1, #0
++		strb	r1, [r0, #5]
++		mcr	p15, 0, r0, c7, c10, 1
++		movw	r0, #0xffa0
++		movt	r0, #0x7fff
++		str	r1, [r0, #4]
++		mov	r1, #(\stage + 1)
++		str	r1, [r0, #8]
++		movw	r1, #0xeabe
++		movt	r1, #0xbead
++		str	r1, [r0]
++		mcr	p15, 0, r0, c7, c10, 1
++		mcr	p15, 0, r0, c7, c10, 4
++		ldmia	sp!, {r0-r3, r12, lr}
++		.endm
++#else
++		.macro	k4_trace, stage
++		.endm
++#endif
++
+ 		.section ".start", "ax"
+ /*
+  * sort out different calling conventions
+@@ -228,6 +264,27 @@
+ #endif
+ 		mov	r7, r1			@ save architecture ID
+ 		mov	r8, r2			@ save atags pointer
++#ifdef CONFIG_K4_BOOT_TRACE
++		/* Earliest K4 mark: no stack yet, preserve r0-r2 and r7-r9. */
++		movw	r3, #0xe000
++		movt	r3, #0x7fff
++		movw	r4, #0x344b
++		movt	r4, #0x305f		@ "K4_0"
++		str	r4, [r3]
++		mov	r4, #10
++		strb	r4, [r3, #4]
++		mov	r4, #0
++		strb	r4, [r3, #5]
++		movw	r3, #0xffa0
++		movt	r3, #0x7fff
++		str	r4, [r3, #4]		@ start = 0
++		mov	r4, #1
++		str	r4, [r3, #8]		@ end = 1
++		movw	r4, #0xeabe
++		movt	r4, #0xbead
++		str	r4, [r3]
++		mcr	p15, 0, r3, c7, c10, 4
++#endif
+ 
+ #ifndef CONFIG_CPU_V7M
+ 		/*
+@@ -302,6 +359,7 @@
+ 		 */
+ 		ldr	sp, [r1]	@ get stack location
+ 		add	sp, sp, r1	@ apply relocation
++		k4_trace 1
+ 
+ 		/* Validate calculated start against passed DTB */
+ 		mov	r1, r8
+@@ -333,6 +391,7 @@
+ 		ldr	r6, [r0, #4]
+ 		add	sp, sp, r0
+ 		add	r6, r6, r0
++		k4_trace 2
+ 
+ 		get_inflated_image_size	r9, r10, lr
+ 
+@@ -627,11 +686,13 @@
+  *   r7  = architecture ID
+  *   r8  = atags pointer
+  */
++		k4_trace 3
+ 		mov	r0, r4
+ 		mov	r1, sp			@ malloc space above stack
+ 		add	r2, sp, #MALLOC_SIZE	@ 64k max
+ 		mov	r3, r7
+ 		bl	decompress_kernel
++		k4_trace 4
+ 
+ 		get_inflated_image_size	r1, r2, r3
+ 
+@@ -639,6 +700,7 @@
+ 		add	r1, r1, r0		@ end of inflated image
+ 		bl	cache_clean_flush
+ 		bl	cache_off
++		k4_trace 5
+ 
+ #ifdef CONFIG_ARM_VIRT_EXT
+ 		mrs	r0, spsr		@ Get saved CPU boot mode
+--- /dev/null
++++ b/arch/arm/include/asm/k4-boot-trace.h
+@@ -0,0 +1,28 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef __ASM_ARM_K4_BOOT_TRACE_H
++#define __ASM_ARM_K4_BOOT_TRACE_H
++
++#include <linux/io.h>
++
++/*
++ * Valid only until paging_init() replaces the temporary 0xcff00000 mapping
++ * installed by __create_page_tables. The mapped memory is uncached.
++ */
++static inline void k4_trace_early(unsigned int index, const char *tag)
++{
++	u8 __iomem *log = (u8 __iomem *)0xcfffe000;
++	u8 __iomem *line = log + index * 96;
++	u8 __iomem *meta = log + 8192 - 96;
++	unsigned int i;
++
++	for (i = 0; tag[i]; i++)
++		writeb(tag[i], line + i);
++	writeb(0, line + i);
++	writel(0, meta + 4);
++	writel(index + 1, meta + 8);
++	wmb();
++	writel(0xbeadeabe, meta);
++	mb();
++}
++
++#endif
+--- a/arch/arm/kernel/head-common.S
++++ b/arch/arm/kernel/head-common.S
+@@ -74,11 +74,36 @@
+  *  r9  = processor ID
+  */
+ 	__INIT
++
++#ifdef CONFIG_K4_BOOT_TRACE
++	/* Temporary uncached 0xcfffe000 mapping created in __create_page_tables. */
++	.macro	k4_trace_mmu, stage, letter
++	ldr	r3, =(0xcfffe000 + \stage * 96)
++	ldr	r11, =(0x005f344b + \letter * 0x1000000)
++	str	r11, [r3]
++	mov	r11, #10
++	strb	r11, [r3, #4]
++	mov	r11, #0
++	strb	r11, [r3, #5]
++	ldr	r3, =0xcfffffa0
++	str	r11, [r3, #4]
++	mov	r11, #(\stage + 1)
++	str	r11, [r3, #8]
++	ldr	r11, =0xbeadeabe
++	str	r11, [r3]
++	mcr	p15, 0, r3, c7, c10, 4
++	.endm
++#else
++	.macro	k4_trace_mmu, stage, letter
++	.endm
++#endif
++
+ __mmap_switched:
+ 
+ 	mov	r7, r1
+ 	mov	r8, r2
+ 	mov	r10, r0
++	k4_trace_mmu 12, 0x43		@ MMU on, before BSS clear
+ 
+ 	adr	r4, __mmap_switched_data
+ 	mov	fp, #0
+@@ -114,6 +139,7 @@
+ 	str	r8, [r2]			@ Save atags pointer
+ 	cmp	r3, #0
+ 	strne	r10, [r3]			@ Save control register values
++	k4_trace_mmu 13, 0x44		@ BSS and initial task ready
+ #ifdef CONFIG_KASAN
+ 	bl	kasan_early_init
+ #endif
+--- a/arch/arm/kernel/head.S
++++ b/arch/arm/kernel/head.S
+@@ -69,6 +69,31 @@
+ 	sub	\rd, \rd, #PG_DIR_SIZE
+ 	.endm
+ 
++#ifdef CONFIG_K4_BOOT_TRACE
++	/* Physical RAM log; MMU is still off. Preserve boot arguments and CPU state. */
++	.macro	k4_head_trace, stage, letter
++	ldr	r3, =(0x7fffe000 + \stage * 96)
++	ldr	r11, =(0x005f344b + \letter * 0x1000000)
++	str	r11, [r3]
++	mov	r11, #10
++	strb	r11, [r3, #4]
++	mov	r11, #0
++	strb	r11, [r3, #5]
++	mcr	p15, 0, r3, c7, c10, 1
++	ldr	r3, =0x7fffffa0
++	str	r11, [r3, #4]
++	mov	r11, #(\stage + 1)
++	str	r11, [r3, #8]
++	ldr	r11, =0xbeadeabe
++	str	r11, [r3]
++	mcr	p15, 0, r3, c7, c10, 1
++	mcr	p15, 0, r3, c7, c10, 4
++	.endm
++#else
++	.macro	k4_head_trace, stage, letter
++	.endm
++#endif
++
+ /*
+  * Kernel startup entry point.
+  * ---------------------------
+@@ -104,11 +129,14 @@
+ 	@ ensure svc mode and all interrupts masked
+ 	safe_svcmode_maskall r9
+ 
++	k4_head_trace 6, 0x36		@ stext entry
++
+ 	mrc	p15, 0, r9, c0, c0		@ get processor id
+ 	bl	__lookup_processor_type		@ r5=procinfo r9=cpuid
+ 	movs	r10, r5				@ invalid processor (r5=0)?
+  THUMB( it	eq )		@ force fixup-able long branch encoding
+ 	beq	__error_p			@ yes, error 'p'
++	k4_head_trace 7, 0x37		@ supported CPU identified
+ 
+ #ifdef CONFIG_ARM_LPAE
+ 	mrc	p15, 0, r3, c0, c1, 4		@ read ID_MMFR0
+@@ -130,13 +158,16 @@
+ 	 * r8 = phys_offset, r9 = cpuid, r10 = procinfo
+ 	 */
+ 	bl	__vet_atags
++	k4_head_trace 8, 0x38		@ boot parameters vetted
+ #ifdef CONFIG_SMP_ON_UP
+ 	bl	__fixup_smp
+ #endif
+ #ifdef CONFIG_ARM_PATCH_PHYS_VIRT
+ 	bl	__fixup_pv_table
+ #endif
++	k4_head_trace 9, 0x39		@ physical/virtual patching done
+ 	bl	__create_page_tables
++	k4_head_trace 10, 0x41		@ initial page tables ready
+ 
+ 	/*
+ 	 * The following calls CPU specific code in a position independent
+@@ -169,7 +200,8 @@
+ 	ldr	r12, [r10, #PROCINFO_INITFUNC]
+ 	add	r12, r12, r10
+ 	ret	r12
+-1:	b	__enable_mmu
++1:	k4_head_trace 11, 0x42		@ CPU-specific init returned
++	b	__enable_mmu
+ ENDPROC(stext)
+ 	.ltorg
+ 
+@@ -307,6 +339,20 @@
+ 	strne	r6, [r3], #1 << PMD_ENTRY_ORDER
+ 	addne	r6, r6, #1 << SECTION_SHIFT
+ 	strne	r6, [r3]
++
++#ifdef CONFIG_K4_BOOT_TRACE
++	/*
++	 * Temporary uncached mapping for the top MiB of K4 RAM. The 8 KiB
++	 * watchdog log lives at 0x7fffe000; __mmap_switched can then write
++	 * it at 0xcfffe000 immediately after enabling the MMU.
++	 */
++	ldr	r0, =0x7ff00000
++	ldr	r3, [r10, #PROCINFO_IO_MMUFLAGS]
++	orr	r3, r3, r0
++	orr	r3, r3, #PMD_SECT_XN
++	ldr	r0, =(0xcff00000 >> (SECTION_SHIFT - PMD_ENTRY_ORDER))
++	str	r3, [r4, r0]
++#endif
+ 
+ #if defined(CONFIG_ARM_LPAE) && defined(CONFIG_CPU_ENDIAN_BE8)
+ 	sub	r4, r4, #4			@ Fixup page table pointer
+--- a/arch/arm/kernel/setup.c
++++ b/arch/arm/kernel/setup.c
+@@ -60,6 +60,9 @@
+ #include <asm/memblock.h>
+ #include <asm/virt.h>
+ #include <asm/kasan.h>
++#ifdef CONFIG_K4_BOOT_TRACE
++#include <asm/k4-boot-trace.h>
++#endif
+ 
+ #include "atags.h"
+ 
+@@ -1103,13 +1106,37 @@
+ {
+ 	const struct machine_desc *mdesc = NULL;
+ 	void *atags_vaddr = NULL;
+-
++#ifdef CONFIG_K4_BOOT_TRACE
++	char trace_line[96];
++	int dt_header_status;
++#endif
++
++#ifdef CONFIG_K4_BOOT_TRACE
++	scnprintf(trace_line, sizeof(trace_line), "K4_G r2=%08x\n",
++		  __atags_pointer);
++	k4_trace_early(16, trace_line);
++#endif
+ 	if (__atags_pointer)
+ 		atags_vaddr = FDT_VIRT_BASE(__atags_pointer);
+ 
+ 	setup_processor();
++#ifdef CONFIG_K4_BOOT_TRACE
++	k4_trace_early(17, "K4_H\n");
++#endif
+ 	if (atags_vaddr) {
++#ifdef CONFIG_K4_BOOT_TRACE
++		k4_trace_early(18, "K4_I dtb-pointer-present\n");
++		dt_header_status = fdt_check_header(atags_vaddr);
++		scnprintf(trace_line, sizeof(trace_line),
++			  "K4_J fdt_check_header=%d\n", dt_header_status);
++		k4_trace_early(19, trace_line);
++#endif
+ 		mdesc = setup_machine_fdt(atags_vaddr);
++#ifdef CONFIG_K4_BOOT_TRACE
++		scnprintf(trace_line, sizeof(trace_line),
++			  "K4_K machine=%u\n", !!mdesc);
++		k4_trace_early(20, trace_line);
++#endif
+ 		if (mdesc)
+ 			memblock_reserve(__atags_pointer,
+ 					 fdt_totalsize(atags_vaddr));
+@@ -1127,6 +1154,9 @@
+ 
+ 	machine_desc = mdesc;
+ 	machine_name = mdesc->name;
++#ifdef CONFIG_K4_BOOT_TRACE
++	k4_trace_early(21, "K4_L\n");
++#endif
+ 	dump_stack_set_arch_desc("%s", mdesc->name);
+ 
+ 	if (mdesc->reboot_mode != REBOOT_HARD)
+@@ -1160,6 +1190,9 @@
+ 
+ 	early_ioremap_reset();
+ 
++#ifdef CONFIG_K4_BOOT_TRACE
++	k4_trace_early(22, "K4_M\n");
++#endif
+ 	paging_init(mdesc);
+ 	kasan_init();
+ 	request_standard_resources(mdesc);
+--- a/arch/arm/mach-imx/common.h
++++ b/arch/arm/mach-imx/common.h
+@@ -2,6 +2,7 @@
+ /*
+  * Copyright 2004-2014 Freescale Semiconductor, Inc. All Rights Reserved.
+  */
++
+ 
+ #ifndef __ASM_ARCH_MXC_COMMON_H__
+ #define __ASM_ARCH_MXC_COMMON_H__
+--- /dev/null
++++ b/arch/arm/mach-imx/debug/ocram-imx50-probe.c
+@@ -0,0 +1,155 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++/* Optional explicit OCRAM diagnostics; never needed by STOP. */
++#include <linux/io.h>
++#include <linux/k4_ram_trace.h>
++#include <linux/platform_device.h>
++#include <linux/sram.h>
++#include <linux/sizes.h>
++#include <asm/irqflags.h>
++#include "../ocram-imx50-internal.h"
++extern int imx50_ocram_call(void __iomem *data, void __iomem *stack, u32 seed);
++static int imx50_ocram_run(struct imx50_ocram_probe *p)
++{
++	static const u32 seeds[] = { 0, U32_MAX, 0x55555555, 0x12345678 };
++	void __iomem *data = (void __iomem *)p->data;
++	void __iomem *stack = data + PAGE_SIZE - 16;
++	unsigned long flags;
++	u32 expected;
++	int ret, n, i;
++
++	/* i.MX50 CCGR6 CG1 supplies OCRAM and NIC301 from sys_clk_root.
++	 * This warm-boot probe inherits that root; it never changes the gate.
++	 */
++	p->gate = readl(p->ccm + 0x80);
++	if (!(p->gate & GENMASK(3, 2)))
++		return -EIO;
++	if (!p->call) {
++		p->call = sram_exec_copy(p->code_pool, (void *)p->code,
++					imx50_ocram_call, imx50_ocram_call_size);
++		if (!p->call)
++			return -EFAULT;
++	}
++	for (n = 0; n < ARRAY_SIZE(seeds); n++) {
++		memset_io(data, 0xa5, PAGE_SIZE);
++		memset_io(data, 0, sizeof(p->result));
++		/* Publish the sentinel and result area before code executes from SRAM. */
++		wmb();
++		k4_ram_trace_mark("IMX50_OCRAM_CALL");
++		/* The assembly restores its original DDR stack before returning.
++		 * Keep interrupts off while SP points into our private SRAM page.
++		 */
++		local_irq_save(flags);
++		local_fiq_disable();
++		ret = p->call(data, stack, seeds[n]);
++		local_irq_restore(flags);
++		k4_ram_trace_mark("IMX50_OCRAM_RETURN");
++		if (ret)
++			return ret;
++		memcpy_fromio(&p->result, data, sizeof(p->result));
++		expected = seeds[n];
++		for (i = 0; i < 256; i++)
++			expected = ror32(expected ^ i, 1);
++		if (p->result.pc < p->code ||
++		    p->result.pc >= p->code + imx50_ocram_call_size ||
++		    p->result.sp != (unsigned long)stack ||
++		    p->result.value != expected || p->result.iterations != 256)
++			return -EIO;
++		/* Neither the result area nor the eight-byte stack may hit guards. */
++		for (i = 0; i < 16; i += sizeof(u32)) {
++			if (readl(data + 64 + i) != 0xa5a5a5a5 ||
++			    readl(data + PAGE_SIZE - 16 + i) != 0xa5a5a5a5)
++				return -EOVERFLOW;
++		}
++		p->runs++;
++	}
++	return 0;
++}
++
++static ssize_t run_store(struct device *dev, struct device_attribute *attr,
++			 const char *buf, size_t count)
++{
++	struct imx50_ocram_probe *p = dev_get_drvdata(dev);
++	int ret;
++
++	if (!sysfs_streq(buf, "run"))
++		return -EINVAL;
++	mutex_lock(&p->lock);
++	ret = p->cache_armed ? -EBUSY : imx50_ocram_run(p);
++	p->error = ret;
++	mutex_unlock(&p->lock);
++	return ret ? ret : count;
++}
++static DEVICE_ATTR_WO(run);
++
++static ssize_t cache_store(struct device *dev, struct device_attribute *attr,
++			   const char *buf, size_t count)
++{
++	int ret = imx50_cache_command(dev_get_drvdata(dev), buf);
++
++	return ret ? ret : count;
++}
++
++static ssize_t cache_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++	struct imx50_ocram_probe *p = dev_get_drvdata(dev);
++	const u32 *r = p->cache_result;
++	ssize_t ret;
++
++	mutex_lock(&p->lock);
++	ret = sysfs_emit(buf,
++		"armed=%u runs=%u error=%d code_size=%u\n"
++		"pc_offset=%u sp_offset=%u cache_ops=%u clidr=%08x phase=%08x\n"
++		"sctlr=%08x,%08x,%08x actlr=%08x,%08x,%08x csselr=%08x,%08x\n"
++		"ddr_ctl00=%08x ctl19=%08x ctl20=%08x ctl63=%08x ctl79=%08x,%08x phy25=%08x\n"
++		"tables=%u root=%pa coarse=%u new_ttbr=%08x\n"
++		"ttbr0=%08x,%08x,%08x ttbr1=%08x,%08x,%08x ttbcr=%08x,%08x\n"
++		"selfrefresh=%u status=%d stage=%u ddr_checked=%u dwell=%u\n"
++		"sr_wait=%u wfi_return=%u before_wfi_cke=%08x\n"
++		"sr_ctl20_off=%08x cke_ready=%08x cke_low=%08x cke_exit=%08x ctl22=%08x\n"
++		"sr_ctl19_after=%08x ctl20_after=%08x phy_after=%08x busy_after=%08x hold_cke=%08x hold_ctl19=%08x\n"
++		"pll_wait=%u status=%d stage=%u step=%08x lock864=%08x ddr_start=%08x,%08x\n"
++		"pll_before_ccsr=%08x cacrr=%08x ctl=%08x cfg=%08x op=%08x mfd=%08x mfn=%08x hfs=%08x,%08x,%08x\n"
++		"pll_after_ccsr=%08x cacrr=%08x ctl=%08x cfg=%08x op=%08x mfd=%08x mfn=%08x hfs=%08x,%08x,%08x\n"
++		"pll_togc=%08x cdhipr=%08x cbcdr=%08x\n",
++		p->cache_armed, p->cache_runs, p->cache_error, imx50_ocram_cache_size,
++		p->cache_runs ? r[0] - (u32)p->code : 0,
++		p->cache_runs ? r[1] - (u32)p->data : 0, r[8], r[9], r[19],
++		r[2], r[3], r[4], r[5], r[6], r[7], r[10], r[11],
++		r[12], r[13], r[14], r[15], r[16], r[17], r[18],
++		p->cache_tables, &p->tables_phys, p->table_count, r[28],
++		r[20], r[22], r[24], r[21], r[23], r[25], r[26], r[27],
++		p->selfrefresh, (s32)r[30], r[32], p->ddr_checked, r[41],
++		r[45], r[46], r[47],
++		r[33], r[34], r[35], r[36], r[44], r[37], r[38], r[39], r[40], r[42], r[43],
++		p->pll_wait, (s32)r[63], r[76], r[61], r[62], r[74], r[75],
++		r[51], r[52], r[53], r[54], r[55], r[56], r[57], r[58], r[59], r[60],
++		r[64], r[65], r[66], r[67], r[68], r[69], r[70], r[71], r[72], r[73],
++		r[80], r[81], r[82]);
++	mutex_unlock(&p->lock);
++	return ret;
++}
++static DEVICE_ATTR_RW(cache);
++
++static ssize_t state_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++	struct imx50_ocram_probe *p = dev_get_drvdata(dev);
++	ssize_t ret;
++
++	mutex_lock(&p->lock);
++	ret = sysfs_emit(buf,
++		"runs=%u error=%d code_phys=%pa data_phys=%pa code_size=%u\n"
++		"pc_offset=%u sp_offset=%u value=%08x iterations=%u ccgr6=%08x\n",
++		p->runs, p->error, &p->code_phys, &p->data_phys, imx50_ocram_call_size,
++		p->runs ? p->result.pc - (u32)p->code : 0,
++		p->runs ? p->result.sp - (u32)p->data : 0,
++		p->result.value, p->result.iterations, p->gate);
++	mutex_unlock(&p->lock);
++	return ret;
++}
++static DEVICE_ATTR_RO(state);
++
++static struct attribute *imx50_ocram_attrs[] = {
++	&dev_attr_run.attr, &dev_attr_state.attr, &dev_attr_cache.attr, NULL,
++};
++static const struct attribute_group imx50_ocram_group = { .attrs = imx50_ocram_attrs };
++const struct attribute_group *imx50_ocram_groups[] = { &imx50_ocram_group, NULL };
+--- a/arch/arm/mach-imx/k4-mc13892-standby.c
++++ b/arch/arm/mach-imx/k4-mc13892-standby.c
+@@ -2,6 +2,7 @@
+ /* K4 first VSTBY stage: retain LDO/GPO outputs, use explicit buck standby banks. */
+ #include <linux/device.h>
+ #include <linux/err.h>
++#include <linux/k4_ram_trace.h>
+ #include <linux/mfd/mc13xxx.h>
+ #include <linux/of.h>
+ #include <linux/slab.h>
+@@ -139,6 +140,7 @@
+ 	}
+ 	s->armed = true;
+ 	s->prepares++;
++	k4_ram_trace_mark("K4_PMIC_STBY_ARMED");
+ out:
+ 	s->error = ret;
+ 	mc13xxx_unlock(s->pmic);
+@@ -156,6 +158,7 @@
+ 	mc13xxx_unlock(s->pmic);
+ 	if (!ret) {
+ 		s->restores++;
++		k4_ram_trace_mark("K4_PMIC_STBY_RESTORED");
+ 	}
+ 	return ret;
+ }
+--- a/arch/arm/mach-imx/ocram-imx50-core.c
++++ b/arch/arm/mach-imx/ocram-imx50-core.c
+@@ -3,6 +3,7 @@
+ #include <linux/bitops.h>
+ #include <linux/genalloc.h>
+ #include <linux/io.h>
++#include <linux/k4_ram_trace.h>
+ #include <linux/mm.h>
+ #include <linux/mutex.h>
+ #include <linux/of.h>
+@@ -250,10 +251,12 @@
+ 		/* The assembly cleans these dirty cache lines before DDR entry. */
+ 		wmb();
+ 	}
++	k4_ram_trace_mark("IMX50_CACHE_CALL");
+ 	local_irq_save(flags);
+ 	local_fiq_disable();
+ 	ret = p->cache_call(data, data + PAGE_SIZE - 16, p->databahn);
+ 	local_irq_restore(flags);
++	k4_ram_trace_mark("IMX50_CACHE_RETURN");
+ 	memcpy_fromio(p->cache_result, data, sizeof(p->cache_result));
+ 	if (!ret && !imx50_cache_result_valid(p->cache_result,
+ 			p->code + IMX50_CACHE_CODE_OFFSET, p->data,
+@@ -462,7 +465,9 @@
+ 	.driver = {
+ 		.name = "imx50-ocram-probe",
+ 		.of_match_table = imx50_ocram_match,
+-
++#ifdef CONFIG_IMX50_OCRAM_PROBE
++		.dev_groups = imx50_ocram_groups,
++#endif
+ 		.suppress_bind_attrs = true,
+ 	},
+ };
+--- a/arch/arm/mach-imx/ocram-imx50-internal.h
++++ b/arch/arm/mach-imx/ocram-imx50-internal.h
+@@ -41,5 +41,7 @@
+ 
+ extern const u32 imx50_ocram_call_size, imx50_ocram_cache_size;
+ int imx50_cache_command(struct imx50_ocram_probe *p, const char *buf);
+-
++#ifdef CONFIG_IMX50_OCRAM_PROBE
++extern const struct attribute_group *imx50_ocram_groups[];
+ #endif
++#endif
+--- a/arch/arm/mach-imx/pm-imx50.c
++++ b/arch/arm/mach-imx/pm-imx50.c
+@@ -2,6 +2,7 @@
+ /* i.MX50 WAIT standby and optional STOP with the Databahn/OCRAM path. */
+ #include <linux/clk.h>
+ #include <linux/io.h>
++#include <linux/k4_ram_trace.h>
+ #include <linux/of.h>
+ #include <linux/platform_device.h>
+ #include <linux/suspend.h>
+@@ -119,6 +120,7 @@
+ 	if (!(pm->srpg_after[0] & BIT(0)) || !(pm->srpg_after[1] & BIT(0)))
+ 		return -EAGAIN;
+ 	pm->power_cycles++;
++	k4_ram_trace_mark("IMX50_SRPG_POWERED");
+ 	return 0;
+ }
+ 
+@@ -228,12 +230,15 @@
+ 	ret = tzic_suspend_wake();
+ 	if (ret)
+ 		goto restore;
++	if (pm->last_srpg)
++		k4_ram_trace_mark("IMX50_SRPG_ARMED");
+ 	/* An armed SRAM test may itself wait while DDR is in self-refresh. */
+ 	ret = imx50_ocram_cache_enter();
+ 	if (ret < 0)
+ 		goto restore;
+ 	if (ret > 0) {
+ 		pm->wfi_returns++;
++		k4_ram_trace_mark(stop ? "IMX50_SRAM_STOP_RETURN" : "IMX50_SRAM_WAIT_RETURN");
+ 		ret = pm->last_srpg ? imx50_srpg_result(pm) : 0;
+ 		if (pm->last_osc) {
+ 			int osc_ret = imx50_osc_result(pm);
+@@ -245,8 +250,10 @@
+ 		/* Never fall back to WFI from DDR while CCM is configured for STOP. */
+ 		ret = -EIO;
+ 	} else {
++		k4_ram_trace_mark("IMX50_WAIT_WFI");
+ 		cpu_do_idle();
+ 		pm->wfi_returns++;
++		k4_ram_trace_mark("IMX50_WAIT_RETURN");
+ 	}
+ restore:
+ 	/* Also clear holdoff on an aborted entry; otherwise IRQs can stay frozen. */
+--- a/drivers/input/misc/k4-mc13892-power-button.c
++++ b/drivers/input/misc/k4-mc13892-power-button.c
+@@ -5,6 +5,7 @@
+ #include <linux/input.h>
+ #include <linux/interrupt.h>
+ #include <linux/jiffies.h>
++#include <linux/k4_ram_trace.h>
+ #include <linux/mfd/mc13783.h>
+ #include <linux/module.h>
+ #include <linux/mutex.h>
+@@ -93,6 +94,7 @@
+ 		if (!ret) {
+ 			button->wake_armed = false;
+ 			button->wake_disarms++;
++			k4_ram_trace_mark("K4_BUTTON_WAKE_DISARMED");
+ 		}
+ 	}
+ 	mutex_lock(&button->lock);
+@@ -126,6 +128,7 @@
+ 		}
+ 		button->wake_armed = true;
+ 		button->wake_arms++;
++		k4_ram_trace_mark("K4_BUTTON_WAKE_ARMED");
+ 	} else {
+ 		disable_irq(button->irq);
+ 		button->irq_disabled = true;
+--- /dev/null
++++ b/drivers/misc/k4-debug/k4-display-clock-probe.c
+@@ -0,0 +1,104 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* RAM experiment: clocks only; never maps EPDC/PxP or touches panel pins. */
++#include <linux/clk.h>
++#include <linux/clk-provider.h>
++#include <linux/delay.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++
++static int k4_test_pfd5(struct device *dev, struct clk *pfd)
++{
++	unsigned long before = clk_get_rate(pfd);
++	int ret, restore;
++
++	if (__clk_is_enabled(pfd) || !before)
++		return dev_err_probe(dev, -EBUSY, "PFD5 not safely idle\n");
++	if (clk_round_rate(pfd, 1) != 246857142 ||
++	    clk_round_rate(pfd, 1000000000) != 480000000)
++		return dev_err_probe(dev, -EINVAL, "PFD5 divisor bounds incorrect\n");
++	dev_info(dev, "PFD5 baseline=%lu\n", before);
++	ret = clk_set_rate(pfd, 320000000);
++	if (ret)
++		goto restore;
++	ret = clk_prepare_enable(pfd);
++	if (ret)
++		goto restore;
++	if (clk_get_rate(pfd) != 320000000 || !__clk_is_enabled(pfd))
++		ret = -EIO;
++	if (clk_set_rate(pfd, 480000000) != -EBUSY ||
++	    clk_get_rate(pfd) != 320000000)
++		ret = -EIO;
++	dev_info(dev, "PFD5 enabled rate=%lu result=%d; pixel output gated\n",
++		clk_get_rate(pfd), ret);
++	msleep(20);
++	clk_disable_unprepare(pfd);
++restore:
++	restore = clk_set_rate(pfd, before);
++	if (restore || __clk_is_enabled(pfd) || clk_get_rate(pfd) != before)
++		return dev_err_probe(dev, restore ?: -EIO, "PFD5 restore failed\n");
++	if (ret)
++		return dev_err_probe(dev, ret, "PFD5 test failed\n");
++	dev_info(dev, "PASS: PFD5 320 MHz and original rate/gate restored\n");
++	return 0;
++}
++
++static int k4_display_clock_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct clk_bulk_data clocks[] = {
++		{ .id = "epdc_axi" }, { .id = "pxp_axi" },
++	};
++	struct clk *pfd;
++	int ret, i, j;
++
++	pfd = devm_clk_get_optional(dev, "pfd5");
++	if (IS_ERR(pfd))
++		return dev_err_probe(dev, PTR_ERR(pfd), "PFD5 provider\n");
++	ret = devm_clk_bulk_get(dev, ARRAY_SIZE(clocks), clocks);
++	if (ret)
++		return dev_err_probe(dev, ret, "get AXI clocks\n");
++	for (i = 0; i < ARRAY_SIZE(clocks); i++) {
++		unsigned long rate = clk_get_rate(clocks[i].clk);
++
++		dev_info(dev, "%s inherited rate=%lu\n", clocks[i].id, rate);
++		if (rate != 200000000)
++			return dev_err_probe(dev, -EINVAL, "unexpected warm-boot rate\n");
++	}
++	for (i = 0; i < 3; i++) {
++		ret = clk_bulk_prepare_enable(ARRAY_SIZE(clocks), clocks);
++		if (ret)
++			return dev_err_probe(dev, ret, "enable AXI clocks\n");
++		for (j = 0; j < ARRAY_SIZE(clocks); j++) {
++			if (!__clk_is_enabled(clocks[j].clk)) {
++				clk_bulk_disable_unprepare(ARRAY_SIZE(clocks), clocks);
++				return dev_err_probe(dev, -EIO, "gate enable readback failed\n");
++			}
++		}
++		dev_info(dev, "cycle %d: both gates read enabled; no controller access\n", i);
++		msleep(20);
++		clk_bulk_disable_unprepare(ARRAY_SIZE(clocks), clocks);
++		for (j = 0; j < ARRAY_SIZE(clocks); j++)
++			if (__clk_is_enabled(clocks[j].clk))
++				return dev_err_probe(dev, -EIO, "gate disable readback failed\n");
++	}
++	dev_info(dev, "PASS: three AXI gate cycles; panel/controller untouched\n");
++	return pfd ? k4_test_pfd5(dev, pfd) : 0;
++}
++
++static const struct of_device_id k4_display_clock_match[] = {
++	{ .compatible = "amazon,k4-display-clock-probe" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, k4_display_clock_match);
++
++static struct platform_driver k4_display_clock_driver = {
++	.probe = k4_display_clock_probe,
++	.driver = {
++		.name = "k4-display-clock-probe",
++		.of_match_table = k4_display_clock_match,
++	},
++};
++module_platform_driver(k4_display_clock_driver);
++MODULE_LICENSE("GPL");
++MODULE_DESCRIPTION("Kindle K4 RAM-only display AXI clock experiment");
+--- /dev/null
++++ b/drivers/misc/k4-debug/k4-epdc-id.c
+@@ -0,0 +1,158 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* Explicit RAM diagnostic: only AXI/APBH clocks and read-only EPDC registers. */
++#include <linux/clk.h>
++#include <linux/io.h>
++#include <linux/k4_ram_trace.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++
++#define EPDC_CTRL	0x000
++#define EPDC_STATUS	0x4a0
++#define EPDC_VERSION	0x7f0
++
++struct k4_epdc_id {
++	void __iomem *base;
++	struct clk_bulk_data clocks[2];
++	struct mutex lock;
++	u32 version, ctrl, status;
++	int result;
++	bool attempted;
++};
++
++/* Caller holds lock. A stalled bus read cannot be bounded by a software poll. */
++static int k4_epdc_capture(struct k4_epdc_id *id)
++{
++	int ret;
++
++	if (id->attempted)
++		return -EALREADY;
++	/* Refuse MMIO unless the reserved-RAM recorder is initialized/enabled. */
++	ret = k4_ram_trace_mark("EPDC CAPTURE begin");
++	if (ret)
++		return ret;
++	id->attempted = true;
++	id->result = -EINPROGRESS;
++	if (clk_get_rate(id->clocks[1].clk) != 200000000) {
++		ret = -EINVAL;
++		goto done;
++	}
++	ret = clk_bulk_prepare_enable(ARRAY_SIZE(id->clocks), id->clocks);
++	if (ret)
++		goto done;
++	ret = k4_ram_trace_mark("EPDC VERSION >");
++	if (ret)
++		goto disable;
++	id->version = readl(id->base + EPDC_VERSION);
++	ret = k4_ram_trace_mark("EPDC VERSION <");
++	if (ret)
++		goto disable;
++	/* The i.MX50 RM describes V1; do not interpret an unexpected block. */
++	if ((id->version >> 24) != 1) {
++		ret = -ENODEV;
++		goto disable;
++	}
++	ret = k4_ram_trace_mark("EPDC CTRL >");
++	if (ret)
++		goto disable;
++	id->ctrl = readl(id->base + EPDC_CTRL);
++	ret = k4_ram_trace_mark("EPDC CTRL <");
++	if (ret)
++		goto disable;
++	ret = k4_ram_trace_mark("EPDC STATUS >");
++	if (ret)
++		goto disable;
++	id->status = readl(id->base + EPDC_STATUS);
++	ret = k4_ram_trace_mark("EPDC STATUS <");
++disable:
++	clk_bulk_disable_unprepare(ARRAY_SIZE(id->clocks), id->clocks);
++done:
++	id->result = ret;
++	k4_ram_trace_mark(ret ? "EPDC CAPTURE error" : "EPDC CAPTURE done");
++	return ret;
++}
++
++static ssize_t capture_store(struct device *dev, struct device_attribute *attr,
++			     const char *buf, size_t count)
++{
++	struct k4_epdc_id *id = dev_get_drvdata(dev);
++	int ret;
++
++	if (!sysfs_streq(buf, "1"))
++		return -EINVAL;
++	ret = mutex_lock_interruptible(&id->lock);
++	if (ret)
++		return ret;
++	ret = k4_epdc_capture(id);
++	mutex_unlock(&id->lock);
++	if (ret)
++		return ret;
++	return count;
++}
++static DEVICE_ATTR_WO(capture);
++
++static ssize_t snapshot_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++	struct k4_epdc_id *id = dev_get_drvdata(dev);
++	ssize_t ret;
++
++	mutex_lock(&id->lock);
++	ret = sysfs_emit(buf, "attempted=%u result=%d version=%08x ctrl=%08x status=%08x\n",
++			id->attempted, id->result, id->version, id->ctrl, id->status);
++	mutex_unlock(&id->lock);
++	return ret;
++}
++static DEVICE_ATTR_RO(snapshot);
++
++static struct attribute *k4_epdc_id_attrs[] = {
++	&dev_attr_capture.attr, &dev_attr_snapshot.attr, NULL,
++};
++ATTRIBUTE_GROUPS(k4_epdc_id);
++
++static int k4_epdc_id_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct k4_epdc_id *id;
++	struct resource *res;
++	int ret;
++
++	if (!of_machine_is_compatible("amazon,kindle-4"))
++		return -ENODEV;
++	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++	if (!res || res->start != 0x41010000 || resource_size(res) != 0x1000)
++		return -EINVAL;
++	id = devm_kzalloc(dev, sizeof(*id), GFP_KERNEL);
++	if (!id)
++		return -ENOMEM;
++	id->base = devm_ioremap_resource(dev, res);
++	if (IS_ERR(id->base))
++		return PTR_ERR(id->base);
++	id->clocks[0].id = "apbh";
++	id->clocks[1].id = "epdc_axi";
++	ret = devm_clk_bulk_get(dev, ARRAY_SIZE(id->clocks), id->clocks);
++	if (ret)
++		return dev_err_probe(dev, ret, "get register-access clocks\n");
++	mutex_init(&id->lock);
++	id->result = -ENODATA;
++	platform_set_drvdata(pdev, id);
++	dev_info(dev, "armed only: no EPDC MMIO until explicit capture\n");
++	return 0;
++}
++
++static const struct of_device_id k4_epdc_id_match[] = {
++	{ .compatible = "amazon,k4-epdc-id-probe" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, k4_epdc_id_match);
++static struct platform_driver k4_epdc_id_driver = {
++	.probe = k4_epdc_id_probe,
++	.driver = {
++		.name = "k4-epdc-id",
++		.of_match_table = k4_epdc_id_match,
++		.dev_groups = k4_epdc_id_groups,
++		.suppress_bind_attrs = true,
++	},
++};
++builtin_platform_driver(k4_epdc_id_driver);
++MODULE_LICENSE("GPL");
+--- /dev/null
++++ b/drivers/misc/k4-debug/k4-epdc-image-test.h
+@@ -0,0 +1,162 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/* Test consumer of EPDC preparation, included by k4-pxp-client-test.c. */
++#include <linux/imx50-epdc-image.h>
++
++static int k4_epdc_image_frame(struct k4_pxp_client *c, unsigned int rotation,
++			       unsigned int format, unsigned int shape)
++{
++	u32 sw = rotation % 180 ? 600 : 800;
++	u32 sh = rotation % 180 ? 800 : 600;
++	u32 bpp = format == IMX50_EPDC_XRGB8888 ? 4 : format == IMX50_EPDC_RGB565 ? 2 : 1;
++	struct imx50_epdc_rect r, got, expected;
++	struct imx50_epdc_source s;
++	u32 ss = sw * bpp + 3, dw, dh, ds, x, y, sx, sy, low, high, actual, turn;
++	u8 *src, *dst;
++	bool invert = (format + rotation / 90 + shape) & 1;
++	int ret;
++
++	switch (shape) {
++	case 0:
++		r = (struct imx50_epdc_rect){ sw - 1, sh - 1, 1, 1 };
++		break;
++	case 1:
++		r = (struct imx50_epdc_rect){ 3, 5, 13, 17 };
++		break;
++	case 2:
++		r = (struct imx50_epdc_rect){ sw - 7, sh - 9, 7, 9 };
++		break;
++	default:
++		r = (struct imx50_epdc_rect){ 0, 0, sw, sh };
++		break;
++	}
++	dw = rotation % 180 ? r.height : r.width;
++	dh = rotation % 180 ? r.width : r.height;
++	ds = dw + 7;
++	src = kvmalloc(ss * sh, GFP_KERNEL);
++	dst = kvmalloc(ds * dh, GFP_KERNEL);
++	if (!src || !dst) {
++		ret = -ENOMEM;
++		goto out;
++	}
++	memset(src, 0x5a, ss * sh);
++	memset(dst, 0xa7, ds * dh);
++	for (y = 0; y < r.height; y++) {
++		for (x = 0; x < r.width; x++) {
++			u8 *q = src + (r.top + y) * ss + (r.left + x) * bpp;
++			u32 v;
++
++			if (format == IMX50_EPDC_RGB565) {
++				v = (((x + y) & 31) << 11) | (((y * 3) & 63) << 5) | (x & 31);
++				q[0] = v;
++				q[1] = v >> 8;
++			} else {
++				q[0] = x * 3 + y;
++				if (bpp == 4) {
++					q[1] = y * 7 + shape;
++					q[2] = x + y + 11;
++					q[3] = 0;
++				}
++			}
++		}
++		cond_resched();
++	}
++	s = (struct imx50_epdc_source) {
++		.pixels = src, .size = ss * sh, .width = sw, .height = sh,
++		.stride = ss, .format = format, .region = r,
++		.rotation = rotation, .invert = invert,
++	};
++	ret = imx50_epdc_prepare(c->pxp, &s, dst, ds * dh, ds, &got);
++	if (ret)
++		goto out;
++	expected = r;
++	/* Compose quarter-turns to check native coordinates independently. */
++	for (turn = 0; turn < rotation / 90; turn++) {
++		u32 height = turn & 1 ? sw : sh;
++		u32 old_left = expected.left, old_width = expected.width;
++
++		expected.left = height - expected.top - expected.height;
++		expected.top = old_left;
++		expected.width = expected.height;
++		expected.height = old_width;
++	}
++	if (memcmp(&expected, &got, sizeof(got))) {
++		ret = -ERANGE;
++		goto out;
++	}
++	for (y = 0; y < dh; y++) {
++		for (x = 0; x < ds; x++) {
++			const u8 *q;
++			u32 red, green, blue, v;
++
++			if (x >= dw) {
++				if (dst[y * ds + x] != 0xa7) {
++					ret = -EOVERFLOW;
++					goto out;
++				}
++				continue;
++			}
++			sx = x;
++			sy = y;
++			for (turn = 0; turn < rotation / 90; turn++) {
++				u32 width = turn & 1 ? dh : dw;
++				u32 old_x = sx;
++
++				sx = sy;
++				sy = width - 1 - old_x;
++			}
++			q = src + (r.top + sy) * ss + (r.left + sx) * bpp;
++			if (bpp == 4) {
++				blue = q[0];
++				green = q[1];
++				red = q[2];
++			} else if (bpp == 2) {
++				v = q[0] + 256 * q[1];
++				blue = (v % 32) * 8 + (v % 32) / 4;
++				green = ((v / 32) % 64) * 4 + ((v / 32) % 64) / 16;
++				red = (v / 2048) * 8 + (v / 2048) / 4;
++			} else {
++				red = q[0];
++				green = q[0];
++				blue = q[0];
++			}
++			low = (77 * red + 150 * green + 29 * blue) / 256;
++			high = low + (low != 255);
++			if (invert) {
++				v = low;
++				low = 255 - high;
++				high = 255 - v;
++			}
++			actual = dst[y * ds + x];
++			if (actual < low || actual > high) {
++				ret = -EILSEQ;
++				goto out;
++			}
++			if (actual != low)
++				atomic_set(&c->max_error, 1);
++		}
++		cond_resched();
++	}
++	atomic_inc(&c->frames);
++	atomic_add(r.width * r.height, &c->pixels);
++out:
++	kvfree(src);
++	kvfree(dst);
++	return ret;
++}
++
++static int k4_epdc_image_suite(struct k4_pxp_client *c)
++{
++	unsigned int angle, format, shape;
++	int ret;
++
++	for (angle = 0; angle < 360; angle += 90) {
++		for (format = 0; format < 3; format++) {
++			for (shape = 0; shape < 4; shape++) {
++				ret = k4_epdc_image_frame(c, angle, format, shape);
++				if (ret)
++					return ret;
++			}
++		}
++	}
++	return 0;
++}
+--- /dev/null
++++ b/drivers/misc/k4-debug/k4-mc13892-id.c
+@@ -0,0 +1,116 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Kindle K4 RAM-test probe. This driver never writes a PMIC register. */
++#include <linux/errno.h>
++#include <linux/gpio/consumer.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/spi/spi.h>
++
++#define MC13892_REVISION 7
++
++static int k4_mc13892_read(struct spi_device *spi, u8 reg, u32 *value)
++{
++	/* Bit 31 is write-enable=0, bits 30:25 hold the register. The K4's
++	 * CSPI controller must clock this command as one 32-bit word.
++	 */
++	u32 tx_word = (u32)reg << 25;
++	u32 rx_word = 0;
++	struct spi_transfer transfer = {
++		.tx_buf = &tx_word,
++		.rx_buf = &rx_word,
++		.len = sizeof(tx_word),
++		.bits_per_word = 32,
++	};
++	int ret = spi_sync_transfer(spi, &transfer, 1);
++
++	if (!ret)
++		*value = rx_word & 0xffffff;
++
++	return ret;
++}
++
++static int k4_mc13892_id_probe(struct spi_device *spi)
++{
++	static const struct {
++		u8 reg;
++		const char *name;
++	} snapshot[] = {
++		{ 0, "IRQSTAT0" }, { 1, "IRQMASK0" },
++		{ 2, "IRQSENSE0" }, { 3, "IRQSTAT1" },
++		{ 4, "IRQMASK1" }, { 5, "IRQSENSE1" },
++		{ 13, "POWERCTL0" }, { 15, "POWERCTL2" },
++		{ 24, "SWITCHERS0" }, { 25, "SWITCHERS1" },
++		{ 26, "SWITCHERS2" }, { 27, "SWITCHERS3" },
++		{ 28, "SWITCHERS4" }, { 29, "SWITCHERS5" },
++		{ 30, "REGSETTING0" }, { 31, "REGSETTING1" },
++		{ 32, "REGMODE0" }, { 33, "REGMODE1" },
++	};
++	struct gpio_desc *irq_gpio;
++	u32 revision, value;
++	int ret, raw_level;
++	size_t i;
++
++	/* Match the bus mode and speed in the upstream MC13xxx SPI driver and
++	 * the old Yoshi board registration, without running their init writes.
++	 */
++	spi->mode = SPI_MODE_0 | SPI_CS_HIGH;
++	spi->max_speed_hz = 2000000;
++	ret = spi_setup(spi);
++	if (ret)
++		return dev_err_probe(&spi->dev, ret, "K4_PMIC_ID spi_setup failed\n");
++
++	ret = k4_mc13892_read(spi, MC13892_REVISION, &revision);
++	if (ret)
++		return dev_err_probe(&spi->dev, ret, "K4_PMIC_ID read failed\n");
++
++	dev_info(&spi->dev,
++		 "K4_PMIC_ID revision=%06x rev=%u.%u fin=%u\n",
++		 revision, (revision >> 3) & 3, revision & 7,
++		 (revision >> 9) & 3);
++	if (!revision || revision == 0xffffff)
++		return -ENODEV;
++
++	irq_gpio = devm_gpiod_get(&spi->dev, "irq", GPIOD_IN);
++	if (IS_ERR(irq_gpio))
++		return dev_err_probe(&spi->dev, PTR_ERR(irq_gpio),
++				     "K4_PMIC_IRQ GPIO request failed\n");
++
++	raw_level = gpiod_get_raw_value_cansleep(irq_gpio);
++	if (raw_level < 0)
++		return dev_err_probe(&spi->dev, raw_level,
++				     "K4_PMIC_IRQ GPIO read failed\n");
++
++	dev_info(&spi->dev, "K4_PMIC_IRQ gpio6_8 raw=%d irq=%d\n",
++		 raw_level, spi->irq);
++
++	for (i = 0; i < ARRAY_SIZE(snapshot); i++) {
++		ret = k4_mc13892_read(spi, snapshot[i].reg, &value);
++		if (ret)
++			return dev_err_probe(&spi->dev, ret,
++					     "K4_PMIC_REG read %u failed\n",
++					     snapshot[i].reg);
++
++		dev_info(&spi->dev, "K4_PMIC_REG %02u %-12s %06x\n",
++			 snapshot[i].reg, snapshot[i].name, value);
++	}
++
++	return 0;
++}
++
++static const struct of_device_id k4_mc13892_id_of_match[] = {
++	{ .compatible = "amazon,k4-mc13892-id-probe" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, k4_mc13892_id_of_match);
++
++static struct spi_driver k4_mc13892_id_driver = {
++	.driver = {
++		.name = "k4-mc13892-id-probe",
++		.of_match_table = k4_mc13892_id_of_match,
++	},
++	.probe = k4_mc13892_id_probe,
++};
++module_spi_driver(k4_mc13892_id_driver);
++
++MODULE_LICENSE("GPL");
++MODULE_DESCRIPTION("Read-only Kindle K4 MC13892 revision probe");
+--- /dev/null
++++ b/drivers/misc/k4-debug/k4-papyrus-monitor.c
+@@ -0,0 +1,111 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* TPS65180B monitor: excludes read-to-clear interrupt status registers. */
++
++#include <linux/device.h>
++#include <linux/i2c.h>
++#include <linux/module.h>
++#include <linux/mod_devicetable.h>
++
++#include "../k4-papyrus-registers.h"
++
++static int k4_papyrus_read_reg(struct i2c_client *client, unsigned int reg)
++{
++	if (!k4_papyrus_monitor_readable(reg))
++		return -EACCES;
++	return i2c_smbus_read_byte_data(client, reg);
++}
++
++static ssize_t k4_papyrus_show_reg(struct device *dev, char *buf, u8 reg)
++{
++	int value = k4_papyrus_read_reg(to_i2c_client(dev), reg);
++
++	if (value < 0)
++		return value;
++	return sysfs_emit(buf, "0x%02x\n", value);
++}
++
++#define K4_PAPYRUS_RO_ATTR(_name, _reg) \
++static ssize_t _name##_show(struct device *dev, \
++			    struct device_attribute *attr, char *buf) \
++{ \
++	return k4_papyrus_show_reg(dev, buf, _reg); \
++} \
++static DEVICE_ATTR_RO(_name)
++
++K4_PAPYRUS_RO_ATTR(ext_temp_raw, PAPYRUS_TMST_VALUE);
++K4_PAPYRUS_RO_ATTR(enable_raw, PAPYRUS_ENABLE);
++K4_PAPYRUS_RO_ATTR(vcom_raw, PAPYRUS_VCOM_ADJUST);
++K4_PAPYRUS_RO_ATTR(vp_adjust_raw, PAPYRUS_VP_ADJUST);
++K4_PAPYRUS_RO_ATTR(vn_adjust_raw, PAPYRUS_VN_ADJUST);
++K4_PAPYRUS_RO_ATTR(irq_enable1_raw, PAPYRUS_INT_ENABLE1);
++K4_PAPYRUS_RO_ATTR(irq_enable2_raw, PAPYRUS_INT_ENABLE2);
++K4_PAPYRUS_RO_ATTR(power_sequence0_raw, PAPYRUS_PWR_SEQ0);
++K4_PAPYRUS_RO_ATTR(power_sequence1_raw, PAPYRUS_PWR_SEQ1);
++K4_PAPYRUS_RO_ATTR(power_sequence2_raw, PAPYRUS_PWR_SEQ2);
++K4_PAPYRUS_RO_ATTR(temperature_config_raw, PAPYRUS_TMST_CONFIG);
++K4_PAPYRUS_RO_ATTR(temperature_hot_raw, PAPYRUS_TMST_OS);
++K4_PAPYRUS_RO_ATTR(temperature_cool_raw, PAPYRUS_TMST_HYST);
++K4_PAPYRUS_RO_ATTR(powergood_raw, PAPYRUS_PG_STATUS);
++K4_PAPYRUS_RO_ATTR(revision_raw, PAPYRUS_REVID);
++
++static struct attribute *k4_papyrus_attrs[] = {
++	&dev_attr_ext_temp_raw.attr,
++	&dev_attr_enable_raw.attr,
++	&dev_attr_vcom_raw.attr,
++	&dev_attr_vp_adjust_raw.attr,
++	&dev_attr_vn_adjust_raw.attr,
++	&dev_attr_irq_enable1_raw.attr,
++	&dev_attr_irq_enable2_raw.attr,
++	&dev_attr_power_sequence0_raw.attr,
++	&dev_attr_power_sequence1_raw.attr,
++	&dev_attr_power_sequence2_raw.attr,
++	&dev_attr_temperature_config_raw.attr,
++	&dev_attr_temperature_hot_raw.attr,
++	&dev_attr_temperature_cool_raw.attr,
++	&dev_attr_powergood_raw.attr,
++	&dev_attr_revision_raw.attr,
++	NULL,
++};
++ATTRIBUTE_GROUPS(k4_papyrus);
++
++static int k4_papyrus_probe(struct i2c_client *client)
++{
++	int revision;
++
++	if (!i2c_check_functionality(client->adapter,
++				     I2C_FUNC_SMBUS_BYTE_DATA))
++		return -EOPNOTSUPP;
++
++	/* 0x07 is INT_STATUS1, not the product ID used by old Amazon names. */
++	revision = k4_papyrus_read_reg(client, PAPYRUS_REVID);
++	if (revision < 0)
++		return dev_err_probe(&client->dev, revision,
++				     "revision read failed\n");
++	if (revision != PAPYRUS_K4_REVID)
++		return dev_err_probe(&client->dev, -ENODEV,
++				     "unsupported REVID=0x%02x\n", revision);
++
++	dev_info(&client->dev,
++		 "TPS65180B 1p4 REVID=0x%02x; IRQ status reads excluded\n",
++		 revision);
++	return 0;
++}
++
++static const struct of_device_id k4_papyrus_of_match[] = {
++	{ .compatible = "amazon,k4-papyrus-monitor" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, k4_papyrus_of_match);
++
++static struct i2c_driver k4_papyrus_driver = {
++	.probe = k4_papyrus_probe,
++	.driver = {
++		.name = "k4-papyrus-monitor",
++		.of_match_table = k4_papyrus_of_match,
++		.dev_groups = k4_papyrus_groups,
++	},
++};
++module_i2c_driver(k4_papyrus_driver);
++
++MODULE_DESCRIPTION("Kindle K4 read-only Papyrus display PMIC monitor");
++MODULE_LICENSE("GPL");
+--- /dev/null
++++ b/drivers/misc/k4-debug/k4-papyrus-power-test.c
+@@ -0,0 +1,149 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* Explicit consumer for a supervised RAM trial; no automatic power cycle. */
++#include <linux/delay.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/regulator/consumer.h>
++
++struct k4_papyrus_test {
++	struct regulator *display, *vcom;
++	struct mutex lock;
++	bool display_held, vcom_held;
++	int result, voltage;
++	unsigned int cycles;
++};
++
++static int k4_papyrus_release(struct k4_papyrus_test *t)
++{
++	int ret;
++
++	if (t->vcom_held) {
++		ret = regulator_disable(t->vcom);
++		if (ret)
++			return ret;
++		t->vcom_held = false;
++	}
++	if (t->display_held) {
++		ret = regulator_disable(t->display);
++		if (ret)
++			return ret;
++		t->display_held = false;
++	}
++	return 0;
++}
++
++static ssize_t run_store(struct device *dev, struct device_attribute *attr,
++			 const char *buf, size_t count)
++{
++	struct k4_papyrus_test *t = dev_get_drvdata(dev);
++	unsigned int flags;
++	int ret, cleanup;
++
++	if (!sysfs_streq(buf, "cycle") && !sysfs_streq(buf, "release"))
++		return -EINVAL;
++	if (!mutex_trylock(&t->lock))
++		return -EBUSY;
++	if (sysfs_streq(buf, "release")) {
++		ret = k4_papyrus_release(t);
++		goto out;
++	}
++	if (t->display_held || t->vcom_held) {
++		ret = -EBUSY;
++		goto out;
++	}
++	ret = regulator_enable(t->display);
++	if (ret)
++		goto out;
++	t->display_held = true;
++	ret = regulator_enable(t->vcom);
++	if (ret)
++		goto release;
++	t->vcom_held = true;
++	t->voltage = regulator_get_voltage(t->vcom);
++	if (t->voltage < 0) {
++		ret = t->voltage;
++		goto release;
++	}
++	/* A test observation interval, not a lifetime limit in the power driver. */
++	msleep(250);
++	ret = regulator_get_error_flags(t->display, &flags);
++	if (!ret && (flags || regulator_is_enabled(t->display) != 1 ||
++		     regulator_is_enabled(t->vcom) != 1))
++		ret = -EIO;
++release:
++	cleanup = k4_papyrus_release(t);
++	if (!ret)
++		ret = cleanup;
++	if (!ret)
++		t->cycles++;
++out:
++	t->result = ret;
++	mutex_unlock(&t->lock);
++	return ret ? ret : count;
++}
++static DEVICE_ATTR_WO(run);
++
++static ssize_t result_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++	struct k4_papyrus_test *t = dev_get_drvdata(dev);
++	ssize_t size;
++
++	mutex_lock(&t->lock);
++	size = sysfs_emit(buf, "result=%d cycles=%u display_held=%u vcom_held=%u vcom_magnitude_uv=%d\n",
++			  t->result, t->cycles, t->display_held, t->vcom_held, t->voltage);
++	mutex_unlock(&t->lock);
++	return size;
++}
++static DEVICE_ATTR_RO(result);
++
++static struct attribute *k4_papyrus_test_attrs[] = {
++	&dev_attr_run.attr, &dev_attr_result.attr, NULL,
++};
++ATTRIBUTE_GROUPS(k4_papyrus_test);
++
++static int k4_papyrus_test_probe(struct platform_device *pdev)
++{
++	struct k4_papyrus_test *t;
++
++	t = devm_kzalloc(&pdev->dev, sizeof(*t), GFP_KERNEL);
++	if (!t)
++		return -ENOMEM;
++	t->display = devm_regulator_get(&pdev->dev, "display");
++	if (IS_ERR(t->display))
++		return dev_err_probe(&pdev->dev, PTR_ERR(t->display), "DISPLAY\n");
++	t->vcom = devm_regulator_get(&pdev->dev, "vcom");
++	if (IS_ERR(t->vcom))
++		return dev_err_probe(&pdev->dev, PTR_ERR(t->vcom), "VCOM\n");
++	mutex_init(&t->lock);
++	t->result = -ENODATA;
++	platform_set_drvdata(pdev, t);
++	return 0;
++}
++
++static void k4_papyrus_test_shutdown(struct platform_device *pdev)
++{
++	struct k4_papyrus_test *t = platform_get_drvdata(pdev);
++
++	mutex_lock(&t->lock);
++	k4_papyrus_release(t);
++	mutex_unlock(&t->lock);
++}
++
++static const struct of_device_id k4_papyrus_test_match[] = {
++	{ .compatible = "amazon,k4-papyrus-power-test" }, { }
++};
++
++static struct platform_driver k4_papyrus_test_driver = {
++	.probe = k4_papyrus_test_probe,
++	.shutdown = k4_papyrus_test_shutdown,
++	.driver = {
++		.name = "k4-papyrus-power-test",
++		.of_match_table = k4_papyrus_test_match,
++		.dev_groups = k4_papyrus_test_groups,
++		.suppress_bind_attrs = true,
++	},
++};
++module_platform_driver(k4_papyrus_test_driver);
++MODULE_LICENSE("GPL");
+--- /dev/null
++++ b/drivers/misc/k4-debug/k4-papyrus-temperature.c
+@@ -0,0 +1,306 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* K4 TPS65180B fresh thermistor acquisition; no display power control. */
++#include <linux/delay.h>
++#include <linux/hwmon.h>
++#include <linux/i2c.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/pm.h>
++
++#include "../k4-papyrus-registers.h"
++
++#define PAPYRUS_INT_STATUS1 0x07
++#define PAPYRUS_INT_STATUS2 0x08
++#define PAPYRUS_FAULT1 0x74
++#define PAPYRUS_FAULT2 0xfa
++#define PAPYRUS_EOC 0x01
++#define PAPYRUS_READ_THERM 0x80
++#define PAPYRUS_CONV_END 0x20
++#define PAPYRUS_FAULT_QUEUE 0x18
++
++struct k4_papyrus_temp {
++	struct i2c_client *client;
++	struct mutex lock;
++	unsigned int samples;
++	u8 irq_seen[2];
++	int last_error;
++	bool suspended;
++};
++
++/* All successful read-to-clear reads are saved even if the next read fails. */
++static int papyrus_ack(struct k4_papyrus_temp *p)
++{
++	int first, second;
++
++	first = i2c_smbus_read_byte_data(p->client, PAPYRUS_INT_STATUS1);
++	if (first < 0)
++		return first;
++	p->irq_seen[0] |= first;
++	second = i2c_smbus_read_byte_data(p->client, PAPYRUS_INT_STATUS2);
++	if (second < 0)
++		return second;
++	p->irq_seen[1] |= second;
++	if ((first & PAPYRUS_FAULT1) || (second & PAPYRUS_FAULT2))
++		return -EIO;
++	return second;
++}
++
++/* This stage only measures in inherited standby. Never writes ENABLE/GPIOs. */
++static int papyrus_standby(struct k4_papyrus_temp *p)
++{
++	int value;
++
++	value = i2c_smbus_read_byte_data(p->client, PAPYRUS_ENABLE);
++	if (value < 0)
++		return value;
++	if (value & 0xc0)
++		return -EBUSY;
++	value = i2c_smbus_read_byte_data(p->client, PAPYRUS_PG_STATUS);
++	if (value < 0)
++		return value;
++	return value ? -EBUSY : 0;
++}
++
++static int papyrus_wait_conversion(struct k4_papyrus_temp *p)
++{
++	int count, ret;
++
++	for (count = 0; count < 100; count++) {
++		usleep_range(1000, 1500);
++		ret = i2c_smbus_read_byte_data(p->client, PAPYRUS_TMST_CONFIG);
++		if (ret < 0)
++			return ret;
++		if (!(ret & PAPYRUS_READ_THERM) && (ret & PAPYRUS_CONV_END))
++			return ret;
++	}
++	return -ETIMEDOUT;
++}
++
++/* Caller holds lock. Only publish a value after this conversion's EOC. */
++static int papyrus_temperature(struct k4_papyrus_temp *p, long *result)
++{
++	int ret, config, raw;
++
++	if (p->suspended)
++		return -EBUSY;
++	ret = papyrus_standby(p);
++	if (ret)
++		goto fault;
++	config = i2c_smbus_read_byte_data(p->client, PAPYRUS_TMST_CONFIG);
++	if (config < 0) {
++		ret = config;
++		goto fault;
++	}
++	if (config & PAPYRUS_READ_THERM) {
++		/* A prior failed transfer may have left a conversion running.
++		 * Drain it before acknowledging EOC and starting our own sample.
++		 */
++		config = papyrus_wait_conversion(p);
++		if (config < 0) {
++			ret = config;
++			goto fault;
++		}
++	}
++	/* Discard stale EOC only after caching all status and checking faults. */
++	ret = papyrus_ack(p);
++	if (ret < 0)
++		goto fault;
++	/* Preserve queue length; never assert the fault-counter-clear bit. */
++	ret = i2c_smbus_write_byte_data(p->client, PAPYRUS_TMST_CONFIG,
++				      (config & PAPYRUS_FAULT_QUEUE) |
++				      PAPYRUS_READ_THERM);
++	if (ret < 0)
++		goto fault;
++	ret = papyrus_wait_conversion(p);
++	if (ret < 0)
++		goto fault;
++	ret = papyrus_ack(p);
++	if (ret < 0)
++		goto fault;
++	if (!(ret & PAPYRUS_EOC)) {
++		ret = -EIO;
++		goto fault;
++	}
++	raw = i2c_smbus_read_byte_data(p->client, PAPYRUS_TMST_VALUE);
++	if (raw < 0) {
++		ret = raw;
++		goto fault;
++	}
++	/* Explicit sign extension; reserved encodings must not become a sample. */
++	if (raw & 0x80)
++		raw -= 256;
++	if (raw < -10 || raw > 85) {
++		ret = -ERANGE;
++		goto fault;
++	}
++	ret = papyrus_standby(p);
++	if (ret)
++		goto fault;
++	*result = raw * 1000;
++	p->samples++;
++	p->last_error = 0;
++	return 0;
++
++fault:
++	/* This attempt failed; the next read rechecks hardware and starts fresh.
++	 * Do not reset display power to recover a thermistor bus transaction.
++	 */
++	p->last_error = ret;
++	return ret;
++}
++
++static umode_t papyrus_visible(const void *data, enum hwmon_sensor_types type,
++			      u32 attr, int channel)
++{
++	return type == hwmon_temp && attr == hwmon_temp_input ? 0444 : 0;
++}
++
++static int papyrus_read(struct device *dev, enum hwmon_sensor_types type,
++			u32 attr, int channel, long *value)
++{
++	struct k4_papyrus_temp *p = dev_get_drvdata(dev);
++	int ret;
++
++	if (type != hwmon_temp || attr != hwmon_temp_input || channel)
++		return -EOPNOTSUPP;
++	mutex_lock(&p->lock);
++	ret = papyrus_temperature(p, value);
++	mutex_unlock(&p->lock);
++	return ret;
++}
++
++static const struct hwmon_ops papyrus_hwmon_ops = {
++	.is_visible = papyrus_visible,
++	.read = papyrus_read,
++};
++
++static const struct hwmon_channel_info * const papyrus_info[] = {
++	HWMON_CHANNEL_INFO(temp, HWMON_T_INPUT),
++	NULL,
++};
++
++static const struct hwmon_chip_info papyrus_chip = {
++	.ops = &papyrus_hwmon_ops,
++	.info = papyrus_info,
++};
++
++static ssize_t acquisition_state_show(struct device *dev,
++				      struct device_attribute *attr, char *buf)
++{
++	struct k4_papyrus_temp *p = i2c_get_clientdata(to_i2c_client(dev));
++	ssize_t length;
++
++	mutex_lock(&p->lock);
++	length = sysfs_emit(buf, "samples=%u last_error=%d irq_seen=%02x/%02x suspended=%u\n",
++			    p->samples, p->last_error, p->irq_seen[0], p->irq_seen[1],
++			    p->suspended);
++	mutex_unlock(&p->lock);
++	return length;
++}
++static DEVICE_ATTR_RO(acquisition_state);
++
++/* Non-clearing power/settings snapshot; does not trigger an acquisition. */
++static ssize_t rail_state_show(struct device *dev,
++			       struct device_attribute *attr, char *buf)
++{
++	static const u8 regs[] = {
++		PAPYRUS_ENABLE, PAPYRUS_VP_ADJUST, PAPYRUS_VN_ADJUST,
++		PAPYRUS_VCOM_ADJUST, PAPYRUS_INT_ENABLE1, PAPYRUS_INT_ENABLE2,
++		PAPYRUS_PWR_SEQ0, PAPYRUS_PWR_SEQ1, PAPYRUS_PWR_SEQ2,
++		PAPYRUS_TMST_OS, PAPYRUS_TMST_HYST, PAPYRUS_PG_STATUS,
++	};
++	struct k4_papyrus_temp *p = i2c_get_clientdata(to_i2c_client(dev));
++	ssize_t length = 0;
++	int i, ret;
++
++	mutex_lock(&p->lock);
++	if (p->suspended) {
++		length = -EBUSY;
++		goto out;
++	}
++	for (i = 0; i < ARRAY_SIZE(regs); i++) {
++		ret = i2c_smbus_read_byte_data(p->client, regs[i]);
++		if (ret < 0) {
++			length = ret;
++			goto out;
++		}
++		length += sysfs_emit_at(buf, length, "%02x=%02x%c", regs[i], ret,
++					i == ARRAY_SIZE(regs) - 1 ? '\n' : ' ');
++	}
++out:
++	mutex_unlock(&p->lock);
++	return length;
++}
++static DEVICE_ATTR_RO(rail_state);
++
++static struct attribute *papyrus_attrs[] = {
++	&dev_attr_acquisition_state.attr,
++	&dev_attr_rail_state.attr,
++	NULL,
++};
++ATTRIBUTE_GROUPS(papyrus);
++
++static int papyrus_suspend(struct device *dev)
++{
++	struct k4_papyrus_temp *p = i2c_get_clientdata(to_i2c_client(dev));
++
++	mutex_lock(&p->lock);
++	p->suspended = true;
++	mutex_unlock(&p->lock);
++	return 0;
++}
++
++static int papyrus_resume(struct device *dev)
++{
++	struct k4_papyrus_temp *p = i2c_get_clientdata(to_i2c_client(dev));
++
++	mutex_lock(&p->lock);
++	p->suspended = false;
++	mutex_unlock(&p->lock);
++	return 0;
++}
++static DEFINE_SIMPLE_DEV_PM_OPS(papyrus_pm, papyrus_suspend, papyrus_resume);
++
++static int papyrus_probe(struct i2c_client *client)
++{
++	struct k4_papyrus_temp *p;
++	struct device *hwmon;
++	int ret;
++
++	if (!i2c_check_functionality(client->adapter, I2C_FUNC_SMBUS_BYTE_DATA))
++		return -EOPNOTSUPP;
++	ret = i2c_smbus_read_byte_data(client, PAPYRUS_REVID);
++	if (ret < 0)
++		return ret;
++	if (ret != PAPYRUS_K4_REVID)
++		return -ENODEV;
++	p = devm_kzalloc(&client->dev, sizeof(*p), GFP_KERNEL);
++	if (!p)
++		return -ENOMEM;
++	p->client = client;
++	mutex_init(&p->lock);
++	i2c_set_clientdata(client, p);
++	hwmon = devm_hwmon_device_register_with_info(&client->dev, "k4_papyrus",
++						   p, &papyrus_chip, NULL);
++	return PTR_ERR_OR_ZERO(hwmon);
++}
++
++static const struct of_device_id papyrus_of_match[] = {
++	{ .compatible = "amazon,k4-papyrus-temperature" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, papyrus_of_match);
++
++static struct i2c_driver papyrus_driver = {
++	.probe = papyrus_probe,
++	.driver = {
++		.name = "k4-papyrus-temperature",
++		.of_match_table = papyrus_of_match,
++		.dev_groups = papyrus_groups,
++		.pm = pm_sleep_ptr(&papyrus_pm),
++	},
++};
++module_i2c_driver(papyrus_driver);
++
++MODULE_DESCRIPTION("K4 TPS65180B standby thermistor acquisition");
++MODULE_LICENSE("GPL");
+--- /dev/null
++++ b/drivers/misc/k4-debug/k4-pxp-client-test.c
+@@ -0,0 +1,303 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* Explicit test consumer of the exported service; never accesses PxP MMIO. */
++#include <linux/completion.h>
++#include <linux/imx50-pxp.h>
++#include <linux/kthread.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/slab.h>
++
++struct k4_pxp_client {
++	struct imx50_pxp *pxp;
++	struct mutex lock;
++	atomic_t frames, pixels, max_error;
++	struct imx50_pxp_stats before, after;
++	int result;
++	bool attempted;
++};
++
++static int k4_pxp_frame(struct k4_pxp_client *c, unsigned int w,
++			unsigned int h, unsigned int seed, unsigned int rotation)
++{
++	unsigned int dw = rotation % 180 ? h : w;
++	unsigned int dh = rotation % 180 ? w : h;
++	size_t ss = w * 4 + 12, ds = dw + 7;
++	u8 *src, *dst;
++	struct imx50_pxp_image im;
++	unsigned int x, y, sx, sy, expected, actual;
++	int ret;
++
++	src = kvmalloc(ss * h, GFP_KERNEL);
++	dst = kvmalloc(ds * dh, GFP_KERNEL);
++	if (!src || !dst) {
++		ret = -ENOMEM;
++		goto out;
++	}
++	memset(src, 0x5a, ss * h);
++	memset(dst, 0xa7, ds * dh);
++	for (y = 0; y < h; y++) {
++		for (x = 0; x < w; x++) {
++			u8 *q = src + y * ss + x * 4;
++
++			q[0] = x * 3 + seed;
++			q[1] = y * 7 + seed;
++			q[2] = x + y + seed;
++			q[3] = 0;
++		}
++		cond_resched();
++	}
++	im = (struct imx50_pxp_image) {
++		.src = src, .dst = dst, .src_size = ss * h, .dst_size = ds * dh,
++		.width = w, .height = h, .src_stride = ss, .dst_stride = ds,
++		.rotation = rotation,
++	};
++	ret = imx50_pxp_convert(c->pxp, &im);
++	if (ret)
++		goto out;
++	for (y = 0; y < dh; y++) {
++		for (x = 0; x < ds; x++) {
++			if (x >= dw) {
++				if (dst[y * ds + x] != 0xa7) {
++					ret = -EOVERFLOW;
++					goto out;
++				}
++				continue;
++			}
++			/* Inverse mapping, independent of the hardware DMA layout. */
++			switch (rotation) {
++			case 90:
++				sx = y;
++				sy = h - 1 - x;
++				break;
++			case 180:
++				sx = w - 1 - x;
++				sy = h - 1 - y;
++				break;
++			case 270:
++				sx = w - 1 - y;
++				sy = x;
++				break;
++			default:
++				sx = x;
++				sy = y;
++				break;
++			}
++			expected = (77 * src[sy * ss + sx * 4 + 2] +
++				    150 * src[sy * ss + sx * 4 + 1] +
++				    29 * src[sy * ss + sx * 4]) >> 8;
++			actual = dst[y * ds + x];
++			if (actual < expected || actual > expected + (expected != 255)) {
++				ret = -EILSEQ;
++				goto out;
++			}
++			if (actual != expected)
++				atomic_set(&c->max_error, 1);
++		}
++		cond_resched();
++	}
++	atomic_inc(&c->frames);
++	atomic_add(w * h, &c->pixels);
++out:
++	kvfree(src);
++	kvfree(dst);
++	return ret;
++}
++
++struct k4_pxp_thread {
++	struct k4_pxp_client *client;
++	struct completion done;
++	unsigned int seed;
++	int result;
++};
++
++static int k4_pxp_thread(void *data)
++{
++	struct k4_pxp_thread *t = data;
++	unsigned int i;
++
++	for (i = 0; i < 4; i++) {
++		t->result = k4_pxp_frame(t->client, 64, 48, t->seed + i, 0);
++		if (t->result)
++			break;
++	}
++	complete(&t->done);
++	return 0;
++}
++
++static int k4_pxp_suite(struct k4_pxp_client *c)
++{
++	static const unsigned int sizes[][2] = {
++		{8, 8}, {64, 48}, {800, 600}, {600, 800}, {800, 800},
++	};
++	struct k4_pxp_thread threads[2];
++	struct task_struct *task;
++	u8 src[256], dst[64];
++	struct imx50_pxp_image bad = {
++		.src = src, .dst = dst, .src_size = sizeof(src), .dst_size = sizeof(dst),
++		.width = 7, .height = 8, .src_stride = 32, .dst_stride = 8,
++	};
++	unsigned int i, launched = 0;
++	int ret;
++
++	if (imx50_pxp_convert(c->pxp, &bad) != -EINVAL)
++		return -EIO;
++	bad.width = 8;
++	bad.src_size--;
++	if (imx50_pxp_convert(c->pxp, &bad) != -EINVAL)
++		return -EIO;
++	for (i = 0; i < ARRAY_SIZE(sizes); i++) {
++		ret = k4_pxp_frame(c, sizes[i][0], sizes[i][1], i * 11, 0);
++		if (ret)
++			return ret;
++	}
++	ret = imx50_pxp_trim(c->pxp);
++	if (ret)
++		return ret;
++	ret = k4_pxp_frame(c, 64, 48, 73, 0);
++	if (ret)
++		return ret;
++	for (i = 0; i < ARRAY_SIZE(threads); i++) {
++		threads[i].client = c;
++		threads[i].seed = 101 + i * 23;
++		threads[i].result = -EINPROGRESS;
++		init_completion(&threads[i].done);
++		task = kthread_run(k4_pxp_thread, &threads[i], "pxp-client-%u", i);
++		if (IS_ERR(task)) {
++			ret = PTR_ERR(task);
++			break;
++		}
++		launched++;
++	}
++	/* Each worker's DMA wait is bounded; do not free its context while active. */
++	for (i = 0; i < launched; i++) {
++		wait_for_completion(&threads[i].done);
++		if (!ret)
++			ret = threads[i].result;
++	}
++	return ret;
++}
++
++static int k4_pxp_rotation_suite(struct k4_pxp_client *c, bool large)
++{
++	static const unsigned int sizes[][2] = {
++		{64, 48}, {800, 600}, {600, 800},
++	};
++	static const unsigned int large_sizes[][2] = {
++		{1024, 1024}, {2040, 8}, {8, 2040},
++	};
++	const unsigned int (*selected)[2] = large ? large_sizes : sizes;
++	unsigned int i, rotation;
++	int ret;
++
++	for (i = 0; i < ARRAY_SIZE(sizes); i++) {
++		for (rotation = 0; rotation < 360; rotation += 90) {
++			ret = k4_pxp_frame(c, selected[i][0], selected[i][1],
++					   13 + i * 7 + rotation / 90, rotation);
++			if (ret)
++				return ret;
++		}
++	}
++	return 0;
++}
++
++#if IS_ENABLED(CONFIG_K4_EPDC_IMAGE_TEST)
++#include "k4-epdc-image-test.h"
++#else
++static int k4_epdc_image_suite(struct k4_pxp_client *c)
++{
++	return -EOPNOTSUPP;
++}
++#endif
++
++static ssize_t run_store(struct device *dev, struct device_attribute *attr,
++			 const char *buf, size_t count)
++{
++	struct k4_pxp_client *c = dev_get_drvdata(dev);
++	bool rotation = sysfs_streq(buf, "rotate");
++	bool image = sysfs_streq(buf, "image");
++	bool large = sysfs_streq(buf, "large");
++	unsigned int frames = image ? 48 : (rotation || large) ? 12 : 14;
++	int ret, trim_ret;
++
++	if (!rotation && !image && !large && !sysfs_streq(buf, "1"))
++		return -EINVAL;
++	if (!mutex_trylock(&c->lock))
++		return -EBUSY;
++	c->attempted = true;
++	atomic_set(&c->frames, 0);
++	atomic_set(&c->pixels, 0);
++	atomic_set(&c->max_error, 0);
++	imx50_pxp_get_stats(c->pxp, &c->before);
++	if (image)
++		ret = k4_epdc_image_suite(c);
++	else
++		ret = rotation || large ? k4_pxp_rotation_suite(c, large) : k4_pxp_suite(c);
++	trim_ret = imx50_pxp_trim(c->pxp);
++	if (!ret)
++		ret = trim_ret;
++	imx50_pxp_get_stats(c->pxp, &c->after);
++	if (!ret && (c->after.completed - c->before.completed != frames ||
++		     c->after.irqs - c->before.irqs != frames ||
++		     c->after.allocations != c->after.releases || c->after.retained_bytes))
++		ret = -EIO;
++	c->result = ret;
++	mutex_unlock(&c->lock);
++	return ret ? ret : count;
++}
++static DEVICE_ATTR_WO(run);
++
++static ssize_t result_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++	struct k4_pxp_client *c = dev_get_drvdata(dev);
++	ssize_t n;
++
++	mutex_lock(&c->lock);
++	n = sysfs_emit(buf, "attempted=%u result=%d frames=%d pixels=%d max_error=%d\n"
++		       "completed=%llu irqs=%llu allocations=%llu releases=%llu retained=%zu fault=%d clocks_retained=%u park_error=%d\n",
++		       c->attempted, c->result, atomic_read(&c->frames), atomic_read(&c->pixels),
++		       atomic_read(&c->max_error), c->after.completed, c->after.irqs,
++		       c->after.allocations, c->after.releases, c->after.retained_bytes,
++		       c->after.fault, c->after.clocks_retained, c->after.park_error);
++	mutex_unlock(&c->lock);
++	return n;
++}
++static DEVICE_ATTR_RO(result);
++
++static struct attribute *k4_pxp_client_attrs[] = {
++	&dev_attr_run.attr, &dev_attr_result.attr, NULL,
++};
++ATTRIBUTE_GROUPS(k4_pxp_client);
++
++static int k4_pxp_client_probe(struct platform_device *pdev)
++{
++	struct k4_pxp_client *c;
++
++	c = devm_kzalloc(&pdev->dev, sizeof(*c), GFP_KERNEL);
++	if (!c)
++		return -ENOMEM;
++	c->pxp = devm_imx50_pxp_get(&pdev->dev, "pxp");
++	if (IS_ERR(c->pxp))
++		return dev_err_probe(&pdev->dev, PTR_ERR(c->pxp), "get PxP service\n");
++	mutex_init(&c->lock);
++	c->result = -ENODATA;
++	platform_set_drvdata(pdev, c);
++	return 0;
++}
++
++static const struct of_device_id k4_pxp_client_match[] = {
++	{ .compatible = "amazon,k4-pxp-client-test" }, { }
++};
++
++static struct platform_driver k4_pxp_client_driver = {
++	.probe = k4_pxp_client_probe,
++	.driver = {
++		.name = "k4-pxp-client-test",
++		.of_match_table = k4_pxp_client_match,
++		.dev_groups = k4_pxp_client_groups,
++		.suppress_bind_attrs = true,
++	},
++};
++builtin_platform_driver(k4_pxp_client_driver);
++MODULE_LICENSE("GPL");
+--- /dev/null
++++ b/drivers/misc/k4-debug/k4-pxp-dma-pattern.h
+@@ -0,0 +1,35 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef K4_PXP_DMA_PATTERN_H
++#define K4_PXP_DMA_PATTERN_H
++
++#define PXP_TEST_WIDTH 64
++#define PXP_TEST_HEIGHT 48
++#define PXP_TEST_PIXELS (PXP_TEST_WIDTH * PXP_TEST_HEIGHT)
++#define PXP_TEST_INPUT 4096
++#define PXP_TEST_OUTPUT 20480
++#define PXP_TEST_BYTES 28672
++
++static inline unsigned int pxp_test_rgb(unsigned int i)
++{
++	static const unsigned int colors[] = {
++		0, 0xffffff, 0xff0000, 0x00ff00, 0x0000ff,
++		0x00ffff, 0xff00ff, 0xffff00,
++	};
++	unsigned int x = i % PXP_TEST_WIDTH, y = i / PXP_TEST_WIDTH;
++	unsigned int r = (17 * x + 3 * y) & 255;
++	unsigned int g = (5 * x + 13 * y) & 255;
++	unsigned int b = (11 * x + 7 * y) & 255;
++
++	if (i < 8)
++		return colors[i];
++	if (y == PXP_TEST_HEIGHT - 1)
++		r = g = b = x * 4;
++	return (r << 16) | (g << 8) | b;
++}
++
++static inline unsigned int pxp_test_luma(unsigned int rgb)
++{
++	return (77 * ((rgb >> 16) & 255) + 150 * ((rgb >> 8) & 255) +
++		29 * (rgb & 255)) >> 8;
++}
++#endif
+--- /dev/null
++++ b/drivers/misc/k4-debug/k4-pxp-dma-test.h
+@@ -0,0 +1,222 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/* Included by the single, exclusive diagnostic driver; not a DMAengine API. */
++#include "k4-pxp-dma-pattern.h"
++
++static int k4_pxp_dma_test(struct k4_pxp_state *pxp)
++{
++	struct { u32 reg, value; } config[] = {
++		{ 0x000, 0x1080 }, /* RGB888 (32-bit unpacked) to MONOC8, IRQ masked */
++		{ 0x020, 0 }, { 0x030, 0 },
++		{ 0x040, (PXP_TEST_WIDTH << 12) | PXP_TEST_HEIGHT },
++		{ 0x050, 0 }, { 0x060, 0 }, { 0x070, 0 },
++		{ 0x080, ((PXP_TEST_WIDTH / 8) << 8) | (PXP_TEST_HEIGHT / 8) },
++		{ 0x090, 0 }, { 0x0a0, 0 }, { 0x0b0, 0x10001000 },
++		{ 0x0c0, 0 }, { 0x0d0, BIT(30) }, /* CSC1 bypass */
++		/* Do not write NEXT: even zero enqueues a command on i.MX50. */
++		{ 0x180, 0xffffff }, { 0x190, 0 }, /* disable source color key */
++		{ 0x220, 0 }, { 0x260, 0 }, { 0x2a0, 0 }, { 0x2e0, 0 },
++		{ 0x320, 0 }, { 0x360, 0 }, { 0x3a0, 0 }, { 0x3e0, 0 },
++		{ 0x400, 4 }, /* CSC2 RGB -> YUV, only Y is output */
++		{ 0x410, 0x0096004d }, { 0x420, 0x0000001d },
++		{ 0x430, 0 }, { 0x440, 0 }, { 0x450, 0 }, { 0x460, 0 },
++		{ 0x470, BIT(31) }, /* monochrome LUT bypass */
++	};
++	u32 value, idle_ctrl, pattern;
++	char mark[48];
++	unsigned int i;
++	bool touched = false;
++	int ret;
++
++	if (!pxp->allow_dma)
++		return -EOPNOTSUPP;
++	if (pxp->dma_attempted && (!pxp->allow_repeat || !pxp->use_irq ||
++	    pxp->configuration_only || pxp->dma_result || pxp->jobs_done >= 16))
++		return -EALREADY;
++	if (!pxp->reset_attempted || pxp->reset_result || pxp->park_result)
++		return -ENODATA;
++	idle_ctrl = pxp->dma_attempted ? pxp->dma_park : K4_PXP_GATE;
++	pattern = ((pxp->jobs_done * 37) & 255) * 0x010101;
++	snprintf(mark, sizeof(mark), "PXP DMA job %u begin", pxp->jobs_done);
++	ret = k4_ram_trace_mark(mark);
++	if (ret)
++		return ret;
++	pxp->dma_attempted = true;
++	pxp->dma_result = -EINPROGRESS;
++	pxp->dma_started = false;
++	pxp->dma_mismatches = pxp->dma_input_errors = pxp->dma_guard_errors = 0;
++	pxp->dma_max_error = 0;
++	ret = dma_set_mask_and_coherent(pxp->dev, DMA_BIT_MASK(32));
++	if (ret)
++		goto done;
++	/* Keep this bounded allocation until reboot, including every error path.
++	 * Do not infer that reset drains outstanding AXI writes and free it early.
++	 */
++	if (!pxp->arena)
++		pxp->arena = dma_alloc_coherent(pxp->dev, PXP_TEST_BYTES,
++						&pxp->arena_dma, GFP_KERNEL);
++	if (!pxp->arena) {
++		ret = -ENOMEM;
++		goto done;
++	}
++	if ((u64)pxp->arena_dma + PXP_TEST_BYTES - 1 > U32_MAX ||
++	    (pxp->arena_dma & 3)) {
++		ret = -ERANGE;
++		goto done;
++	}
++	memset(pxp->arena, 0xa5, PXP_TEST_BYTES);
++	for (i = 0; i < PXP_TEST_PIXELS; i++) {
++		u32 rgb = pxp_test_rgb(i) ^ pattern;
++		u8 *p = pxp->arena + PXP_TEST_INPUT + i * 4;
++
++		p[0] = rgb; p[1] = rgb >> 8; p[2] = rgb >> 16; p[3] = 0;
++	}
++	memset(pxp->arena + PXP_TEST_OUTPUT, 0xcc, PXP_TEST_PIXELS);
++	config[1].value = pxp->arena_dma + PXP_TEST_OUTPUT;
++	config[4].value = pxp->arena_dma + PXP_TEST_INPUT;
++	ret = k4_ram_trace_mark("PXP DMA buffers ready");
++	if (ret)
++		goto done;
++	if (clk_get_rate(pxp->clocks[1].clk) != 200000000) {
++		ret = -EINVAL;
++		goto done;
++	}
++	ret = clk_bulk_prepare_enable(ARRAY_SIZE(pxp->clocks), pxp->clocks);
++	if (ret)
++		goto done;
++	ret = k4_ram_trace_mark("PXP DMA preflight >");
++	if (ret)
++		goto out;
++	if (readl(pxp->base + K4_PXP_CTRL) != idle_ctrl ||
++	    (readl(pxp->base + K4_PXP_STAT) & GENMASK(3, 0)) ||
++	    readl(pxp->base + K4_PXP_NEXT)) {
++		ret = -EBUSY;
++		goto out;
++	}
++	ret = k4_ram_trace_mark("PXP DMA config >");
++	if (ret)
++		goto out;
++	touched = true;
++	/* Release the internal gate before programming fields in that domain. */
++	writel(K4_PXP_GATE, pxp->base + K4_PXP_CTRL_CLR);
++	ret = readl_poll_timeout(pxp->base + K4_PXP_CTRL, value,
++				value == (idle_ctrl & ~K4_PXP_GATE), 5, 1000);
++	pxp->dma_config_readback = value;
++	if (ret)
++		goto out;
++	for (i = 0; i < ARRAY_SIZE(config); i++) {
++		pxp->dma_config_reg = config[i].reg;
++		writel(config[i].value, pxp->base + config[i].reg);
++		value = readl(pxp->base + config[i].reg);
++		pxp->dma_config_readback = value;
++		if (value != config[i].value) {
++			ret = -EIO;
++			goto out;
++		}
++	}
++	/* Recheck after programming: no job or queued register reload is allowed. */
++	if (readl(pxp->base + K4_PXP_CTRL) != config[0].value ||
++	    (readl(pxp->base + K4_PXP_STAT) & GENMASK(3, 0)) ||
++	    readl(pxp->base + K4_PXP_NEXT)) {
++		ret = -EBUSY;
++		goto out;
++	}
++	ret = k4_ram_trace_mark("PXP DMA config <");
++	if (ret)
++		goto out;
++	if (pxp->configuration_only)
++		goto out;
++	if (pxp->use_irq) {
++		reinit_completion(&pxp->done);
++		WRITE_ONCE(pxp->irq_stat, 0);
++		enable_irq(pxp->irq);
++		pxp->irq_enabled = true;
++		writel(BIT(1), pxp->base + K4_PXP_CTRL_SET);
++	}
++	dma_wmb();
++	pxp->dma_started = true;
++	writel(BIT(0), pxp->base + K4_PXP_CTRL_SET);
++	ret = k4_ram_trace_mark("PXP DMA start < wait >");
++	if (ret)
++		goto out;
++	if (pxp->use_irq) {
++		ret = wait_for_completion_timeout(&pxp->done, msecs_to_jiffies(100)) ?
++			0 : -ETIMEDOUT;
++		value = READ_ONCE(pxp->irq_stat);
++	} else {
++		ret = readl_poll_timeout(pxp->base + K4_PXP_STAT, value,
++					 value & GENMASK(2, 0), 20, 100000);
++	}
++	pxp->dma_stat = value;
++	if (ret)
++		goto out;
++	if (!(value & BIT(0)) || (value & (BIT(1) | BIT(2) | BIT(3)))) {
++		ret = -EIO;
++		goto out;
++	}
++	ret = readl_poll_timeout(pxp->base + K4_PXP_CTRL, value,
++				 !(value & BIT(0)), 5, 1000);
++	pxp->dma_ctrl = value;
++	if (ret)
++		goto out;
++	ret = k4_ram_trace_mark("PXP DMA wait < verify >");
++	if (ret)
++		goto out;
++	dma_rmb();
++	for (i = 0; i < PXP_TEST_PIXELS; i++) {
++		u32 rgb = pxp_test_rgb(i) ^ pattern, expected = pxp_test_luma(rgb);
++		u8 *p = pxp->arena + PXP_TEST_INPUT + i * 4;
++		unsigned int actual = pxp->arena[PXP_TEST_OUTPUT + i];
++		unsigned int error = actual > expected ? actual - expected : expected - actual;
++
++		/* CSC quantization: accept floor or the next integer, not +/- 1. */
++		if (actual < expected || actual > expected + (expected != 255))
++			pxp->dma_mismatches++;
++		if (error > pxp->dma_max_error)
++			pxp->dma_max_error = error;
++		if (p[0] != (rgb & 255) || p[1] != ((rgb >> 8) & 255) ||
++		    p[2] != ((rgb >> 16) & 255) || p[3])
++			pxp->dma_input_errors++;
++	}
++	for (i = 0; i < PXP_TEST_BYTES; i++) {
++		if (i >= PXP_TEST_INPUT && i < PXP_TEST_INPUT + PXP_TEST_PIXELS * 4)
++			continue;
++		if (i >= PXP_TEST_OUTPUT && i < PXP_TEST_OUTPUT + PXP_TEST_PIXELS)
++			continue;
++		if (pxp->arena[i] != 0xa5)
++			pxp->dma_guard_errors++;
++	}
++	ret = pxp->dma_mismatches || pxp->dma_input_errors || pxp->dma_guard_errors ?
++		-EILSEQ : 0;
++out:
++	if (pxp->irq_enabled) {
++		writel(BIT(1), pxp->base + K4_PXP_CTRL_CLR);
++		disable_irq(pxp->irq); /* Synchronize the handler before gating clocks. */
++		pxp->irq_enabled = false;
++		if (!ret && (readl(pxp->base + K4_PXP_STAT) & GENMASK(3, 0)))
++			ret = -EIO;
++	}
++	if (touched) {
++		/* No start (or verified completion): gate the idle block. Keep reset
++		 * asserted only for an uncertain/failed in-flight DMA operation.
++		 */
++		u32 park = pxp->dma_started && ret ? K4_PXP_RESET | K4_PXP_GATE :
++			K4_PXP_GATE;
++
++		k4_ram_trace_mark("PXP DMA park >");
++		writel(park, pxp->base + K4_PXP_CTRL_SET);
++		pxp->dma_park_result = readl_poll_timeout(pxp->base + K4_PXP_CTRL,
++			value, (value & (K4_PXP_RESET | K4_PXP_GATE | BIT(0))) ==
++			park, 5, 1000);
++		pxp->dma_park = value;
++		if (!ret)
++			ret = pxp->dma_park_result;
++		k4_ram_trace_mark("PXP DMA park <");
++	}
++	clk_bulk_disable_unprepare(ARRAY_SIZE(pxp->clocks), pxp->clocks);
++done:
++	pxp->dma_result = ret;
++	if (!ret && pxp->dma_started)
++		pxp->jobs_done++;
++	k4_ram_trace_mark(ret ? "PXP DMA error" : "PXP DMA done");
++	return ret;
++}
+--- /dev/null
++++ b/drivers/misc/k4-debug/k4-pxp-state.c
+@@ -0,0 +1,397 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* Explicit i.MX50 ePXP state capture and separately opted-in reset testing. */
++#include <linux/clk.h>
++#include <linux/completion.h>
++#include <linux/dma-mapping.h>
++#include <linux/interrupt.h>
++#include <linux/io.h>
++#include <linux/iopoll.h>
++#include <linux/k4_ram_trace.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++
++#define K4_PXP_CTRL 0x000
++#define K4_PXP_STAT 0x010
++#define K4_PXP_STAT_CLR 0x018
++#define K4_PXP_CTRL_SET 0x004
++#define K4_PXP_CTRL_CLR 0x008
++#define K4_PXP_NEXT 0x100
++#define K4_PXP_RESET BIT(31)
++#define K4_PXP_GATE BIT(30)
++#define K4_PXP_ACTIVE (BIT(28) | BIT(3) | BIT(0))
++
++struct k4_pxp_state {
++	void __iomem *base;
++	struct clk_bulk_data clocks[2];
++	struct mutex lock;
++	u32 ctrl, stat;
++	int result;
++	bool attempted;
++	bool allow_reset, reset_attempted;
++	int reset_result, park_result;
++	u32 reset_ctrl, reset_stat, reset_next, park_ctrl;
++	struct device *dev;
++	bool allow_dma, dma_attempted;
++	bool configuration_only, dma_started;
++	int dma_result, dma_park_result;
++	u8 *arena;
++	dma_addr_t arena_dma;
++	u32 dma_ctrl, dma_stat, dma_park, dma_config_reg;
++	u32 dma_config_readback;
++	u32 dma_mismatches, dma_input_errors, dma_guard_errors, dma_max_error;
++	bool use_irq, allow_repeat, irq_enabled;
++	int irq;
++	struct completion done;
++	u32 irq_stat, irq_count, jobs_done;
++};
++
++/* The line is enabled only while clocks are held by the job owner. */
++static irqreturn_t k4_pxp_irq(int irq, void *data)
++{
++	struct k4_pxp_state *pxp = data;
++	u32 stat = readl(pxp->base + K4_PXP_STAT);
++
++	if (!(stat & GENMASK(3, 0)))
++		return IRQ_NONE;
++	/* Mask the source before acknowledging this job, avoiding IRQ storms. */
++	writel(BIT(1), pxp->base + K4_PXP_CTRL_CLR);
++	writel(stat & GENMASK(3, 0), pxp->base + K4_PXP_STAT_CLR);
++	readl(pxp->base + K4_PXP_STAT);
++	WRITE_ONCE(pxp->irq_stat, stat);
++	pxp->irq_count++;
++	complete(&pxp->done);
++	return IRQ_HANDLED;
++}
++
++/* Caller holds lock. Software cannot time out a stalled bus transaction. */
++static int k4_pxp_capture(struct k4_pxp_state *pxp)
++{
++	int ret;
++
++	if (pxp->attempted)
++		return -EALREADY;
++	ret = k4_ram_trace_mark("PXP CAPTURE begin");
++	if (ret)
++		return ret;
++	pxp->attempted = true;
++	pxp->result = -EINPROGRESS;
++	if (clk_get_rate(pxp->clocks[1].clk) != 200000000) {
++		ret = -EINVAL;
++		goto done;
++	}
++	ret = clk_bulk_prepare_enable(ARRAY_SIZE(pxp->clocks), pxp->clocks);
++	if (ret)
++		goto done;
++	ret = k4_ram_trace_mark("PXP CTRL >");
++	if (ret)
++		goto disable;
++	pxp->ctrl = readl(pxp->base + K4_PXP_CTRL);
++	ret = k4_ram_trace_mark("PXP CTRL <");
++	if (ret)
++		goto disable;
++	ret = k4_ram_trace_mark("PXP STAT >");
++	if (ret)
++		goto disable;
++	pxp->stat = readl(pxp->base + K4_PXP_STAT);
++	ret = k4_ram_trace_mark("PXP STAT <");
++disable:
++	clk_bulk_disable_unprepare(ARRAY_SIZE(pxp->clocks), pxp->clocks);
++done:
++	pxp->result = ret;
++	k4_ram_trace_mark(ret ? "PXP CAPTURE error" : "PXP CAPTURE done");
++	return ret;
++}
++
++static ssize_t capture_store(struct device *dev, struct device_attribute *attr,
++			     const char *buf, size_t count)
++{
++	struct k4_pxp_state *pxp = dev_get_drvdata(dev);
++	int ret;
++
++	if (!sysfs_streq(buf, "1"))
++		return -EINVAL;
++	ret = mutex_lock_interruptible(&pxp->lock);
++	if (ret)
++		return ret;
++	ret = k4_pxp_capture(pxp);
++	mutex_unlock(&pxp->lock);
++	if (ret)
++		return ret;
++	return count;
++}
++static DEVICE_ATTR_WO(capture);
++
++static ssize_t snapshot_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++	struct k4_pxp_state *pxp = dev_get_drvdata(dev);
++	ssize_t ret;
++
++	mutex_lock(&pxp->lock);
++	ret = sysfs_emit(buf, "attempted=%u result=%d ctrl=%08x stat=%08x\n",
++			pxp->attempted, pxp->result, pxp->ctrl, pxp->stat);
++	mutex_unlock(&pxp->lock);
++	return ret;
++}
++static DEVICE_ATTR_RO(snapshot);
++
++/* No buffers or DMA commands exist here. Reset deliberately discards old state. */
++static int k4_pxp_reset(struct k4_pxp_state *pxp)
++{
++	u32 ctrl, stat, next, value;
++	bool touched = false;
++	int ret;
++
++	if (!pxp->allow_reset)
++		return -EOPNOTSUPP;
++	if (pxp->reset_attempted)
++		return -EALREADY;
++	if (!pxp->attempted || pxp->result)
++		return -ENODATA;
++	ret = k4_ram_trace_mark("PXP RESET begin");
++	if (ret)
++		return ret;
++	pxp->reset_attempted = true;
++	pxp->reset_result = -EINPROGRESS;
++	if (clk_get_rate(pxp->clocks[1].clk) != 200000000) {
++		ret = -EINVAL;
++		goto done;
++	}
++	ret = clk_bulk_prepare_enable(ARRAY_SIZE(pxp->clocks), pxp->clocks);
++	if (ret)
++		goto done;
++	ret = k4_ram_trace_mark("PXP RESET CTRL >");
++	if (ret)
++		goto out;
++	ctrl = readl(pxp->base + K4_PXP_CTRL);
++	ret = k4_ram_trace_mark("PXP RESET CTRL < STAT >");
++	if (ret)
++		goto out;
++	stat = readl(pxp->base + K4_PXP_STAT);
++	ret = k4_ram_trace_mark("PXP RESET STAT < NEXT >");
++	if (ret)
++		goto out;
++	next = readl(pxp->base + K4_PXP_NEXT);
++	ret = k4_ram_trace_mark("PXP RESET NEXT <");
++	if (ret)
++		goto out;
++	/* Refuse a running/repeating/handshaking engine or queued command. */
++	if ((ctrl & K4_PXP_ACTIVE) || (next & BIT(0))) {
++		ret = -EBUSY;
++		goto out;
++	}
++	if (stat & GENMASK(3, 0)) {
++		ret = -EIO;
++		goto out;
++	}
++	ret = k4_ram_trace_mark("PXP RESET assert >");
++	if (ret)
++		goto out;
++	touched = true;
++	writel(K4_PXP_RESET, pxp->base + K4_PXP_CTRL_SET);
++	ret = readl_poll_timeout(pxp->base + K4_PXP_CTRL, value,
++		(value & (K4_PXP_RESET | K4_PXP_GATE)) ==
++		(K4_PXP_RESET | K4_PXP_GATE), 5, 1000);
++	if (ret)
++		goto out;
++	ret = k4_ram_trace_mark("PXP RESET assert < release >");
++	if (ret)
++		goto out;
++	writel(K4_PXP_RESET, pxp->base + K4_PXP_CTRL_CLR);
++	ret = readl_poll_timeout(pxp->base + K4_PXP_CTRL, value,
++				 !(value & K4_PXP_RESET), 5, 1000);
++	if (ret)
++		goto out;
++	writel(K4_PXP_GATE, pxp->base + K4_PXP_CTRL_CLR);
++	ret = readl_poll_timeout(pxp->base + K4_PXP_CTRL, value,
++				 !(value & (K4_PXP_RESET | K4_PXP_GATE)), 5, 1000);
++	if (ret)
++		goto out;
++	pxp->reset_ctrl = value;
++	ret = k4_ram_trace_mark("PXP RESET release < STAT >");
++	if (ret)
++		goto out;
++	pxp->reset_stat = readl(pxp->base + K4_PXP_STAT);
++	ret = k4_ram_trace_mark("PXP RESET STAT < NEXT >");
++	if (ret)
++		goto out;
++	pxp->reset_next = readl(pxp->base + K4_PXP_NEXT);
++	ret = k4_ram_trace_mark("PXP RESET NEXT < verified");
++	if (ret)
++		goto out;
++	if (pxp->reset_ctrl || pxp->reset_stat || pxp->reset_next)
++		ret = -EIO;
++out:
++	if (touched) {
++		/* Try to retain reset on error; report failed parking separately. */
++		k4_ram_trace_mark("PXP RESET park >");
++		writel(K4_PXP_GATE | (ret ? K4_PXP_RESET : 0),
++		       pxp->base + K4_PXP_CTRL_SET);
++		pxp->park_result = readl_poll_timeout(pxp->base + K4_PXP_CTRL,
++			value, (value & (K4_PXP_RESET | K4_PXP_GATE)) ==
++			(K4_PXP_GATE | (ret ? K4_PXP_RESET : 0)), 5, 1000);
++		pxp->park_ctrl = value;
++		k4_ram_trace_mark("PXP RESET park <");
++		if (!ret)
++			ret = pxp->park_result;
++	}
++	clk_bulk_disable_unprepare(ARRAY_SIZE(pxp->clocks), pxp->clocks);
++done:
++	pxp->reset_result = ret;
++	k4_ram_trace_mark(ret ? "PXP RESET error" : "PXP RESET done");
++	return ret;
++}
++
++static ssize_t reset_store(struct device *dev, struct device_attribute *attr,
++			   const char *buf, size_t count)
++{
++	struct k4_pxp_state *pxp = dev_get_drvdata(dev);
++	int ret;
++
++	if (!sysfs_streq(buf, "1"))
++		return -EINVAL;
++	ret = mutex_lock_interruptible(&pxp->lock);
++	if (ret)
++		return ret;
++	ret = k4_pxp_reset(pxp);
++	mutex_unlock(&pxp->lock);
++	return ret ? ret : count;
++}
++static DEVICE_ATTR_WO(reset);
++
++static ssize_t reset_snapshot_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++	struct k4_pxp_state *pxp = dev_get_drvdata(dev);
++	ssize_t ret;
++
++	mutex_lock(&pxp->lock);
++	ret = sysfs_emit(buf,
++		"allowed=%u attempted=%u result=%d ctrl=%08x stat=%08x next=%08x "
++		"park=%08x park_result=%d\n",
++		pxp->allow_reset, pxp->reset_attempted, pxp->reset_result,
++		pxp->reset_ctrl, pxp->reset_stat, pxp->reset_next,
++		pxp->park_ctrl, pxp->park_result);
++	mutex_unlock(&pxp->lock);
++	return ret;
++}
++static DEVICE_ATTR_RO(reset_snapshot);
++
++#include "k4-pxp-dma-test.h"
++
++static ssize_t dma_test_store(struct device *dev, struct device_attribute *attr,
++			      const char *buf, size_t count)
++{
++	struct k4_pxp_state *pxp = dev_get_drvdata(dev);
++	int ret;
++
++	if (!sysfs_streq(buf, "1"))
++		return -EINVAL;
++	ret = mutex_lock_interruptible(&pxp->lock);
++	if (ret)
++		return ret;
++	ret = k4_pxp_dma_test(pxp);
++	mutex_unlock(&pxp->lock);
++	return ret ? ret : count;
++}
++static DEVICE_ATTR_WO(dma_test);
++
++static ssize_t dma_snapshot_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++	struct k4_pxp_state *pxp = dev_get_drvdata(dev);
++	ssize_t ret;
++
++	mutex_lock(&pxp->lock);
++	ret = sysfs_emit(buf,
++		"allowed=%u attempted=%u result=%d ctrl=%08x stat=%08x park=%08x park_result=%d\n"
++		"mismatches=%u input_errors=%u guard_errors=%u max_error=%u last_config=%03x readback=%08x retained=%u\n",
++		pxp->allow_dma, pxp->dma_attempted, pxp->dma_result,
++		pxp->dma_ctrl, pxp->dma_stat, pxp->dma_park, pxp->dma_park_result,
++		pxp->dma_mismatches, pxp->dma_input_errors, pxp->dma_guard_errors,
++		pxp->dma_max_error, pxp->dma_config_reg, pxp->dma_config_readback,
++		!!pxp->arena);
++	ret += sysfs_emit_at(buf, ret, "configuration_only=%u started=%u\n",
++			    pxp->configuration_only, pxp->dma_started);
++	ret += sysfs_emit_at(buf, ret, "use_irq=%u irq_count=%u jobs_done=%u repeat=%u\n",
++			    pxp->use_irq, pxp->irq_count, pxp->jobs_done,
++			    pxp->allow_repeat);
++	mutex_unlock(&pxp->lock);
++	return ret;
++}
++static DEVICE_ATTR_RO(dma_snapshot);
++
++static struct attribute *k4_pxp_attrs[] = {
++	&dev_attr_capture.attr, &dev_attr_snapshot.attr,
++	&dev_attr_reset.attr, &dev_attr_reset_snapshot.attr,
++	&dev_attr_dma_test.attr, &dev_attr_dma_snapshot.attr, NULL,
++};
++ATTRIBUTE_GROUPS(k4_pxp);
++
++static int k4_pxp_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct k4_pxp_state *pxp;
++	struct resource *res;
++	int ret;
++
++	if (!of_machine_is_compatible("amazon,kindle-4"))
++		return -ENODEV;
++	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++	if (!res || res->start != 0x4100c000 || resource_size(res) != 0x2000)
++		return -EINVAL;
++	pxp = devm_kzalloc(dev, sizeof(*pxp), GFP_KERNEL);
++	if (!pxp)
++		return -ENOMEM;
++	pxp->base = devm_ioremap_resource(dev, res);
++	if (IS_ERR(pxp->base))
++		return PTR_ERR(pxp->base);
++	pxp->clocks[0].id = "apbh";
++	pxp->clocks[1].id = "pxp_axi";
++	ret = devm_clk_bulk_get(dev, ARRAY_SIZE(pxp->clocks), pxp->clocks);
++	if (ret)
++		return dev_err_probe(dev, ret, "get register-access clocks\n");
++	mutex_init(&pxp->lock);
++	pxp->result = -ENODATA;
++	pxp->reset_result = -ENODATA;
++	pxp->park_result = -ENODATA;
++	pxp->allow_reset = of_property_read_bool(dev->of_node, "amazon,allow-reset-test");
++	pxp->allow_dma = of_property_read_bool(dev->of_node, "amazon,allow-dma-test");
++	pxp->configuration_only = of_property_read_bool(dev->of_node,
++						      "amazon,configuration-only");
++	pxp->use_irq = of_property_read_bool(dev->of_node, "amazon,irq-test");
++	pxp->allow_repeat = of_property_read_bool(dev->of_node, "amazon,repeat-test");
++	if (pxp->use_irq) {
++		pxp->irq = platform_get_irq(pdev, 0);
++		if (pxp->irq < 0)
++			return pxp->irq;
++		init_completion(&pxp->done);
++		ret = devm_request_irq(dev, pxp->irq, k4_pxp_irq, IRQF_NO_AUTOEN,
++				       "k4-pxp-job", pxp);
++		if (ret)
++			return dev_err_probe(dev, ret, "request job interrupt\n");
++	}
++	pxp->dev = dev;
++	pxp->dma_result = -ENODATA;
++	pxp->dma_park_result = -ENODATA;
++	platform_set_drvdata(pdev, pxp);
++	dev_info(dev, "armed only: reset allowed=%u, DMA test allowed=%u\n",
++		 pxp->allow_reset, pxp->allow_dma);
++	return 0;
++}
++
++static const struct of_device_id k4_pxp_match[] = {
++	{ .compatible = "amazon,k4-pxp-state-probe" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, k4_pxp_match);
++static struct platform_driver k4_pxp_driver = {
++	.probe = k4_pxp_probe,
++	.driver = {
++		.name = "k4-pxp-state",
++		.of_match_table = k4_pxp_match,
++		.dev_groups = k4_pxp_groups,
++		.suppress_bind_attrs = true,
++	},
++};
++builtin_platform_driver(k4_pxp_driver);
++MODULE_LICENSE("GPL");
+--- a/drivers/mmc/core/pwrseq_simple.c
++++ b/drivers/mmc/core/pwrseq_simple.c
+@@ -27,8 +27,31 @@
+ 
+ #include "pwrseq.h"
+ 
++#ifdef CONFIG_K4_DIAGNOSTICS
++static bool k4_diagnostic_snapshot;
++module_param(k4_diagnostic_snapshot, bool, 0444);
++static unsigned int k4_diagnostic_cycle_ms, k4_cycle_epoch;
++static int k4_cycle_set(const char *val, const struct kernel_param *kp)
++{
++	unsigned int ms;
++	int ret = kstrtouint(val, 0, &ms);
++	if (ret || (ms && (ms < 100 || ms > 5000)))
++		return ret ?: -EINVAL;
++	WRITE_ONCE(k4_diagnostic_cycle_ms, ms);
++	if (ms)
++		WRITE_ONCE(k4_cycle_epoch, k4_cycle_epoch + 1);
++	return 0;
++}
++static const struct kernel_param_ops k4_cycle_ops = {
++	.set = k4_cycle_set, .get = param_get_uint,
++};
++module_param_cb(k4_diagnostic_cycle_ms, &k4_cycle_ops, &k4_diagnostic_cycle_ms, 0644);
++MODULE_PARM_DESC(k4_diagnostic_cycle_ms, "RAM diagnostic only: one GPIO low hold per write, 100..5000ms; zero disables");
++
++#else
+ static const bool k4_diagnostic_snapshot;
+ static const unsigned int k4_diagnostic_cycle_ms, k4_cycle_epoch;
++#endif
+ 
+ struct mmc_pwrseq_simple {
+ 	bool retain_board_power, cycle_active;
+@@ -104,6 +127,29 @@
+ 	mutex_unlock(&p->diag_lock);
+ #endif
+ }
++
++#ifdef CONFIG_K4_DIAGNOSTICS
++static ssize_t pmic_snapshot_show(struct device *dev,
++				 struct device_attribute *attr, char *buf)
++{
++	struct mmc_pwrseq_simple *p = dev_get_drvdata(dev);
++	int n = 0, phase, i;
++
++	mutex_lock(&p->diag_lock);
++	for (phase = 0; phase < 2; phase++) {
++		n += sysfs_emit_at(buf, n, "phase=%s ns=%llu count=%u error=%d\n",
++			phase ? "first_power_off" : "first_power_on", p->diag_ns[phase],
++			p->diag_count[phase], p->diag_error[phase]);
++		for (i = 0; i < p->diag_count[phase]; i++)
++			n += sysfs_emit_at(buf, n, "PMIC_%02d=%06x\n", k4_pmic_config_regs[i], p->diag_regs[phase][i]);
++	}
++	mutex_unlock(&p->diag_lock);
++	return n;
++}
++static DEVICE_ATTR_RO(pmic_snapshot);
++static struct attribute *k4_diag_attrs[] = { &dev_attr_pmic_snapshot.attr, NULL };
++ATTRIBUTE_GROUPS(k4_diag);
++#endif
+ 
+ #if IS_REACHABLE(CONFIG_MFD_MC13XXX) && IS_REACHABLE(CONFIG_SPI)
+ static void k4_put_pmic_device(void *data) { put_device(data); }
+@@ -305,7 +351,9 @@
+ 	.driver = {
+ 		.name = "pwrseq_simple",
+ 		.of_match_table = mmc_pwrseq_simple_of_match,
+-
++#ifdef CONFIG_K4_DIAGNOSTICS
++		.dev_groups = k4_diag_groups,
++#endif
+ 	},
+ };
+ 
+--- a/drivers/mmc/core/sdio_ops.c
++++ b/drivers/mmc/core/sdio_ops.c
+@@ -16,7 +16,15 @@
+ #include "core.h"
+ #include "sdio_ops.h"
+ 
++#ifdef CONFIG_K4_DIAGNOSTICS
++/* Opt-in boot diagnostics; do not change card commands or controller state. */
++static bool sdio_init_diag;
++module_param(sdio_init_diag, bool, 0444);
++MODULE_PARM_DESC(sdio_init_diag, "Log early SDIO CMD52 controls and failures");
++
++#else
+ #define sdio_init_diag false
++#endif
+ 
+ int mmc_send_io_op_cond(struct mmc_host *host, u32 ocr, u32 *rocr)
+ {
+--- a/drivers/mmc/host/sdhci-esdhc-imx.c
++++ b/drivers/mmc/host/sdhci-esdhc-imx.c
+@@ -336,9 +336,62 @@
+ 	.quirks = SDHCI_QUIRK_NO_LED,
+ };
+ 
++#ifdef CONFIG_K4_DIAGNOSTICS
++/* Cache existing clock-programming observations; never read MMIO from sysfs. */
++static bool clock_snapshot;
++module_param(clock_snapshot, bool, 0444);
++MODULE_PARM_DESC(clock_snapshot, "Cache eSDHC clock divider diagnostics");
++
++/* Diagnostic mode is sampled at probe; writes do not alter a live host. */
++static char *clock_test_host;
++module_param(clock_test_host, charp, 0444);
++MODULE_PARM_DESC(clock_test_host, "i.MX50 platform host for clock diagnostics");
++
++static bool k4_diagnostic_legacy25;
++module_param(k4_diagnostic_legacy25, bool, 0644);
++MODULE_PARM_DESC(k4_diagnostic_legacy25, "RAM diagnostic: next K4 SDIO probe caps at 25MHz and disables HS");
++static unsigned int clock_test_mode;
++
++static int esdhc_clock_test_set(const char *val, const struct kernel_param *kp)
++{
++	unsigned int mode;
++	int ret;
++
++	ret = kstrtouint(val, 0, &mode);
++	if (ret)
++		return ret;
++	if (mode > 7)
++		return -EINVAL;
++
++	WRITE_ONCE(*(unsigned int *)kp->arg, mode);
++	return 0;
++}
++
++static const struct kernel_param_ops esdhc_clock_test_ops = {
++	.set = esdhc_clock_test_set,
++	.get = param_get_uint,
++};
++module_param_cb(clock_test_mode, &esdhc_clock_test_ops, &clock_test_mode, 0644);
++MODULE_PARM_DESC(clock_test_mode, "Next probe: bit0 predivide by 2, bit1 wait 10ms, bit2 gate SDCLKEN");
++
++static unsigned int esdhc_clock_test_select(struct device *dev, bool imx50)
++{
++	if (!clock_snapshot || !imx50 || !clock_test_host ||
++	    strcmp(dev_name(dev), clock_test_host))
++		return 0;
++
++	if ((READ_ONCE(clock_test_mode) & BIT(2)) &&
++	    strcmp(dev_name(dev), "50008000.mmc"))
++		return 0;
++
++	return READ_ONCE(clock_test_mode);
++}
++
++#else
+ static const bool clock_snapshot;
+ static const bool k4_diagnostic_legacy25;
+ static unsigned int esdhc_clock_test_select(struct device *dev, bool imx50) { return 0; }
++#endif
+ 
+ struct esdhc_clock_snapshot {
+ 	u32 samples;
+@@ -1864,6 +1917,7 @@
+ 		dev_err(mmc_dev(host->mmc),
+ 			"failed to exit halt state when enable CQE\n");
+ 
++
+ 	sdhci_cqe_enable(mmc);
+ }
+ 
+--- a/drivers/net/wireless/ath/ath6kl/core.c
++++ b/drivers/net/wireless/ath/ath6kl/core.c
+@@ -50,6 +50,7 @@
+ MODULE_PARM_DESC(heart_beat_poll,
+ 		 "Enable fw error detection periodic polling in msecs - Also set recovery_enable for this to be effective");
+ 
++
+ void ath6kl_core_tx_complete(struct ath6kl *ar, struct sk_buff *skb)
+ {
+ 	ath6kl_htc_tx_complete(ar, skb);
+--- a/drivers/net/wireless/ath/ath6kl/init.c
++++ b/drivers/net/wireless/ath/ath6kl/init.c
+@@ -214,6 +214,7 @@
+  * it sends a new connect event
+  */
+ #define WLAN_CONFIG_DISCONNECT_TIMEOUT 10
++
+ 
+ #define ATH6KL_DATA_OFFSET    64
+ struct sk_buff *ath6kl_buf_alloc(int size)
+@@ -1650,6 +1651,7 @@
+ 
+ 	return NULL;
+ }
++
+ 
+ static const struct fw_capa_str_map {
+ 	int id;
+--- a/drivers/power/reset/k4-mc13892-restart.c
++++ b/drivers/power/reset/k4-mc13892-restart.c
+@@ -10,6 +10,7 @@
+ #include <linux/of_address.h>
+ #include <linux/io.h>
+ #include <dt-bindings/gpio/gpio.h>
++#include <linux/k4_ram_trace.h>
+ #include <linux/pinctrl/consumer.h>
+ #include <linux/platform_device.h>
+ #include <linux/reboot.h>
+@@ -164,6 +165,7 @@
+ 
+ 	if (k->armed || k->gpio)
+ 		return -EBUSY;
++	k4_ram_trace_mark("K4 restart prepare begin");
+ 	ret = k4_restart_snapshot(k);
+ 	if (ret)
+ 		return ret;
+@@ -185,6 +187,7 @@
+ 		ret = -EIO;
+ 		goto fail;
+ 	}
++	k4_ram_trace_mark("K4 restart alarm ready");
+ 	k->mema_changed = true;
+ 	ret = k4_restart_rmw(k, K4_MEMA, K4_REBOOT_FLAG, K4_REBOOT_FLAG);
+ 	if (ret)
+@@ -196,6 +199,7 @@
+ 	/* Request only now, after the power-on alarm is verified. GPIO request
+ 	 * may switch mux on some pinctrl implementations, so it must not probe.
+ 	 */
++	k4_ram_trace_mark("K4 restart fields ready");
+ 	k->gpio = gpiod_get(k->dev, "reset", GPIOD_OUT_LOW);
+ 	if (IS_ERR(k->gpio)) {
+ 		ret = PTR_ERR(k->gpio);
+@@ -219,9 +223,11 @@
+ 	}
+ 	/* RTC has whole-second granularity: stop before earliest alarm expiry. */
+ 	k->deadline_ns = ktime_get_boottime_ns() + (remaining - 1) * NSEC_PER_SEC;
++	k4_ram_trace_mark("K4 restart GPIO ready");
+ 	k->armed = true;
+ 	return 0;
+ fail:
++	k4_ram_trace_mark("K4 restart prepare failed");
+ 	k4_restart_rollback(k);
+ 	return ret;
+ }
+@@ -232,6 +238,7 @@
+ 
+ 	/* SPI/RTC preparation completed in process context. No sleeping here. */
+ 	if (k->armed && ktime_get_boottime_ns() < k->deadline_ns) {
++		k4_ram_trace_mark("K4 shutdown timeout");
+ 		pr_emerg("K4 prepared shutdown timed out; emergency restart\n");
+ 		emergency_restart(); /* ARM restart chain, bypasses device_shutdown(). */
+ 	}
+@@ -259,6 +266,7 @@
+ 			dev_info(k->dev, "RAM shutdown recovery deadline %u ms\n", ms);
+ 			if (READ_ONCE(ram_shutdown_stall_ms) &&
+ 			    READ_ONCE(ram_shutdown_stall_ms) <= 5000) {
++				k4_ram_trace_mark("K4 shutdown stall test");
+ 				msleep(READ_ONCE(ram_shutdown_stall_ms));
+ 			}
+ 		}
+@@ -271,11 +279,13 @@
+ 	struct k4_restart *k = container_of(nb, struct k4_restart, restart_nb);
+ 
+ 	if (!k->armed || ktime_get_boottime_ns() >= k->deadline_ns) {
++		k4_ram_trace_mark("K4 restart not armed or expired");
+ 		pr_emerg("K4 board restart unavailable/expired; internal fallback\n");
+ 		return NOTIFY_DONE;
+ 	}
+ 	/* Only non-sleeping GPIO here; all SPI/RTC/pinctrl work was prepared. */
+ 	pr_emerg("K4 board restart: asserting WDI low\n");
++	k4_ram_trace_mark("K4 restart WDI assert");
+ 	gpiod_set_value(k->gpio, 1);
+ 	mdelay(500);
+ 	pr_emerg("K4 board restart did not remove power; internal fallback\n");
+--- a/drivers/power/supply/k4-mc13892-charge-monitor.c
++++ b/drivers/power/supply/k4-mc13892-charge-monitor.c
+@@ -125,6 +125,7 @@
+ }
+ static DEVICE_ATTR_RO(registers_all_raw);
+ 
++
+ /* Configuration-only audit. ADC2 reads can advance ADA pointers; reserved,
+  * data, test/trim and interrupt status registers are deliberately excluded.
+  */
+--- a/drivers/regulator/k4-papyrus.c
++++ b/drivers/regulator/k4-papyrus.c
+@@ -5,6 +5,7 @@
+ #include <linux/hwmon.h>
+ #include <linux/i2c.h>
+ #include <linux/interrupt.h>
++#include <linux/k4_ram_trace.h>
+ #include <linux/k4-papyrus.h>
+ #include <linux/module.h>
+ #include <linux/k4-provider.h>
+@@ -137,6 +138,8 @@
+ static int papyrus_sleep(struct k4_papyrus_temp *p)
+ {
+ 	int wake, vcom, ret;
++
++	k4_ram_trace_mark("Papyrus sleep >");
+ 	gpiod_set_value_cansleep(p->vcom, 0);
+ 	gpiod_set_value_cansleep(p->wakeup, 0);
+ 	p->awake = p->display_on = p->vcom_on = false;
+@@ -153,12 +156,15 @@
+ 		dev_err_ratelimited(&p->client->dev,
+ 			"sleep controls WAKEUP=%d VCOM=%d error=%d\n",
+ 			wake, vcom, ret);
++	k4_ram_trace_mark("Papyrus sleep <");
+ 	return ret;
+ }
+ 
+ static int papyrus_off(struct k4_papyrus_temp *p)
+ {
+ 	int ret = 0, fallback;
++
++	k4_ram_trace_mark("Papyrus standby >");
+ 	gpiod_set_value_cansleep(p->vcom, 0);
+ 	p->vcom_on = false;
+ 	if (p->awake) {
+@@ -175,6 +181,7 @@
+ 	}
+ 	p->display_on = false;
+ 	p->shutdown_error = ret;
++	k4_ram_trace_mark(ret ? "Papyrus off error" : "Papyrus standby <");
+ 	return ret;
+ }
+ 
+@@ -211,6 +218,7 @@
+ 		return -EBUSY;
+ 	if (p->awake)
+ 		return papyrus_power_state(p);
++	k4_ram_trace_mark("Papyrus wake >");
+ 	gpiod_set_value_cansleep(p->vcom, 0);
+ 	gpiod_set_value_cansleep(p->wakeup, 1);
+ 	p->awake = true;
+@@ -230,6 +238,7 @@
+ 		if (ret)
+ 			goto fail;
+ 	}
++	k4_ram_trace_mark("Papyrus profile <");
+ 	return 0;
+ fail:
+ 	papyrus_sleep(p);
+@@ -265,12 +274,14 @@
+ 			PAPYRUS_ACTIVE | PAPYRUS_V3P3 | PAPYRUS_RAILS);
+ 	if (ret < 0)
+ 		goto fail;
++	k4_ram_trace_mark("Papyrus PGOOD >");
+ 	ret = papyrus_wait_power(p, true);
+ 	if (ret)
+ 		goto fail;
+ 	p->display_on = true;
+ 	p->power_error = p->shutdown_error = 0;
+ 	p->next_temperature = jiffies + HZ;
++	k4_ram_trace_mark("Papyrus display on");
+ 	return 0;
+ fail:
+ 	p->power_error = ret;
+@@ -447,6 +458,7 @@
+ 			ret = papyrus_write_verify(p, PAPYRUS_ENABLE,
+ 					PAPYRUS_V3P3 | PAPYRUS_VCOM | PAPYRUS_RAILS);
+ 		if (!ret) {
++			k4_ram_trace_mark("Papyrus VCOM >");
+ 			gpiod_set_value_cansleep(p->vcom, 1);
+ 			usleep_range(1000, 1500);
+ 			ret = papyrus_ack(p);
+@@ -455,6 +467,7 @@
+ 		}
+ 		if (!ret) {
+ 			p->vcom_on = true;
++			k4_ram_trace_mark("Papyrus VCOM <");
+ 		} else {
+ 			p->power_error = ret;
+ 			papyrus_off(p);
+@@ -599,6 +612,7 @@
+ 	return papyrus_read(provider, hwmon_temp, hwmon_temp_input, 0, temperature);
+ }
+ EXPORT_SYMBOL_GPL(k4_papyrus_read_temperature);
++
+ 
+ struct device *devm_k4_papyrus_get(struct device *consumer, const char *property)
+ {
+@@ -855,10 +869,12 @@
+ 	ret = gpiod_direction_input(p->nint);
+ 	if (ret)
+ 		return ret;
++	k4_ram_trace_mark("Papyrus mux >");
+ 	ret = pinctrl_select_state(pins, control);
+ 	if (ret)
+ 		return ret;
+ 	p->owned = true;
++	k4_ram_trace_mark("Papyrus mux <");
+ 	/* Explicit reset makes the same initialization serve warm and cold entry. */
+ 	ret = papyrus_sleep(p);
+ 	if (ret)
+--- a/drivers/regulator/mc13892-regulator.c
++++ b/drivers/regulator/mc13892-regulator.c
+@@ -248,6 +248,7 @@
+ 
+ static const struct regulator_ops mc13892_gpo_regulator_ops;
+ static const struct regulator_ops mc13892_sw_regulator_ops;
++
+ 
+ #define MC13892_FIXED_DEFINE(name, node, reg, voltages)			\
+ 	MC13xxx_FIXED_DEFINE(MC13892_, name, node, reg, voltages,	\
+@@ -400,6 +401,7 @@
+ 		mc13892_gpo_inverted(rdev, id);
+ }
+ 
++
+ static const struct regulator_ops mc13892_gpo_regulator_ops = {
+ 	.enable = mc13892_gpo_regulator_enable,
+ 	.disable = mc13892_gpo_regulator_disable,
+--- a/drivers/soc/imx/imx50-pxp.c
++++ b/drivers/soc/imx/imx50-pxp.c
+@@ -7,6 +7,7 @@
+ #include <linux/interrupt.h>
+ #include <linux/io.h>
+ #include <linux/iopoll.h>
++#include <linux/k4_ram_trace.h>
+ #include <linux/module.h>
+ #include <linux/k4-provider.h>
+ #include <linux/mutex.h>
+@@ -123,6 +124,8 @@
+ {
+ 	u32 value;
+ 	int ret;
++
++	k4_ram_trace_mark("PXP service reset >");
+ 	if ((readl(p->base + PXP_CTRL) & PXP_ACTIVE) ||
+ 	    (readl(p->base + PXP_STAT) & PXP_EVENTS) ||
+ 	    (readl(p->base + PXP_NEXT) & BIT(0)))
+@@ -155,6 +158,7 @@
+ 	if (readl(p->base + PXP_STAT) || readl(p->base + PXP_NEXT))
+ 		return -EIO;
+ 	p->initialized = true;
++	k4_ram_trace_mark("PXP service reset <");
+ 	return 0;
+ }
+ 
+@@ -274,6 +278,7 @@
+ 	if (ret)
+ 		goto unlock;
+ 	clocks = true;
++	k4_ram_trace_mark("PXP service job >");
+ 	if (!p->initialized) {
+ 		p->stage = "idle-reset";
+ 		ret = imx50_pxp_initialize(p, &owned);
+@@ -315,6 +320,7 @@
+ 	dma_wmb();
+ 	started = true;
+ 	writel(BIT(0), p->base + PXP_CTRL_SET);
++	k4_ram_trace_mark("PXP service wait >");
+ 	p->stage = "completion";
+ 	if (!wait_for_completion_timeout(&p->done, msecs_to_jiffies(500))) {
+ 		ret = -ETIMEDOUT;
+@@ -384,6 +390,7 @@
+ 		 * Pin access clocks as well as DMA until machine recovery.
+ 		 */
+ 		p->clocks_retained = clocks;
++		k4_ram_trace_mark("PXP service park fault");
+ 		goto unlock;
+ 	}
+ 	if (clocks)
+@@ -394,6 +401,7 @@
+ 			       p->arena + output + i * dw, dw);
+ 		p->completed++;
+ 	}
++	k4_ram_trace_mark(ret ? "PXP service fault" : "PXP service job <");
+ unlock:
+ 	p->last_result = ret;
+ 	if (!ret)
+@@ -429,6 +437,7 @@
+ 	mutex_unlock(&p->lock);
+ }
+ EXPORT_SYMBOL_GPL(imx50_pxp_get_stats);
++
+ 
+ struct imx50_pxp *devm_imx50_pxp_get(struct device *consumer, const char *property)
+ {
+--- /dev/null
++++ b/drivers/soc/imx/k4-pm-trace.c
+@@ -0,0 +1,166 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* Temporary diagnostics: keep the last 32 PM trace events across reset. */
++#include <linux/device.h>
++#include <linux/init.h>
++#include <linux/io.h>
++#include <linux/k4_ram_trace.h>
++#include <linux/module.h>
++#include <linux/of_address.h>
++#include <linux/panic_notifier.h>
++#include <linux/spinlock.h>
++#include <trace/events/power.h>
++
++#define K4_LOG_BASE 0x7fffe000
++#define K4_LOG_SIZE 8192
++#define K4_LINE_SIZE 96
++#define K4_FIRST_SLOT 48
++#define K4_SLOT_COUNT 32
++/* Slot 64 was partially overwritten across a stock-kernel reboot. */
++#define K4_SKIP_SLOT 64
++#define K4_END_SLOT (K4_FIRST_SLOT + K4_SLOT_COUNT + 1)
++#define K4_LEGACY_SLOTS 84
++
++static bool enabled;
++static bool ready;
++module_param(enabled, bool, 0600);
++MODULE_PARM_DESC(enabled, "Record PM callbacks in K4 reserved reboot RAM");
++static void __iomem *ram_log;
++static DEFINE_RAW_SPINLOCK(ram_lock);
++static unsigned int sequence;
++
++static int record(const char *event)
++{
++	char line[K4_LINE_SIZE] = {0};
++	unsigned long flags;
++	void __iomem *meta;
++	unsigned int slot;
++
++	if (!smp_load_acquire(&ready))
++		return -ENODEV;
++	if (!READ_ONCE(enabled))
++		return -EACCES;
++	raw_spin_lock_irqsave(&ram_lock, flags);
++	slot = K4_FIRST_SLOT + sequence % K4_SLOT_COUNT;
++	if (slot >= K4_SKIP_SLOT)
++		slot++;
++	scnprintf(line, sizeof(line), "K4_PM %06u %s\n", sequence++, event);
++	memcpy_toio(ram_log + slot * K4_LINE_SIZE, line, sizeof(line));
++	wmb();
++	meta = ram_log + K4_LOG_SIZE - K4_LINE_SIZE;
++	/* Repair malformed metadata, including older bootmark's END=84 bug. */
++	if (readl(meta) != 0xbeadeabe ||
++	    readl(meta + 4) >= K4_LEGACY_SLOTS ||
++	    readl(meta + 8) >= K4_LEGACY_SLOTS) {
++		writel(0, meta + 4);
++		writel(K4_END_SLOT, meta + 8);
++	} else if (readl(meta + 8) < K4_END_SLOT) {
++		writel(K4_END_SLOT, meta + 8);
++	}
++	wmb();
++	writel(0xbeadeabe, meta);
++	mb();
++	raw_spin_unlock_irqrestore(&ram_lock, flags);
++	return 0;
++}
++
++int k4_ram_trace_mark(const char *event)
++{
++	return record(event);
++}
++EXPORT_SYMBOL_GPL(k4_ram_trace_mark);
++
++static void callback_start(void *unused, struct device *dev,
++			   const char *ops, int event)
++{
++	char message[80];
++
++	scnprintf(message, sizeof(message), "C> %s %s %s event=%x",
++		  dev_name(dev), dev_driver_string(dev), ops ?: "", event);
++	record(message);
++}
++
++static void callback_end(void *unused, struct device *dev, int error)
++{
++	char message[80];
++
++	scnprintf(message, sizeof(message), "C< %s rc=%d", dev_name(dev), error);
++	record(message);
++}
++
++static void phase(void *unused, const char *action, int value, bool start)
++{
++	char message[80];
++
++	scnprintf(message, sizeof(message), "P%c %s value=%d",
++		  start ? '>' : '<', action, value);
++	record(message);
++}
++
++static int panic_record(struct notifier_block *nb, unsigned long code, void *data)
++{
++	char message[80];
++
++	scnprintf(message, sizeof(message), "PANIC %s", (char *)data);
++	record(message);
++	return NOTIFY_DONE;
++}
++
++static struct notifier_block panic_nb = {
++	.notifier_call = panic_record,
++};
++
++static int __init k4_pm_trace_init(void)
++{
++	struct device_node *node;
++	struct resource res;
++	int ret;
++
++	if (!of_machine_is_compatible("amazon,kindle-4"))
++		return -ENODEV;
++	node = of_find_node_by_path("/reserved-memory/watchdog-log@7fffe000");
++	if (!node)
++		return -ENODEV;
++	ret = of_address_to_resource(node, 0, &res);
++	if (!of_property_read_bool(node, "no-map"))
++		ret = -EINVAL;
++	of_node_put(node);
++	if (ret)
++		return ret;
++	if (res.start != K4_LOG_BASE || resource_size(&res) != K4_LOG_SIZE)
++		return -EINVAL;
++	ram_log = ioremap(K4_LOG_BASE, K4_LOG_SIZE);
++	if (!ram_log)
++		return -ENOMEM;
++	memset_io(ram_log + K4_FIRST_SLOT * K4_LINE_SIZE, 0,
++		  (K4_SKIP_SLOT - K4_FIRST_SLOT) * K4_LINE_SIZE);
++	memset_io(ram_log + (K4_SKIP_SLOT + 1) * K4_LINE_SIZE, 0,
++		  (K4_END_SLOT - K4_SKIP_SLOT - 1) * K4_LINE_SIZE);
++	ret = register_trace_device_pm_callback_start(callback_start, NULL);
++	if (ret)
++		goto unmap;
++	ret = register_trace_device_pm_callback_end(callback_end, NULL);
++	if (ret)
++		goto unregister_start;
++	ret = register_trace_suspend_resume(phase, NULL);
++	if (ret)
++		goto unregister_end;
++	ret = atomic_notifier_chain_register(&panic_notifier_list, &panic_nb);
++	if (ret)
++		goto unregister_phase;
++	smp_store_release(&ready, true);
++	pr_info("K4 PM RAM trace available (enabled=%d)\n", enabled);
++	return 0;
++
++unregister_phase:
++	unregister_trace_suspend_resume(phase, NULL);
++unregister_end:
++	unregister_trace_device_pm_callback_end(callback_end, NULL);
++unregister_start:
++	unregister_trace_device_pm_callback_start(callback_start, NULL);
++	tracepoint_synchronize_unregister();
++unmap:
++	iounmap(ram_log);
++	return ret;
++}
++late_initcall(k4_pm_trace_init);
++MODULE_LICENSE("GPL");
+--- a/drivers/usb/chipidea/usbmisc_imx.c
++++ b/drivers/usb/chipidea/usbmisc_imx.c
+@@ -592,6 +592,7 @@
+ 
+ 	return 0;
+ }
++
+ 
+ static int usbmisc_imx6sx_init(struct imx_usbmisc_data *data)
+ {
+--- a/drivers/usb/phy/phy-generic.c
++++ b/drivers/usb/phy/phy-generic.c
+@@ -96,6 +96,7 @@
+ 	}
+ 	nop->mA = mA;
+ }
++
+ 
+ static irqreturn_t nop_gpio_vbus_thread(int irq, void *data)
+ {
+--- a/drivers/video/fbdev/imx50-epdc-hw.c
++++ b/drivers/video/fbdev/imx50-epdc-hw.c
+@@ -5,6 +5,7 @@
+ #include <linux/io.h>
+ #include <linux/iopoll.h>
+ #include <linux/jiffies.h>
++#include <linux/k4_ram_trace.h>
+ #include <linux/module.h>
+ 
+ #include "imx50-epdc-hw.h"
+@@ -86,6 +87,8 @@
+ {
+ 	u32 value;
+ 	int ret;
++
++	k4_ram_trace_mark("EPDC reset begin");
+ 	/* Inherited CLKGATE must not satisfy the reset-assert handshake. */
+ 	writel(E_RESET | E_GATE, hw->base + E_CTRL_CLR);
+ 	ret = readl_poll_timeout(hw->base + E_CTRL, value,
+@@ -99,6 +102,8 @@
+ 	writel(E_RESET | E_GATE, hw->base + E_CTRL_CLR);
+ 	ret = readl_poll_timeout(hw->base + E_CTRL, value,
+ 				 !(value & (E_RESET | E_GATE)), 10, 1000);
++	if (!ret)
++		k4_ram_trace_mark("EPDC reset done");
+ 	return ret;
+ }
+ 
+@@ -142,6 +147,7 @@
+ 	ret = imx50_epdc_buffers_invalidate(buffers);
+ 	if (ret)
+ 		goto out;
++	k4_ram_trace_mark("EPDC configure begin");
+ 	/* Never reset an inherited DMA operation or discard its buffers. */
+ 	ret = imx50_epdc_hw_inherited_idle(hw);
+ 	if (ret)
+@@ -193,6 +199,7 @@
+ 	hw->configured = true;
+ 	hw->drained = true; /* Reset/config only; no update has started. */
+ 	spin_unlock_irqrestore(&hw->irq_lock, flags);
++	k4_ram_trace_mark("EPDC configure done");
+ 	ret = 0;
+ 	goto out;
+ fault:
+@@ -200,6 +207,7 @@
+ 	       stage, ret, readl(hw->base + E_CTRL), readl(hw->base + E_IRQ),
+ 	       readl(hw->base + E_STATUS), readl(hw->base + E_LUTS));
+ 	hw->fault = ret;
++	k4_ram_trace_mark("EPDC configure fault");
+ out:
+ 	mutex_unlock(&hw->lock);
+ 	return ret;
+@@ -368,7 +376,9 @@
+ 	hw->running = true;
+ 	hw->drained = false;
+ 	/* begin() did dma_wmb(); ordered writel of UPD_CTRL starts DMA last. */
++	k4_ram_trace_mark("EPDC submit >");
+ 	writel(command.control, hw->base + E_COMMAND);
++	k4_ram_trace_mark("EPDC submit <");
+ 	spin_unlock_irqrestore(&hw->irq_lock, flags);
+ 	waited = wait_for_completion_timeout(&hw->done, msecs_to_jiffies(timeout_ms));
+ 	spin_lock_irqsave(&hw->irq_lock, flags);
+@@ -400,7 +410,9 @@
+ 	hw->last_full = full;
+ 	if (!waited) {
+ 		hw->polled_completions++;
+-	}
++		k4_ram_trace_mark("EPDC deadline drained");
++	}
++	k4_ram_trace_mark("EPDC update drained");
+ 	goto out;
+ abort:
+ 	/* Withdraw only a command never written. An attempted command write, even
+@@ -408,10 +420,12 @@
+ 	 */
+ 	if (imx50_epdc_buffers_abort_unsubmitted(hw->buffers))
+ 		goto quarantine;
++	k4_ram_trace_mark("EPDC unsubmitted abort");
+ 	goto out;
+ quarantine:
+ 	hw->fault = ret;
+ 	imx50_epdc_buffers_complete(hw->buffers, ret);
++	k4_ram_trace_mark("EPDC update fault");
+ out:
+ 	mutex_unlock(&hw->lock);
+ 	return ret;
+@@ -454,6 +468,8 @@
+ 	ret = readl_poll_timeout(hw->base + E_CTRL, value, value & E_GATE, 10, 1000);
+ 	if (ret)
+ 		hw->fault = ret;
++	else
++		k4_ram_trace_mark("EPDC controller gated");
+ out:
+ 	mutex_unlock(&hw->lock);
+ 	return ret;
+--- a/drivers/video/fbdev/imx50-epdc.c
++++ b/drivers/video/fbdev/imx50-epdc.c
+@@ -8,6 +8,7 @@
+ #include <linux/imx50-epdc-image.h>
+ #include <linux/imx50-pxp.h>
+ #include <linux/k4-papyrus.h>
++#include <linux/k4_ram_trace.h>
+ #include <linux/module.h>
+ #include <linux/k4-provider.h>
+ #include <linux/of_platform.h>
+@@ -156,6 +157,7 @@
+ 	if (ret)
+ 		return ret;
+ 	e->access_on = true;
++	k4_ram_trace_mark("EPDC owner preflight");
+ 	e->startup_stage = "inherited-idle";
+ 	ret = imx50_epdc_hw_inherited_idle(&e->hw);
+ 	if (ret) {
+@@ -336,6 +338,7 @@
+ 	return ret;
+ }
+ EXPORT_SYMBOL_GPL(imx50_epdc_powerdown);
++
+ 
+ struct imx50_epdc *devm_imx50_epdc_get(struct device *consumer, const char *property)
+ {
+--- /dev/null
++++ b/include/linux/k4_ram_trace.h
+@@ -0,0 +1,16 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _LINUX_K4_RAM_TRACE_H
++#define _LINUX_K4_RAM_TRACE_H
++
++#include <linux/errno.h>
++#include <linux/kconfig.h>
++
++#if IS_ENABLED(CONFIG_K4_PM_RAM_TRACE)
++int k4_ram_trace_mark(const char *event);
++#else
++static inline int k4_ram_trace_mark(const char *event)
++{
++	return -EOPNOTSUPP;
++}
++#endif
++#endif
+--- a/init/main.c
++++ b/init/main.c
+@@ -106,6 +106,9 @@
+ #include <asm/setup.h>
+ #include <asm/sections.h>
+ #include <asm/cacheflush.h>
++#ifdef CONFIG_K4_BOOT_TRACE
++#include <asm/k4-boot-trace.h>
++#endif
+ 
+ #define CREATE_TRACE_POINTS
+ #include <trace/events/initcall.h>
+@@ -113,6 +116,26 @@
+ #include <kunit/test.h>
+ 
+ static int kernel_init(void *);
++
++#ifdef CONFIG_K4_BOOT_TRACE
++/* K4 diagnostic only: Amazon's old kernel dumps this RAM after watchdog reset. */
++static void __init k4_trace_runtime(unsigned int index, const char *tag)
++{
++	void __iomem *log = ioremap(0x7fffe000, 8192);
++	void __iomem *meta;
++
++	if (!log)
++		return;
++	meta = log + 8192 - 96;
++	memcpy_toio(log + index * 96, tag, strlen(tag) + 1);
++	writel(0, meta + 4);
++	writel(index + 1, meta + 8);
++	wmb();
++	writel(0xbeadeabe, meta);
++	mb();
++	iounmap(log);
++}
++#endif
+ 
+ /*
+  * Debug helper: via this flag we know that we are in 'early bootup code'
+@@ -850,6 +873,9 @@
+ 	char *command_line;
+ 	char *after_dashes;
+ 
++#ifdef CONFIG_K4_BOOT_TRACE
++	k4_trace_early(14, "K4_E\n");
++#endif
+ 	set_task_stack_end_magic(&init_task);
+ 	smp_setup_processor_id();
+ 	debug_objects_early_init();
+@@ -868,6 +894,9 @@
+ 	page_address_init();
+ 	pr_notice("%s", linux_banner);
+ 	early_security_init();
++#ifdef CONFIG_K4_BOOT_TRACE
++	k4_trace_early(15, "K4_F\n");
++#endif
+ 	setup_arch(&command_line);
+ 	setup_boot_config();
+ 	setup_command_line(command_line);
+@@ -904,6 +933,9 @@
+ 	sort_main_extable();
+ 	trap_init();
+ 	mm_core_init();
++#ifdef CONFIG_K4_BOOT_TRACE
++	k4_trace_runtime(23, "K4_N\n");
++#endif
+ 	poking_init();
+ 	ftrace_init();
+ 
+@@ -980,6 +1012,9 @@
+ 	 * this. But we do want output early, in case something goes wrong.
+ 	 */
+ 	console_init();
++#ifdef CONFIG_K4_BOOT_TRACE
++	k4_trace_runtime(24, "K4_O\n");
++#endif
+ 	if (panic_later)
+ 		panic("Too many boot %s vars at `%s'", panic_later,
+ 		      panic_param);
+@@ -1413,6 +1448,9 @@
+ 	wait_for_completion(&kthreadd_done);
+ 
+ 	kernel_init_freeable();
++#ifdef CONFIG_K4_BOOT_TRACE
++	k4_trace_runtime(26, "K4_Q\n");
++#endif
+ 	/* need to finish all async __init code before freeing the memory */
+ 	async_synchronize_full();
+ 
+@@ -1523,6 +1561,9 @@
+ 	page_alloc_init_late();
+ 
+ 	do_basic_setup();
++#ifdef CONFIG_K4_BOOT_TRACE
++	k4_trace_runtime(25, "K4_P\n");
++#endif
+ 
+ 	kunit_run_all_tests();
+ 
