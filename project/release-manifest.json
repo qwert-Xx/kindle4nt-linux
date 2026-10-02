@@ -13,7 +13,8 @@
     "kernel/patches/04-usb.patch": "e022d526a5e5e74e2a4d008f67c738e21198d28f0b56072eb4a0a7fdd70f187a",
     "kernel/patches/05-wifi-mmc.patch": "b95824b80b218531852dad9f93dee6101a5ba40d2aad10c2e347e7239bc88782",
     "kernel/patches/06-display-input.patch": "b3918d3cade16b6300bc4e7118f589869b82db0de179063efe0740752b1ff22b",
-    "kernel/patches/07-device-tree.patch": "2c3730b24b21ece9429a5add12ebe9e27aa09710f9ceabadd37cbea6cf481749"
+    "kernel/patches/07-device-tree.patch": "2c3730b24b21ece9429a5add12ebe9e27aa09710f9ceabadd37cbea6cf481749",
+    "kernel/patches/08-ccm-interrupts.patch": "40a5abd4b0a4c98362ed7f8ea8b1badfa7c1b4f8568cee7c90f26d306aa3f40d"
   },
   "private_inputs_included": false,
   "device_operations_performed": false,
@@ -23,5 +24,13 @@
     "modules": 234,
     "two_unseeded_builds_exact": true,
     "device_acceptance": "stage4 then stage5 pending; not cold accepted release"
+  },
+  "ccm_interrupt_fix": {
+    "source_commit": "a339290ae2b8fc4c769facb543ce3134f3ce839d",
+    "old_dtb_sha256": "c8bd73fea78e70d2e807385b3208c4c2cd19c1305835a3863254e73cd523e88a",
+    "new_dtb_sha256": "e0aa481e1c857441a62578b5c5570bd95fca08d23254f53949c7554377b67486",
+    "zimage_unchanged": true,
+    "full_k4_schema_errors": 0,
+    "cold_acceptance": "pending stage4 -> stage5 -> separate CCM RAM cold session"
   }
 }
