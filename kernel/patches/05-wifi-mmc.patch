@@ -1,0 +1,1219 @@
+--- a/drivers/mmc/core/pwrseq_simple.c
++++ b/drivers/mmc/core/pwrseq_simple.c
+@@ -17,12 +17,51 @@
+ #include <linux/gpio/consumer.h>
+ #include <linux/delay.h>
+ #include <linux/property.h>
++#include <linux/ktime.h>
++#include <linux/of.h>
++#include <linux/mutex.h>
++#include <linux/mfd/mc13xxx.h>
++#include <linux/spi/spi.h>
+ 
+ #include <linux/mmc/host.h>
+ 
+ #include "pwrseq.h"
+ 
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++static const bool k4_diagnostic_snapshot;
++static const unsigned int k4_diagnostic_cycle_ms, k4_cycle_epoch;
++
++
+ struct mmc_pwrseq_simple {
++	bool retain_board_power, cycle_active;
++	unsigned int last_cycle_epoch;
++	u64 low_started;
++	struct mc13xxx *diag_pmic;
++	struct mutex diag_lock;
++	unsigned int diag_regs[2][64], diag_count[2];
++	int diag_error[2];
++	u64 diag_ns[2];
+ 	struct mmc_pwrseq pwrseq;
+ 	bool clk_enabled;
+ 	u32 post_power_on_delay_ms;
+@@ -58,9 +97,119 @@
+ 	}
+ }
+ 
++/* Configuration-only: ADC2 may advance sample pointers on read. */
++static const u8 k4_pmic_config_regs[] = {
++	1, 4, 6, 7, 13, 14, 15, 16, 18, 19, 21, 23,
++	24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34,
++	43, 44, 48, 49, 50, 51, 52, 53, 54
++};
++
++static void k4_pmic_capture(struct mmc_pwrseq_simple *p, unsigned int phase)
++{
++#if IS_REACHABLE(CONFIG_MFD_MC13XXX)
++	unsigned int i;
++	int ret = 0;
++
++	if (!p->diag_pmic || p->diag_count[phase] || (phase && !p->diag_count[0]))
++		return;
++	mutex_lock(&p->diag_lock);
++	p->diag_ns[phase] = ktime_get_ns();
++	mc13xxx_lock(p->diag_pmic);
++	for (i = 0; i < ARRAY_SIZE(k4_pmic_config_regs); i++) {
++		ret = mc13xxx_reg_read(p->diag_pmic, k4_pmic_config_regs[i],
++				       &p->diag_regs[phase][i]);
++		if (ret)
++			break;
++		p->diag_count[phase]++;
++	}
++	mc13xxx_unlock(p->diag_pmic);
++	p->diag_error[phase] = ret;
++	mutex_unlock(&p->diag_lock);
++#endif
++}
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++#if IS_REACHABLE(CONFIG_MFD_MC13XXX) && IS_REACHABLE(CONFIG_SPI)
++static void k4_put_pmic_device(void *data) { put_device(data); }
++static int k4_find_pmic(struct mmc_pwrseq_simple *p, struct device *dev)
++{
++	struct device_node *np;
++	struct spi_device *spi;
++	struct device *supplier;
++	int ret;
++
++	if (!k4_diagnostic_snapshot || !p->retain_board_power)
++		return 0;
++	np = of_find_compatible_node(NULL, NULL, "amazon,kindle-k4-mc13892");
++	if (!np)
++		return -ENODEV;
++	supplier = bus_find_device_by_of_node(&spi_bus_type, np);
++	of_node_put(np);
++	if (!supplier)
++		return -EPROBE_DEFER;
++	spi = to_spi_device(supplier);
++	if (!device_is_bound(&spi->dev) || !spi_get_drvdata(spi)) {
++		put_device(&spi->dev);
++		return -EPROBE_DEFER;
++	}
++	ret = devm_add_action_or_reset(dev, k4_put_pmic_device, &spi->dev);
++	if (ret)
++		return ret;
++	if (!device_link_add(dev, &spi->dev, DL_FLAG_AUTOREMOVE_CONSUMER))
++		return -ENOMEM;
++	p->diag_pmic = spi_get_drvdata(spi);
++	return 0;
++}
++#else
++static int k4_find_pmic(struct mmc_pwrseq_simple *p, struct device *dev)
++{
++	return k4_diagnostic_snapshot && p->retain_board_power ? -ENODEV : 0;
++}
++#endif
++
+ static void mmc_pwrseq_simple_pre_power_on(struct mmc_host *host)
+ {
+ 	struct mmc_pwrseq_simple *pwrseq = to_pwrseq_simple(host->pwrseq);
++
++	/* Yoshi board initialization supplies Wi-Fi once; MMC reset does not
++	 * switch its separate GPIO power enable. */
++	if (pwrseq->retain_board_power) {
++		k4_pmic_capture(pwrseq, 0);
++		if (READ_ONCE(k4_diagnostic_cycle_ms) &&
++		    pwrseq->last_cycle_epoch != READ_ONCE(k4_cycle_epoch)) {
++			mmc_pwrseq_simple_set_gpios_value(pwrseq, 1);
++			pwrseq->low_started = ktime_get_ns();
++			dev_info(pwrseq->pwrseq.dev, "diagnostic GPIO asserted raw=%d hold_ms=%u\n",
++				gpiod_get_raw_value_cansleep(pwrseq->reset_gpios->desc[0]),
++				READ_ONCE(k4_diagnostic_cycle_ms));
++			msleep(READ_ONCE(k4_diagnostic_cycle_ms));
++			pwrseq->cycle_active = true;
++			pwrseq->last_cycle_epoch = READ_ONCE(k4_cycle_epoch);
++		}
++		return;
++	}
+ 
+ 	if (!IS_ERR(pwrseq->ext_clk) && !pwrseq->clk_enabled) {
+ 		clk_prepare_enable(pwrseq->ext_clk);
+@@ -74,6 +223,20 @@
+ {
+ 	struct mmc_pwrseq_simple *pwrseq = to_pwrseq_simple(host->pwrseq);
+ 
++	/* Yoshi board initialization supplies Wi-Fi once; MMC reset does not
++	 * switch its separate GPIO power enable. */
++	if (pwrseq->retain_board_power) {
++		if (pwrseq->cycle_active) {
++			mmc_pwrseq_simple_set_gpios_value(pwrseq, 0);
++			dev_info(pwrseq->pwrseq.dev, "diagnostic GPIO released raw=%d low_ns=%llu\n",
++				gpiod_get_raw_value_cansleep(pwrseq->reset_gpios->desc[0]),
++				ktime_get_ns() - pwrseq->low_started);
++			msleep(pwrseq->post_power_on_delay_ms);
++			pwrseq->cycle_active = false;
++		}
++		return;
++	}
++
+ 	mmc_pwrseq_simple_set_gpios_value(pwrseq, 0);
+ 
+ 	if (pwrseq->post_power_on_delay_ms)
+@@ -83,6 +246,16 @@
+ static void mmc_pwrseq_simple_power_off(struct mmc_host *host)
+ {
+ 	struct mmc_pwrseq_simple *pwrseq = to_pwrseq_simple(host->pwrseq);
++
++	/* Yoshi board initialization supplies Wi-Fi once; MMC reset does not
++	 * switch its separate GPIO power enable. */
++	if (pwrseq->retain_board_power) {
++		k4_pmic_capture(pwrseq, 1);
++		if (READ_ONCE(k4_diagnostic_cycle_ms) &&
++		    pwrseq->last_cycle_epoch != READ_ONCE(k4_cycle_epoch))
++			mmc_pwrseq_simple_set_gpios_value(pwrseq, 1);
++		return;
++	}
+ 
+ 	mmc_pwrseq_simple_set_gpios_value(pwrseq, 1);
+ 
+@@ -104,6 +277,7 @@
+ 
+ static const struct of_device_id mmc_pwrseq_simple_of_match[] = {
+ 	{ .compatible = "mmc-pwrseq-simple",},
++	{ .compatible = "amazon,k4-wifi-pwrseq",},
+ 	{/* sentinel */},
+ };
+ MODULE_DEVICE_TABLE(of, mmc_pwrseq_simple_of_match);
+@@ -112,10 +286,17 @@
+ {
+ 	struct mmc_pwrseq_simple *pwrseq;
+ 	struct device *dev = &pdev->dev;
++	int ret;
+ 
+ 	pwrseq = devm_kzalloc(dev, sizeof(*pwrseq), GFP_KERNEL);
+ 	if (!pwrseq)
+ 		return -ENOMEM;
++
++	mutex_init(&pwrseq->diag_lock);
++	pwrseq->retain_board_power = device_is_compatible(dev, "amazon,k4-wifi-pwrseq");
++	ret = k4_find_pmic(pwrseq, dev);
++	if (ret)
++		return dev_err_probe(dev, ret, "diagnostic PMIC not ready\n");
+ 
+ 	pwrseq->ext_clk = devm_clk_get(dev, "ext_clock");
+ 	if (IS_ERR(pwrseq->ext_clk) && PTR_ERR(pwrseq->ext_clk) != -ENOENT)
+@@ -134,6 +315,21 @@
+ 	device_property_read_u32(dev, "power-off-delay-us",
+ 				 &pwrseq->power_off_delay_us);
+ 
++	pwrseq->retain_board_power = device_is_compatible(dev,
++						    "amazon,k4-wifi-pwrseq");
++	if (pwrseq->retain_board_power) {
++		if (IS_ERR(pwrseq->reset_gpios) || pwrseq->reset_gpios->ndescs != 1)
++			return -EINVAL;
++		/* gpio was requested asserted (physical low). Reproduce the board
++		 * low -> high + 40 ms initialization before MMC host registration.
++		 * Later MMC power-off/on/reset leaves this independent rail on.
++		 */
++		mmc_pwrseq_simple_set_gpios_value(pwrseq, 0);
++		if (pwrseq->post_power_on_delay_ms)
++			msleep(pwrseq->post_power_on_delay_ms);
++		dev_info(dev, "Yoshi Wi-Fi board power enabled; MMC resets retain GPIO\n");
++	}
++
+ 	pwrseq->pwrseq.dev = dev;
+ 	pwrseq->pwrseq.ops = &mmc_pwrseq_simple_ops;
+ 	pwrseq->pwrseq.owner = THIS_MODULE;
+@@ -155,6 +351,9 @@
+ 	.driver = {
+ 		.name = "pwrseq_simple",
+ 		.of_match_table = mmc_pwrseq_simple_of_match,
++
++
++
+ 	},
+ };
+ 
+--- a/drivers/mmc/core/sdio_ops.c
++++ b/drivers/mmc/core/sdio_ops.c
+@@ -5,6 +5,7 @@
+  *  Copyright 2006-2007 Pierre Ossman
+  */
+ 
++#include <linux/module.h>
+ #include <linux/scatterlist.h>
+ 
+ #include <linux/mmc/host.h>
+@@ -14,6 +15,16 @@
+ 
+ #include "core.h"
+ #include "sdio_ops.h"
++
++
++
++
++
++
++
++
++#define sdio_init_diag false
++
+ 
+ int mmc_send_io_op_cond(struct mmc_host *host, u32 ocr, u32 *rocr)
+ {
+@@ -81,6 +92,14 @@
+ 	cmd.flags = MMC_RSP_SPI_R5 | MMC_RSP_R5 | MMC_CMD_AC;
+ 
+ 	err = mmc_wait_for_cmd(host, &cmd, 0);
++	/* No CIS/firmware byte stream: only early controls or a failed command. */
++	if (sdio_init_diag && !host->card &&
++	    (err || (fn == 0 && addr <= SDIO_CCCR_SPEED)))
++		pr_info("%s: SDIO_INIT_CMD52 %s fn=%u addr=%05x in=%02x arg=%08x resp=%08x cmd_error=%d clock=%u actual=%u width=%u timing=%u power=%u\n",
++			mmc_hostname(host), write ? "write" : "read", fn, addr, in,
++			cmd.arg, cmd.resp[0], err, host->ios.clock,
++			host->actual_clock, host->ios.bus_width, host->ios.timing,
++			host->ios.power_mode);
+ 	if (err)
+ 		return err;
+ 
+@@ -214,4 +233,3 @@
+ 
+ 	return mmc_io_rw_direct_host(host, 1, 0, SDIO_CCCR_ABORT, abort, NULL);
+ }
+-
+--- /dev/null
++++ b/drivers/mmc/host/k4-iomux-offsets.h
+@@ -0,0 +1,57 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* i.MX50 RM chapter 35 register map: documented words only; skip holes. */
++static const u16 k4_iomux_all_offsets[] = {
++	0x000, 0x004, 0x008, 0x00c, 0x010, 0x014, 0x018, 0x01c, 0x020, 0x024,
++	0x028, 0x02c, 0x030, 0x034, 0x038, 0x03c, 0x040, 0x044, 0x048, 0x04c,
++	0x050, 0x054, 0x058, 0x05c, 0x060, 0x064, 0x068, 0x06c, 0x070, 0x074,
++	0x078, 0x07c, 0x080, 0x084, 0x088, 0x08c, 0x090, 0x094, 0x098, 0x09c,
++	0x0a0, 0x0a4, 0x0a8, 0x0ac, 0x0b0, 0x0b4, 0x0b8, 0x0bc, 0x0c0, 0x0c4,
++	0x0c8, 0x0cc, 0x0d0, 0x0d4, 0x0d8, 0x0dc, 0x0e0, 0x0e4, 0x0e8, 0x0ec,
++	0x0f0, 0x0f4, 0x0f8, 0x0fc, 0x100, 0x104, 0x108, 0x10c, 0x110, 0x114,
++	0x118, 0x11c, 0x120, 0x124, 0x128, 0x12c, 0x130, 0x134, 0x138, 0x13c,
++	0x140, 0x144, 0x148, 0x14c, 0x150, 0x154, 0x158, 0x15c, 0x160, 0x164,
++	0x168, 0x16c, 0x170, 0x174, 0x178, 0x17c, 0x180, 0x184, 0x188, 0x18c,
++	0x190, 0x194, 0x198, 0x19c, 0x1a0, 0x1a4, 0x1a8, 0x1ac, 0x1b0, 0x1b4,
++	0x1b8, 0x1bc, 0x1c0, 0x1c4, 0x1c8, 0x1cc, 0x1d0, 0x1d4, 0x1d8, 0x1dc,
++	0x1e0, 0x1e4, 0x1e8, 0x1ec, 0x1f0, 0x1f4, 0x1f8, 0x1fc, 0x200, 0x204,
++	0x208, 0x20c, 0x210, 0x214, 0x218, 0x21c, 0x220, 0x224, 0x228, 0x22c,
++	0x230, 0x234, 0x238, 0x23c, 0x240, 0x244, 0x248, 0x24c, 0x250, 0x254,
++	0x258, 0x25c, 0x260, 0x264, 0x268, 0x26c, 0x270, 0x274, 0x278, 0x27c,
++	0x280, 0x284, 0x288, 0x28c, 0x290, 0x294, 0x298, 0x29c, 0x2a0, 0x2a4,
++	0x2a8, 0x2ac, 0x2b0, 0x2b4, 0x2b8, 0x2bc, 0x2c0, 0x2c4, 0x2c8, 0x2cc,
++	0x2d0, 0x2d4, 0x2d8, 0x2dc, 0x2e0, 0x2e4, 0x2e8, 0x2ec, 0x2f0, 0x2f4,
++	0x2f8, 0x2fc, 0x300, 0x304, 0x308, 0x30c, 0x310, 0x314, 0x318, 0x31c,
++	0x320, 0x324, 0x328, 0x32c, 0x330, 0x334, 0x338, 0x33c, 0x340, 0x344,
++	0x348, 0x34c, 0x350, 0x354, 0x358, 0x35c, 0x360, 0x364, 0x368, 0x36c,
++	0x370, 0x374, 0x378, 0x37c, 0x380, 0x384, 0x388, 0x38c, 0x390, 0x394,
++	0x398, 0x39c, 0x3a0, 0x3a4, 0x3a8, 0x3ac, 0x3b0, 0x3b4, 0x3b8, 0x3bc,
++	0x3c0, 0x3c4, 0x3c8, 0x3cc, 0x3d0, 0x3d4, 0x3d8, 0x3dc, 0x3e0, 0x3e4,
++	0x3e8, 0x3ec, 0x3f0, 0x3f4, 0x3f8, 0x3fc, 0x400, 0x404, 0x408, 0x40c,
++	0x410, 0x414, 0x418, 0x41c, 0x420, 0x424, 0x428, 0x42c, 0x430, 0x434,
++	0x438, 0x43c, 0x440, 0x444, 0x448, 0x44c, 0x450, 0x454, 0x458, 0x45c,
++	0x460, 0x464, 0x468, 0x46c, 0x470, 0x474, 0x478, 0x47c, 0x480, 0x484,
++	0x488, 0x48c, 0x490, 0x494, 0x498, 0x49c, 0x4a4, 0x4a8, 0x4ac, 0x4b0,
++	0x4b4, 0x4b8, 0x4bc, 0x4c0, 0x4c4, 0x4c8, 0x4cc, 0x4d0, 0x4d4, 0x4d8,
++	0x4dc, 0x4e0, 0x4e4, 0x4e8, 0x4ec, 0x4f0, 0x4f4, 0x4f8, 0x4fc, 0x500,
++	0x504, 0x508, 0x50c, 0x510, 0x514, 0x518, 0x51c, 0x520, 0x524, 0x528,
++	0x52c, 0x530, 0x534, 0x538, 0x53c, 0x540, 0x544, 0x548, 0x54c, 0x550,
++	0x554, 0x558, 0x55c, 0x560, 0x564, 0x568, 0x56c, 0x570, 0x574, 0x578,
++	0x57c, 0x580, 0x584, 0x588, 0x58c, 0x590, 0x594, 0x598, 0x59c, 0x5a0,
++	0x5a4, 0x5a8, 0x5ac, 0x5b0, 0x5b4, 0x5b8, 0x5bc, 0x5c0, 0x5c4, 0x5c8,
++	0x5cc, 0x5d0, 0x5d4, 0x5d8, 0x5dc, 0x5e0, 0x5e4, 0x5e8, 0x5ec, 0x5f0,
++	0x5f4, 0x5f8, 0x5fc, 0x600, 0x604, 0x608, 0x60c, 0x610, 0x614, 0x618,
++	0x61c, 0x620, 0x624, 0x628, 0x62c, 0x630, 0x634, 0x638, 0x63c, 0x640,
++	0x644, 0x648, 0x64c, 0x650, 0x654, 0x658, 0x65c, 0x660, 0x664, 0x668,
++	0x66c, 0x674, 0x678, 0x67c, 0x680, 0x684, 0x688, 0x68c, 0x690, 0x694,
++	0x698, 0x69c, 0x6a0, 0x6a4, 0x6a8, 0x6ac, 0x6b0, 0x6b4, 0x6b8, 0x6bc,
++	0x6c0, 0x6c4, 0x6c8, 0x6cc, 0x6d0, 0x6d4, 0x6d8, 0x6dc, 0x6e0, 0x6e4,
++	0x6e8, 0x6ec, 0x6f0, 0x6f4, 0x6f8, 0x6fc, 0x700, 0x704, 0x708, 0x70c,
++	0x710, 0x714, 0x718, 0x71c, 0x720, 0x724, 0x728, 0x72c, 0x730, 0x734,
++	0x738, 0x73c, 0x740, 0x744, 0x748, 0x74c, 0x750, 0x754, 0x758, 0x75c,
++	0x760, 0x764, 0x768, 0x76c, 0x770, 0x774, 0x778, 0x77c, 0x780, 0x784,
++	0x788, 0x78c, 0x790, 0x794, 0x798, 0x79c, 0x7a0, 0x7a4, 0x7a8, 0x7ac,
++	0x7b0, 0x7b4, 0x7b8, 0x7bc, 0x7c0, 0x7c4, 0x7c8, 0x7cc, 0x7d0, 0x7d4,
++	0x7d8, 0x7dc, 0x7e0, 0x7e4, 0x7e8, 0x7ec, 0x7f0, 0x7f4, 0x7f8, 0x7fc,
++	0x800, 0x804, 0x808, 0x80c, 0x810, 0x814, 0x818, 0x81c, 0x820, 0x824,
++	0x828,
++};
+--- a/drivers/mmc/host/sdhci-esdhc-imx.c
++++ b/drivers/mmc/host/sdhci-esdhc-imx.c
+@@ -16,6 +16,7 @@
+ #include <linux/clk.h>
+ #include <linux/module.h>
+ #include <linux/slab.h>
++#include <linux/spinlock.h>
+ #include <linux/pm_qos.h>
+ #include <linux/mmc/host.h>
+ #include <linux/mmc/mmc.h>
+@@ -27,6 +28,9 @@
+ #include <linux/pm_runtime.h>
+ #include "sdhci-cqhci.h"
+ #include "sdhci-pltfm.h"
++#include <linux/debugfs.h>
++#include <linux/seq_file.h>
++#include "k4-iomux-offsets.h"
+ #include "sdhci-esdhc.h"
+ #include "cqhci.h"
+ 
+@@ -332,7 +336,117 @@
+ 	.quirks = SDHCI_QUIRK_NO_LED,
+ };
+ 
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++static const bool clock_snapshot;
++static const bool k4_diagnostic_legacy25;
++static unsigned int esdhc_clock_test_select(struct device *dev, bool imx50) { return 0; }
++
++
++struct esdhc_clock_snapshot {
++	u32 samples;
++	u32 requested;
++	u32 source;
++	u32 actual;
++	u32 prescaler;
++	u32 divisor;
++	u32 sysctl_before;
++	u32 sysctl_written;
++	u32 sysctl_disabled;
++	u32 sysctl_restored;
++	u32 prsstat;
++	u32 dll_before;
++	u32 dll_test;
++	u32 dll_probed;
++	u32 test_mode;
++	u32 settle_us;
++	int stable_error;
++};
++
++static const u16 k4_sdio_host_offsets[] = {
++	0, 4, 8, 12, 16, 20, 24, 28, /* DATA FIFO 0x20 deliberately omitted */
++	0x24, 0x28, 0x2c, 0x30, 0x34, 0x38, 0x3c, 0x40, 0x44,
++	0x48, 0xc0, 0xc4, 0xc8, 0xcc, 0xfc,
++};
++static const u16 k4_sdio_iomux_offsets[] = {
++	0xfc, 0x100, 0x104, 0x108, 0x10c, 0x110,
++	0x3a8, 0x3ac, 0x3b0, 0x3b4, 0x3b8, 0x3bc, 0x18c, 0x46c,
++};
++static const u16 k4_sdio_ccm_offsets[] = {
++	0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52,
++	0x68, 0x6c, 0x70, 0x74, 0x78, 0x7c, 0x80, 0x84, 0x88, 0x8c,
++	0x90, 0xa4, 0xa8,
++};
++struct k4_sdio_registers {
++	u32 requested, sequence;
++	u32 host[ARRAY_SIZE(k4_sdio_host_offsets)];
++	u32 iomux[ARRAY_SIZE(k4_sdio_iomux_offsets)];
++	u32 ccm[ARRAY_SIZE(k4_sdio_ccm_offsets)];
++	u32 gpio[3];
++};
++
+ struct pltfm_imx_data {
++	/* Protect the cached sample shared by clock operations and sysfs. */
++	spinlock_t clock_snapshot_lock;
++	struct esdhc_clock_snapshot clock_snapshot;
++	void __iomem *diag_iomux, *diag_ccm, *diag_gpio;
++	struct k4_sdio_registers diag_first, diag_latest, diag_failed;
++	u32 iomux_all[3][ARRAY_SIZE(k4_iomux_all_offsets)];
++	struct dentry *iomux_debugfs;
++	bool k4_legacy25;
++	u32 diag_failed_irq;
++	u32 diag_sequence;
++	u32 clock_test_mode;
+ 	u32 scratchpad;
+ 	struct pinctrl *pinctrl;
+ 	struct pinctrl_state *pins_100mhz;
+@@ -506,6 +620,8 @@
+ 	}
+ 
+ 	if (unlikely(reg == SDHCI_CAPABILITIES)) {
++		if (imx_data->k4_legacy25)
++			val &= ~SDHCI_CAN_DO_HISPD;
+ 		/* ignore bit[0-15] as it stores cap_1 register val for mx6sl */
+ 		if (imx_data->socdata->flags & ESDHC_FLAG_HAVE_CAP1)
+ 			val &= 0xffff0000;
+@@ -923,6 +1039,155 @@
+ 	return pltfm_host->clock / 256 / 16;
+ }
+ 
++static ssize_t clock_snapshot_show(struct device *dev,
++				   struct device_attribute *attr, char *buf)
++{
++	struct sdhci_host *host = dev_get_drvdata(dev);
++	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
++	struct pltfm_imx_data *imx_data = sdhci_pltfm_priv(pltfm_host);
++	struct esdhc_clock_snapshot sample;
++	unsigned long flags;
++
++	spin_lock_irqsave(&imx_data->clock_snapshot_lock, flags);
++	sample = imx_data->clock_snapshot;
++	spin_unlock_irqrestore(&imx_data->clock_snapshot_lock, flags);
++
++	return sysfs_emit(buf,
++		"samples=%u requested=%u source=%u actual=%u prescaler=%u divisor=%u sysctl_before=%08x sysctl_written=%08x prsstat=%08x dll_before=%08x dll_test=%08x dll_probed=%u stable_error=%d test_mode=%u settle_us=%u sysctl_disabled=%08x sysctl_restored=%08x\n",
++		sample.samples, sample.requested, sample.source, sample.actual,
++		sample.prescaler, sample.divisor, sample.sysctl_before,
++		sample.sysctl_written, sample.prsstat, sample.dll_before,
++		sample.dll_test, sample.dll_probed, sample.stable_error,
++		sample.test_mode, sample.settle_us,
++		sample.sysctl_disabled, sample.sysctl_restored);
++}
++static DEVICE_ATTR_RO(clock_snapshot);
++
++static void k4_sdio_capture(struct sdhci_host *host, unsigned int clock)
++{
++	struct sdhci_pltfm_host *pltfm = sdhci_priv(host);
++	struct pltfm_imx_data *d = sdhci_pltfm_priv(pltfm);
++	struct k4_sdio_registers v = { .requested = clock };
++	unsigned long flags;
++	unsigned int i;
++
++	if (!d->diag_iomux || !d->diag_ccm || !d->diag_gpio)
++		return;
++	/* Called from set_clock with all host access clocks on. No FIFO reads,
++	 * writes, IRQ acknowledgement or accesses from the sysfs reader.
++	 */
++	for (i = 0; i < ARRAY_SIZE(v.host); i++)
++		v.host[i] = readl(host->ioaddr + k4_sdio_host_offsets[i]);
++	for (i = 0; i < ARRAY_SIZE(v.iomux); i++)
++		v.iomux[i] = readl(d->diag_iomux + k4_sdio_iomux_offsets[i]);
++	for (i = 0; i < ARRAY_SIZE(v.ccm); i++)
++		v.ccm[i] = readl(d->diag_ccm + k4_sdio_ccm_offsets[i]);
++	for (i = 0; i < ARRAY_SIZE(v.gpio); i++)
++		v.gpio[i] = readl(d->diag_gpio + i * 4);
++	spin_lock_irqsave(&d->clock_snapshot_lock, flags);
++	v.sequence = ++d->diag_sequence;
++	if (clock >= 25000000 || d->diag_latest.requested < 25000000) {
++		for (i = 0; i < ARRAY_SIZE(k4_iomux_all_offsets); i++)
++			d->iomux_all[1][i] = readl(d->diag_iomux + k4_iomux_all_offsets[i]);
++		d->diag_latest = v;
++	}
++	if (!d->diag_first.sequence) {
++		d->diag_first = v;
++		memcpy(d->iomux_all[0], d->iomux_all[1], sizeof(d->iomux_all[0]));
++	}
++	spin_unlock_irqrestore(&d->clock_snapshot_lock, flags);
++}
++
++/* Reader copies cached control words only: never performs live MMIO. */
++static int k4_iomux_snapshot_show(struct seq_file *s, void *unused)
++{
++	struct pltfm_imx_data *d = s->private;
++	u32 (*v)[ARRAY_SIZE(k4_iomux_all_offsets)];
++	u32 sequence[3];
++	unsigned long flags;
++	unsigned int phase, i;
++	static const char * const names[] = { "first", "latest", "failure" };
++
++	v = kmalloc(sizeof(d->iomux_all), GFP_KERNEL);
++	if (!v)
++		return -ENOMEM;
++	spin_lock_irqsave(&d->clock_snapshot_lock, flags);
++	memcpy(v, d->iomux_all, sizeof(d->iomux_all));
++	sequence[0] = d->diag_first.sequence;
++	sequence[1] = d->diag_latest.sequence;
++	sequence[2] = d->diag_failed.sequence;
++	spin_unlock_irqrestore(&d->clock_snapshot_lock, flags);
++	for (phase = 0; phase < 3; phase++) {
++		seq_printf(s, "phase=%s sequence=%u words=%zu\n", names[phase],
++			   sequence[phase], ARRAY_SIZE(k4_iomux_all_offsets));
++		if (!sequence[phase])
++			continue;
++		for (i = 0; i < ARRAY_SIZE(k4_iomux_all_offsets); i++)
++			seq_printf(s, "IOMUX_%03x=%08x\n", k4_iomux_all_offsets[i], v[phase][i]);
++	}
++	kfree(v);
++	return 0;
++}
++DEFINE_SHOW_ATTRIBUTE(k4_iomux_snapshot);
++
++static ssize_t register_snapshot_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++	struct sdhci_host *host = dev_get_drvdata(dev);
++	struct sdhci_pltfm_host *pltfm = sdhci_priv(host);
++	struct pltfm_imx_data *d = sdhci_pltfm_priv(pltfm);
++	struct k4_sdio_registers v[2];
++	unsigned long flags;
++	unsigned int phase, i;
++	ssize_t n = 0;
++
++	spin_lock_irqsave(&d->clock_snapshot_lock, flags);
++	v[0] = d->diag_first;
++	v[1] = d->diag_latest;
++	spin_unlock_irqrestore(&d->clock_snapshot_lock, flags);
++	for (phase = 0; phase < 2; phase++) {
++		n += sysfs_emit_at(buf, n, "phase=%s sequence=%u requested=%u\n",
++			phase ? "latest" : "first", v[phase].sequence, v[phase].requested);
++		for (i = 0; i < ARRAY_SIZE(v[phase].host); i++)
++			n += sysfs_emit_at(buf, n, "ESDHC2_%03x=%08x\n", k4_sdio_host_offsets[i], v[phase].host[i]);
++		for (i = 0; i < ARRAY_SIZE(v[phase].iomux); i++)
++			n += sysfs_emit_at(buf, n, "IOMUX_%03x=%08x\n", k4_sdio_iomux_offsets[i], v[phase].iomux[i]);
++		for (i = 0; i < ARRAY_SIZE(v[phase].ccm); i++)
++			n += sysfs_emit_at(buf, n, "CCM_%03x=%08x\n", k4_sdio_ccm_offsets[i], v[phase].ccm[i]);
++		for (i = 0; i < ARRAY_SIZE(v[phase].gpio); i++)
++			n += sysfs_emit_at(buf, n, "GPIO5_%03x=%08x\n", i * 4, v[phase].gpio[i]);
++	}
++	return n;
++}
++static DEVICE_ATTR_RO(register_snapshot);
++static ssize_t failure_snapshot_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++	struct sdhci_host *host = dev_get_drvdata(dev);
++	struct sdhci_pltfm_host *pltfm = sdhci_priv(host);
++	struct pltfm_imx_data *d = sdhci_pltfm_priv(pltfm);
++	struct k4_sdio_registers v[1];
++	unsigned long flags;
++	unsigned int phase, i;
++	ssize_t n = 0;
++
++	spin_lock_irqsave(&d->clock_snapshot_lock, flags);
++	v[0] = d->diag_failed;
++	spin_unlock_irqrestore(&d->clock_snapshot_lock, flags);
++	for (phase = 0; phase < 1; phase++) {
++		n += sysfs_emit_at(buf, n, "phase=%s sequence=%u requested=%u\n",
++			"cmd52_error_irq", v[phase].sequence, v[phase].requested);
++		for (i = 0; i < ARRAY_SIZE(v[phase].host); i++)
++			n += sysfs_emit_at(buf, n, "ESDHC2_%03x=%08x\n", k4_sdio_host_offsets[i], v[phase].host[i]);
++		for (i = 0; i < ARRAY_SIZE(v[phase].iomux); i++)
++			n += sysfs_emit_at(buf, n, "IOMUX_%03x=%08x\n", k4_sdio_iomux_offsets[i], v[phase].iomux[i]);
++		for (i = 0; i < ARRAY_SIZE(v[phase].ccm); i++)
++			n += sysfs_emit_at(buf, n, "CCM_%03x=%08x\n", k4_sdio_ccm_offsets[i], v[phase].ccm[i]);
++		for (i = 0; i < ARRAY_SIZE(v[phase].gpio); i++)
++			n += sysfs_emit_at(buf, n, "GPIO5_%03x=%08x\n", i * 4, v[phase].gpio[i]);
++	}
++	return n;
++}
++static DEVICE_ATTR_RO(failure_snapshot);
++
+ static inline void esdhc_pltfm_set_clock(struct sdhci_host *host,
+ 					 unsigned int clock)
+ {
+@@ -934,6 +1199,9 @@
+ 	int div = 1;
+ 	int ret;
+ 	u32 temp, val;
++	u32 card_clock = 0;
++	struct esdhc_clock_snapshot sample = {};
++	unsigned long flags;
+ 
+ 	if (esdhc_is_usdhc(imx_data)) {
+ 		val = readl(host->ioaddr + ESDHC_VENDOR_SPEC);
+@@ -957,13 +1225,34 @@
+ 		writel(val | BIT(10), host->ioaddr + ESDHC_DLL_CTRL);
+ 		temp = readl(host->ioaddr + ESDHC_DLL_CTRL);
+ 		writel(val, host->ioaddr + ESDHC_DLL_CTRL);
++		sample.dll_before = val;
++		sample.dll_test = temp;
++		sample.dll_probed = 1;
+ 		if (temp & BIT(10))
+ 			pre_div = 2;
+ 	}
+ 
++	sample.test_mode = imx_data->clock_test_mode;
++	if (imx_data->clock_test_mode & BIT(0))
++		pre_div = max(pre_div, 2);
++
+ 	temp = sdhci_readl(host, ESDHC_SYSTEM_CONTROL);
+-	temp &= ~(ESDHC_CLOCK_IPGEN | ESDHC_CLOCK_HCKEN | ESDHC_CLOCK_PEREN
+-		| ESDHC_CLOCK_MASK);
++	sample.sysctl_before = temp;
++	if (imx_data->clock_test_mode & BIT(2)) {
++		card_clock = temp & ESDHC_CLOCK_SDCLKEN;
++		temp &= ~ESDHC_CLOCK_SDCLKEN;
++	}
++	/* Factory mx50 mx_sdhci changes only the divisor fields. Keep the
++	 * internal interface clocks running during divider programming; do not
++	 * import the controller-clock stop sequence of later i.MX variants.
++	 * This does not alter the selected parent or effective card frequency.
++	 */
++	if (of_machine_is_compatible("fsl,imx50"))
++		temp &= ~ESDHC_CLOCK_MASK;
++	else
++		temp &= ~(ESDHC_CLOCK_IPGEN | ESDHC_CLOCK_HCKEN | ESDHC_CLOCK_PEREN
++			| ESDHC_CLOCK_MASK);
++	sample.sysctl_disabled = temp;
+ 	sdhci_writel(host, temp, ESDHC_SYSTEM_CONTROL);
+ 
+ 	if ((imx_data->socdata->flags & ESDHC_FLAG_ERR010450) &&
+@@ -986,6 +1275,11 @@
+ 	dev_dbg(mmc_dev(host->mmc), "desired SD clock: %d, actual: %d\n",
+ 		clock, host->mmc->actual_clock);
+ 
++	sample.requested = clock;
++	sample.source = host_clock;
++	sample.actual = host->mmc->actual_clock;
++	sample.prescaler = pre_div * ddr_pre_div;
++	sample.divisor = div;
+ 	pre_div >>= 1;
+ 	div--;
+ 
+@@ -993,13 +1287,30 @@
+ 	temp |= (ESDHC_CLOCK_IPGEN | ESDHC_CLOCK_HCKEN | ESDHC_CLOCK_PEREN
+ 		| (div << ESDHC_DIVIDER_SHIFT)
+ 		| (pre_div << ESDHC_PREDIV_SHIFT));
++	sample.sysctl_written = temp;
+ 	sdhci_writel(host, temp, ESDHC_SYSTEM_CONTROL);
+ 
+ 	/* need to wait the bit 3 of the PRSSTAT to be set, make sure card clock is stable */
+ 	ret = readl_poll_timeout(host->ioaddr + ESDHC_PRSSTAT, temp,
+ 				(temp & ESDHC_CLOCK_STABLE), 2, 100);
++	sample.prsstat = temp;
++	sample.stable_error = ret;
+ 	if (ret == -ETIMEDOUT)
+ 		dev_warn(mmc_dev(host->mmc), "card clock still not stable in 100us!.\n");
++
++	/* RM 26.6.7: restore the card clock only after SDSTB is set. */
++	if (imx_data->clock_test_mode & BIT(2)) {
++		if (!ret) {
++			sample.sysctl_restored = sample.sysctl_written | card_clock;
++			sdhci_writel(host, sample.sysctl_restored,
++				     ESDHC_SYSTEM_CONTROL);
++		} else {
++			sample.sysctl_restored = sample.sysctl_written;
++			host->mmc->actual_clock = 0;
++		}
++	} else {
++		sample.sysctl_restored = sample.sysctl_written;
++	}
+ 
+ 	if (esdhc_is_usdhc(imx_data)) {
+ 		val = readl(host->ioaddr + ESDHC_VENDOR_SPEC);
+@@ -1007,6 +1318,19 @@
+ 			host->ioaddr + ESDHC_VENDOR_SPEC);
+ 	}
+ 
++	if (imx_data->clock_test_mode & BIT(1)) {
++		mdelay(10);
++		sample.settle_us = 10000;
++	}
++
++	k4_sdio_capture(host, clock);
++
++	if (clock_snapshot && clock >= 25000000) {
++		spin_lock_irqsave(&imx_data->clock_snapshot_lock, flags);
++		sample.samples = imx_data->clock_snapshot.samples + 1;
++		imx_data->clock_snapshot = sample;
++		spin_unlock_irqrestore(&imx_data->clock_snapshot_lock, flags);
++	}
+ }
+ 
+ static unsigned int esdhc_pltfm_get_ro(struct sdhci_host *host)
+@@ -1375,6 +1699,20 @@
+ {
+ 	int cmd_error = 0;
+ 	int data_error = 0;
++	struct sdhci_pltfm_host *pltfm = sdhci_priv(host);
++	struct pltfm_imx_data *d = sdhci_pltfm_priv(pltfm);
++	unsigned long flags;
++
++	if (d->diag_iomux && !d->diag_failed.sequence &&
++	    (intmask & SDHCI_INT_TIMEOUT) && readl(host->ioaddr + SDHCI_ARGUMENT) == 0xe00) {
++		k4_sdio_capture(host, host->clock);
++		spin_lock_irqsave(&d->clock_snapshot_lock, flags);
++		d->diag_failed = d->diag_latest;
++		memcpy(d->iomux_all[2], d->iomux_all[1], sizeof(d->iomux_all[2]));
++		d->diag_failed_irq = intmask;
++		spin_unlock_irqrestore(&d->clock_snapshot_lock, flags);
++		dev_info(mmc_dev(host->mmc), "K4 CCCR07 failure captured IRQ=%08x\n", intmask);
++	}
+ 
+ 	if (!sdhci_cqe_irq(host, intmask, &cmd_error, &data_error))
+ 		return intmask;
+@@ -1666,8 +2004,21 @@
+ 	pltfm_host = sdhci_priv(host);
+ 
+ 	imx_data = sdhci_pltfm_priv(pltfm_host);
++	spin_lock_init(&imx_data->clock_snapshot_lock);
++	imx_data->k4_legacy25 = READ_ONCE(k4_diagnostic_legacy25) &&
++		of_machine_is_compatible("fsl,imx50") &&
++		!strcmp(dev_name(&pdev->dev), "50008000.mmc");
++
++	if (clock_snapshot && of_machine_is_compatible("fsl,imx50") &&
++	    !strcmp(dev_name(&pdev->dev), "50008000.mmc")) {
++		imx_data->diag_iomux = devm_ioremap(&pdev->dev, 0x53fa8000, 0x1000);
++		imx_data->diag_ccm = devm_ioremap(&pdev->dev, 0x53fd4000, 0x1000);
++		imx_data->diag_gpio = devm_ioremap(&pdev->dev, 0x53fdc000, 0x1000);
++	}
+ 
+ 	imx_data->socdata = device_get_match_data(&pdev->dev);
++	imx_data->clock_test_mode = esdhc_clock_test_select(&pdev->dev,
++							    of_machine_is_compatible("fsl,imx50"));
+ 
+ 	host->quirks |= imx_data->socdata->quirks;
+ 	if (imx_data->socdata->flags & ESDHC_FLAG_PMQOS)
+@@ -1776,6 +2127,11 @@
+ 
+ 	sdhci_esdhc_imx_hwinit(host);
+ 
++	if (imx_data->k4_legacy25) {
++		host->mmc->f_max = 25000000;
++		host->mmc->caps &= ~MMC_CAP_SD_HIGHSPEED;
++		dev_info(&pdev->dev, "RAM diagnostic legacy SDIO: max25MHz/HS disabled\n");
++	}
+ 	err = sdhci_add_host(host);
+ 	if (err)
+ 		goto disable_ahb_clk;
+@@ -1793,6 +2149,21 @@
+ 	pm_runtime_use_autosuspend(&pdev->dev);
+ 	pm_suspend_ignore_children(&pdev->dev, 1);
+ 	pm_runtime_enable(&pdev->dev);
++
++	if (imx_data->diag_iomux && host->mmc->debugfs_root)
++		imx_data->iomux_debugfs = debugfs_create_file("iomux_snapshot", 0400,
++			host->mmc->debugfs_root, imx_data, &k4_iomux_snapshot_fops);
++	if (clock_snapshot) {
++		err = device_create_file(&pdev->dev, &dev_attr_failure_snapshot);
++		if (err)
++			dev_warn(&pdev->dev, "failure snapshot unavailable: %d\n", err);
++		err = device_create_file(&pdev->dev, &dev_attr_register_snapshot);
++		if (err)
++			dev_warn(&pdev->dev, "register snapshot unavailable: %d\n", err);
++		err = device_create_file(&pdev->dev, &dev_attr_clock_snapshot);
++		if (err)
++			dev_warn(&pdev->dev, "clock snapshot sysfs unavailable: %d\n", err);
++	}
+ 
+ 	return 0;
+ 
+@@ -1816,6 +2187,10 @@
+ 	struct pltfm_imx_data *imx_data = sdhci_pltfm_priv(pltfm_host);
+ 	int dead;
+ 
++	debugfs_remove(imx_data->iomux_debugfs);
++	device_remove_file(&pdev->dev, &dev_attr_failure_snapshot);
++	device_remove_file(&pdev->dev, &dev_attr_register_snapshot);
++	device_remove_file(&pdev->dev, &dev_attr_clock_snapshot);
+ 	pm_runtime_get_sync(&pdev->dev);
+ 	dead = (readl(host->ioaddr + SDHCI_INT_STATUS) == 0xffffffff);
+ 	pm_runtime_disable(&pdev->dev);
+--- a/drivers/net/wireless/ath/ath6kl/core.c
++++ b/drivers/net/wireless/ath/ath6kl/core.c
+@@ -20,7 +20,7 @@
+ #include <linux/module.h>
+ #include <linux/moduleparam.h>
+ #include <linux/export.h>
+-#include <linux/vmalloc.h>
++#include <linux/slab.h>
+ 
+ #include "debug.h"
+ #include "hif-ops.h"
+@@ -348,7 +348,7 @@
+ 
+ 	kfree(ar->fw_board);
+ 	kfree(ar->fw_otp);
+-	vfree(ar->fw);
++	kvfree(ar->fw);
+ 	kfree(ar->fw_patch);
+ 	kfree(ar->fw_testscript);
+ 
+--- a/drivers/net/wireless/ath/ath6kl/init.c
++++ b/drivers/net/wireless/ath/ath6kl/init.c
+@@ -22,6 +22,7 @@
+ #include <linux/errno.h>
+ #include <linux/export.h>
+ #include <linux/of.h>
++#include <linux/property.h>
+ #include <linux/mmc/sdio_func.h>
+ #include <linux/vmalloc.h>
+ 
+@@ -447,6 +448,37 @@
+ 
+ out:
+ 	return status;
++}
++
++static int ath6kl_config_antenna_diversity(struct ath6kl *ar)
++{
++	const char *property = "atheros,antenna-diversity-parameters";
++	u32 params[4];
++	int count, ret;
++
++	if (!device_property_present(ar->dev, property))
++		return 0;
++
++	count = device_property_count_u32(ar->dev, property);
++	if (count < 0)
++		return count;
++	if (count != (int)ARRAY_SIZE(params))
++		return -EINVAL;
++
++	ret = device_property_read_u32_array(ar->dev, property, params,
++					     ARRAY_SIZE(params));
++	if (ret)
++		return ret;
++	if (params[1] > U8_MAX || params[2] > 1 || params[3] > U16_MAX)
++		return -ERANGE;
++
++	ret = ath6kl_wmi_set_div_params_cmd(ar->wmi, 0, params[0], params[1],
++					    params[2], params[3]);
++	if (!ret)
++		ath6kl_dbg(ATH6KL_DBG_SUSPEND,
++			   "antenna diversity queued idle=%u rssi=%u enable=%u rate=%u\n",
++			   params[0], params[1], params[2], params[3]);
++	return ret;
+ }
+ 
+ static int ath6kl_target_config_wlan_params(struct ath6kl *ar, int idx)
+@@ -1768,6 +1800,8 @@
+ 	}
+ 
+ 	/* Wait for Wmi event to be ready */
++	ath6kl_dbg(ATH6KL_DBG_SUSPEND, "pm waiting for WMI ready=%u\n",
++		   test_bit(WMI_READY, &ar->flag));
+ 	timeleft = wait_event_interruptible_timeout(ar->event_wq,
+ 						    test_bit(WMI_READY,
+ 							     &ar->flag),
+@@ -1807,6 +1841,13 @@
+ 	if ((ath6kl_set_host_app_area(ar)) != 0)
+ 		ath6kl_err("unable to set the host app area\n");
+ 
++	/* Reapply the optional board policy after every firmware restart. */
++	ret = ath6kl_config_antenna_diversity(ar);
++	if (ret) {
++		ath6kl_err("unable to configure antenna diversity: %d\n", ret);
++		goto err_htc_stop;
++	}
++
+ 	for (i = 0; i < ar->vif_max; i++) {
+ 		ret = ath6kl_target_config_wlan_params(ar, i);
+ 		if (ret)
+@@ -1846,6 +1887,20 @@
+ 
+ 	ath6kl_hif_stop(ar);
+ 
++	/*
++	 * IRQs and async I/O are stopped: the old firmware is no longer ready.
++	 * This also makes the next boot wait for a fresh WMI ready event.
++	 */
++	clear_bit(WMI_READY, &ar->flag);
++	/* A new firmware instance has none of the old traffic streams. */
++	ath6kl_dbg(ATH6KL_DBG_SUSPEND, "pm clearing WMI streams mask=%x\n",
++		   ar->wmi->fat_pipe_exist);
++	ath6kl_wmi_reset(ar->wmi);
++	spin_lock_bh(&ar->lock);
++	memset(ar->ac_stream_active, 0, sizeof(ar->ac_stream_active));
++	ar->hiac_stream_active_pri = 0;
++	spin_unlock_bh(&ar->lock);
++
+ 	ath6kl_bmi_reset(ar);
+ 
+ 	ret = ath6kl_hif_power_off(ar);
+@@ -1904,6 +1959,10 @@
+ 		spin_unlock_bh(&ar->list_lock);
+ 		ath6kl_cfg80211_vif_stop(vif, test_bit(WMI_READY, &ar->flag));
+ 		rtnl_lock();
++		/* NETDEV_GOING_DOWN takes wiphy.mtx in cfg80211's notifier.
++		 * Close before taking that mutex; RTNL prevents reopening the vif.
++		 */
++		dev_close(vif->ndev);
+ 		wiphy_lock(ar->wiphy);
+ 		ath6kl_cfg80211_vif_cleanup(vif);
+ 		wiphy_unlock(ar->wiphy);
+--- a/drivers/net/wireless/ath/ath6kl/sdio.c
++++ b/drivers/net/wireless/ath/ath6kl/sdio.c
+@@ -30,6 +30,11 @@
+ #include "cfg80211.h"
+ #include "trace.h"
+ 
++static bool force_virtual_scatter;
++module_param(force_virtual_scatter, bool, 0444);
++MODULE_PARM_DESC(force_virtual_scatter,
++		 "Use contiguous bounce buffers for scatter requests");
++
+ struct ath6kl_sdio {
+ 	struct sdio_func *func;
+ 
+@@ -59,6 +64,7 @@
+ 	spinlock_t scat_lock;
+ 
+ 	bool scatter_enabled;
++	bool scatter_is_virtual;
+ 
+ 	bool is_disabled;
+ 	const struct sdio_device_id *id;
+@@ -549,6 +555,8 @@
+ 		return 0;
+ 
+ 	ath6kl_dbg(ATH6KL_DBG_BOOT, "sdio power off\n");
++	ath6kl_dbg(ATH6KL_DBG_SUSPEND, "pm sdio power off task=%s/%d\n",
++		   current->comm, task_pid_nr(current));
+ 
+ 	/* Disable the card */
+ 	sdio_claim_host(ar_sdio->func);
+@@ -725,6 +733,7 @@
+ 	spin_unlock_bh(&ar_sdio->scat_lock);
+ 
+ 	ar_sdio->scatter_enabled = false;
++	ar_sdio->scatter_is_virtual = false;
+ }
+ 
+ /* setup of HIF scatter resources */
+@@ -733,15 +742,19 @@
+ 	struct ath6kl_sdio *ar_sdio = ath6kl_sdio_priv(ar);
+ 	struct htc_target *target = ar->htc_target;
+ 	int ret = 0;
+-	bool virt_scat = false;
+-
+-	if (ar_sdio->scatter_enabled)
++	bool virt_scat = force_virtual_scatter;
++
++	if (ar_sdio->scatter_enabled) {
++		ath6kl_dbg(ATH6KL_DBG_SUSPEND,
++			   "sdio scatter reuse virtual=%u entries=%u max_xfer=%u\n",
++			   ar_sdio->scatter_is_virtual, target->max_scat_entries,
++			   target->max_xfer_szper_scatreq);
+ 		return 0;
+-
+-	ar_sdio->scatter_enabled = true;
++	}
+ 
+ 	/* check if host supports scatter and it meets our requirements */
+-	if (ar_sdio->func->card->host->max_segs < MAX_SCATTER_ENTRIES_PER_REQ) {
++	if (!virt_scat &&
++	    ar_sdio->func->card->host->max_segs < MAX_SCATTER_ENTRIES_PER_REQ) {
+ 		ath6kl_err("host only supports scatter of :%d entries, need: %d\n",
+ 			   ar_sdio->func->card->host->max_segs,
+ 			   MAX_SCATTER_ENTRIES_PER_REQ);
+@@ -764,11 +777,12 @@
+ 						MAX_SCATTER_REQ_TRANSFER_SIZE;
+ 		} else {
+ 			ath6kl_sdio_cleanup_scatter(ar);
++			virt_scat = true;
+ 			ath6kl_warn("hif scatter resource setup failed, trying virtual scatter method\n");
+ 		}
+ 	}
+ 
+-	if (virt_scat || ret) {
++	if (virt_scat) {
+ 		ret = ath6kl_sdio_alloc_prep_scat_req(ar_sdio,
+ 				ATH6KL_SCATTER_ENTRIES_PER_REQ,
+ 				ATH6KL_SCATTER_REQS, virt_scat);
+@@ -787,6 +801,14 @@
+ 		target->max_xfer_szper_scatreq =
+ 					ATH6KL_MAX_TRANSFER_SIZE_PER_SCATTER;
+ 	}
++
++	/* Publish only a complete pool, including successful fallback. */
++	ar_sdio->scatter_is_virtual = virt_scat;
++	ar_sdio->scatter_enabled = true;
++	ath6kl_dbg(ATH6KL_DBG_SUSPEND,
++		   "sdio scatter ready virtual=%u entries=%u max_xfer=%u\n",
++		   virt_scat, target->max_scat_entries,
++		   target->max_xfer_szper_scatreq);
+ 
+ 	return 0;
+ }
+@@ -927,6 +949,8 @@
+ 
+ static int ath6kl_sdio_resume(struct ath6kl *ar)
+ {
++	int ret;
++
+ 	switch (ar->state) {
+ 	case ATH6KL_STATE_OFF:
+ 	case ATH6KL_STATE_CUTPOWER:
+@@ -934,7 +958,9 @@
+ 			   "sdio resume configuring sdio\n");
+ 
+ 		/* need to set sdio settings after power is cut from sdio */
+-		ath6kl_sdio_config(ar);
++		ret = ath6kl_sdio_config(ar);
++		if (ret)
++			return ret;
+ 		break;
+ 
+ 	case ATH6KL_STATE_ON:
+@@ -956,9 +982,7 @@
+ 		break;
+ 	}
+ 
+-	ath6kl_cfg80211_resume(ar);
+-
+-	return 0;
++	return ath6kl_cfg80211_resume(ar);
+ }
+ 
+ /* set the window address register (using 4-byte register access ). */
+@@ -1226,6 +1250,7 @@
+ 	void *context;
+ 
+ 	/* FIXME: make sure that wq is not queued again */
++	ath6kl_dbg(ATH6KL_DBG_SUSPEND, "pm sdio stop begin\n");
+ 
+ 	cancel_work_sync(&ar_sdio->wr_async_work);
+ 
+@@ -1249,6 +1274,7 @@
+ 	spin_unlock_bh(&ar_sdio->wr_async_lock);
+ 
+ 	WARN_ON(get_queue_depth(&ar_sdio->scat_req) != 4);
++	ath6kl_dbg(ATH6KL_DBG_SUSPEND, "pm sdio stop end\n");
+ }
+ 
+ static const struct ath6kl_hif_ops ath6kl_sdio_ops = {
+--- a/drivers/net/wireless/ath/ath6kl/wmi.c
++++ b/drivers/net/wireless/ath/ath6kl/wmi.c
+@@ -1807,6 +1807,11 @@
+ 	int ret;
+ 	u16 info1;
+ 
++	/* Command identifiers only: never dump keys or command payloads here. */
++	ath6kl_dbg(ATH6KL_DBG_SUSPEND,
++		   "pm wmi tx cmd=%u state=%u task=%s/%d\n", cmd_id,
++		   wmi->parent_dev->state, current->comm, task_pid_nr(current));
++
+ 	if (WARN_ON(skb == NULL ||
+ 		    (if_idx > (wmi->parent_dev->vif_max - 1)))) {
+ 		dev_kfree_skb(skb);
+@@ -2258,6 +2263,27 @@
+ 	ret = ath6kl_wmi_cmd_send(wmi, if_idx, skb, WMI_SET_POWER_MODE_CMDID,
+ 				  NO_SYNC_WMIFLAG);
+ 	return ret;
++}
++
++int ath6kl_wmi_set_div_params_cmd(struct wmi *wmi, u8 if_idx, u32 idle_time,
++				  u8 rssi_threshold, u8 enable,
++				  u16 active_threshold_rate)
++{
++	struct sk_buff *skb;
++	struct wmi_div_params_cmd *cmd;
++
++	skb = ath6kl_wmi_get_new_buf(sizeof(*cmd));
++	if (!skb)
++		return -ENOMEM;
++
++	cmd = (struct wmi_div_params_cmd *)skb->data;
++	cmd->idle_time = cpu_to_le32(idle_time);
++	cmd->rssi_threshold = rssi_threshold;
++	cmd->enable = enable;
++	cmd->active_threshold_rate = cpu_to_le16(active_threshold_rate);
++
++	return ath6kl_wmi_cmd_send(wmi, if_idx, skb, WMI_SET_DIV_PARAMS_CMDID,
++				   NO_SYNC_WMIFLAG);
+ }
+ 
+ int ath6kl_wmi_pmparams_cmd(struct wmi *wmi, u8 if_idx, u16 idle_period,
+@@ -2596,6 +2622,8 @@
+ 
+ 	ath6kl_dbg(ATH6KL_DBG_WMI,
+ 		   "sending create_pstream_cmd: ac=%d  tsid:%d\n",
++		   params->traffic_class, params->tsid);
++	ath6kl_dbg(ATH6KL_DBG_SUSPEND, "pm create pstream ac=%u tsid=%u\n",
+ 		   params->traffic_class, params->tsid);
+ 
+ 	cmd = (struct wmi_create_pstream_cmd *) skb->data;
+--- a/drivers/net/wireless/ath/ath6kl/wmi.h
++++ b/drivers/net/wireless/ath/ath6kl/wmi.h
+@@ -1066,6 +1066,13 @@
+ 	u8 pwr_mode;
+ } __packed;
+ 
++struct wmi_div_params_cmd {
++	__le32 idle_time;
++	u8 rssi_threshold;
++	u8 enable;
++	__le16 active_threshold_rate;
++} __packed;
++
+ /*
+  * Policy to determine whether power save failure event should be sent to
+  * host during scanning
+@@ -2591,6 +2598,9 @@
+ int ath6kl_wmi_bmisstime_cmd(struct wmi *wmi, u8 if_idx,
+ 			     u16 bmiss_time, u16 num_beacons);
+ int ath6kl_wmi_powermode_cmd(struct wmi *wmi, u8 if_idx, u8 pwr_mode);
++int ath6kl_wmi_set_div_params_cmd(struct wmi *wmi, u8 if_idx, u32 idle_time,
++				  u8 rssi_threshold, u8 enable,
++				  u16 active_threshold_rate);
+ int ath6kl_wmi_pmparams_cmd(struct wmi *wmi, u8 if_idx, u16 idle_period,
+ 			    u16 ps_poll_num, u16 dtim_policy,
+ 			    u16 tx_wakup_policy, u16 num_tx_to_wakeup,
