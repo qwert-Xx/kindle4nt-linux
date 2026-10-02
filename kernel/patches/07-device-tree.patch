@@ -1,0 +1,2423 @@
+--- a/Documentation/devicetree/bindings/arm/fsl.yaml
++++ b/Documentation/devicetree/bindings/arm/fsl.yaml
+@@ -182,6 +182,7 @@
+       - description: i.MX50 based Boards
+         items:
+           - enum:
++              - amazon,kindle-4          # Kindle 4 NT D01100
+               - fsl,imx50-evk
+               - kobo,aura
+           - const: fsl,imx50
+--- /dev/null
++++ b/Documentation/devicetree/bindings/clock/fsl,imx50-anatop-clocks.yaml
+@@ -0,0 +1,48 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/clock/fsl,imx50-anatop-clocks.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++
++title: Freescale i.MX50 analog display clocks
++
++maintainers:
++  - codex <codex@localhost>
++
++description: |
++  Initial display clock provider. Clock index 0 is the 480 MHz APLL,
++  index 1 is PFD5. The analog bandgap must already be powered. APLL
++  startup preserves unrelated analog and charger settings.
++  The APBH clock supplies register access, not the PFD frequency source.
++
++properties:
++  compatible:
++    const: fsl,imx50-anatop-clocks
++  reg:
++    maxItems: 1
++  '#clock-cells':
++    const: 1
++  clocks:
++    maxItems: 1
++  clock-names:
++    const: apbh
++
++required:
++  - compatible
++  - reg
++  - '#clock-cells'
++  - clocks
++  - clock-names
++
++additionalProperties: false
++
++examples:
++  - |
++    #include <dt-bindings/clock/imx5-clock.h>
++    clock-controller@41018000 {
++        compatible = "fsl,imx50-anatop-clocks";
++        reg = <0x41018000 0x1000>;
++        #clock-cells = <1>;
++        clocks = <&clks IMX5_CLK_APBH_DMA>;
++        clock-names = "apbh";
++    };
+--- /dev/null
++++ b/Documentation/devicetree/bindings/display/amazon,k4-epdc-fb.yaml
+@@ -0,0 +1,24 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/display/amazon,k4-epdc-fb.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++title: Kindle K4 EPDC framebuffer consumer
++maintainers:
++- codex <codex@localhost>
++description: 'Framebuffer consumes the unique EPDC owner; timer values are scheduling
++  policy, not EPDC clock rates. Driver: drivers/video/fbdev/imx50-epdc-fb.c.'
++properties:
++  compatible:
++    const: amazon,k4-epdc-fb
++  epdc:
++    $ref: /schemas/types.yaml#/definitions/phandle
++    description: EPDC service.
++  update-delay-ms:
++    description: Dirty update batching delay.
++  idle-delay-ms:
++    description: Idle power-off delay.
++required:
++- compatible
++- epdc
++additionalProperties: false
+--- /dev/null
++++ b/Documentation/devicetree/bindings/display/amazon,k4-imx50-epdc.yaml
+@@ -0,0 +1,81 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/display/amazon,k4-imx50-epdc.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++title: Kindle K4 i.MX50 EPDC owner
++maintainers:
++- codex <codex@localhost>
++description: 'Unique EPDC controller owner with Papyrus power and PxP dependencies.
++  Firmware may be supplied as external WBF/WRF or read-only panel NVMEM; node creation
++  does not authorize a display refresh. Driver: drivers/video/fbdev/imx50-epdc.c.'
++properties:
++  compatible:
++    const: amazon,k4-imx50-epdc
++  reg:
++    maxItems: 1
++  interrupts:
++    maxItems: 1
++  clocks:
++    maxItems: 4
++  clock-names:
++    items:
++    - const: apbh
++    - const: epdc_axi
++    - const: epdc_pix
++    - const: pixel_parent
++  pinctrl-names:
++    items:
++    - const: active
++    - const: idle
++  pinctrl-0: true
++  pinctrl-1: true
++  gdsp-gpios:
++    maxItems: 1
++    description: GDSP inactive-level gate.
++  sdce-gpios:
++    maxItems: 1
++    description: SDCE inactive-level gate.
++  pxp:
++    $ref: /schemas/types.yaml#/definitions/phandle
++    description: PxP image service.
++  papyrus:
++    $ref: /schemas/types.yaml#/definitions/phandle
++    description: Papyrus power/temperature owner.
++  display-supply: true
++  vcom-supply: true
++  nvmem:
++    maxItems: 1
++  nvmem-names:
++    items:
++    - const: wbf
++  wbf-nvmem-offset:
++    $ref: /schemas/types.yaml#/definitions/uint32
++    description: Byte offset of WBF in panel Flash.
++  wbf-nvmem-size:
++    $ref: /schemas/types.yaml#/definitions/uint32
++    description: Maximum WBF source extent in bytes.
++  wbf-decode:
++    type: boolean
++  wbf-firmware:
++    $ref: /schemas/types.yaml#/definitions/string
++  wrf-firmware:
++    $ref: /schemas/types.yaml#/definitions/string
++  update-timeout-ms:
++    description: Bounded controller update timeout in milliseconds.
++required:
++- compatible
++- reg
++- interrupts
++- clocks
++- clock-names
++- pinctrl-names
++- pinctrl-0
++- pinctrl-1
++- gdsp-gpios
++- sdce-gpios
++- pxp
++- papyrus
++- display-supply
++- vcom-supply
++additionalProperties: false
+--- a/Documentation/devicetree/bindings/i2c/i2c-imx.yaml
++++ b/Documentation/devicetree/bindings/i2c/i2c-imx.yaml
+@@ -82,11 +82,24 @@
+       - const: rx
+       - const: tx
+ 
++  bus-enable-gpios:
++    description:
++      Active level enables an external bus buffer or interface gate. The line
++      stays enabled across runtime clock gating and system suspend.
++    maxItems: 1
++
++  bus-enable-delay-ms:
++    description: Minimum settling time after asserting the external bus enable.
++    default: 0
++
+   sda-gpios:
+     maxItems: 1
+ 
+   scl-gpios:
+     maxItems: 1
++
++dependencies:
++  bus-enable-delay-ms: [bus-enable-gpios]
+ 
+ required:
+   - compatible
+--- a/Documentation/devicetree/bindings/input/gpio-keys.yaml
++++ b/Documentation/devicetree/bindings/input/gpio-keys.yaml
+@@ -22,8 +22,10 @@
+ 
+   poll-interval: true
+ 
++# Preserve the existing K4 direction child names; driver enumeration does not
++# derive keycodes or electrical configuration from those names.
+ patternProperties:
+-  "^(button|event|key|switch|(button|event|key|switch)-[a-z0-9-]+|[a-z0-9-]+-(button|event|key|switch))$":
++  "^(up|down|left|right|select|button|event|key|switch|(button|event|key|switch)-[a-z0-9-]+|[a-z0-9-]+-(button|event|key|switch))$":
+     $ref: input.yaml#
+ 
+     properties:
+--- a/Documentation/devicetree/bindings/leds/common.yaml
++++ b/Documentation/devicetree/bindings/leds/common.yaml
+@@ -85,6 +85,8 @@
+           - backlight
+             # LED will turn on (see also "default-state" property)
+           - default-on
++            # Kindle charger reports its active current path through this trigger
++          - k4-charge-active
+             # LED "double" flashes at a load average based rate
+           - heartbeat
+             # LED indicates disk activity
+@@ -167,7 +169,7 @@
+       Note that this flag is mainly used for PWM-LEDs, where it is not possible
+       to map brightness to current. Drivers for other controllers should use
+       led-max-microamp.
+-    $ref: /schemas/types.yaml#definitions/uint32
++    $ref: /schemas/types.yaml#/definitions/uint32
+ 
+   panic-indicator:
+     description:
+--- /dev/null
++++ b/Documentation/devicetree/bindings/leds/fsl,mc13xxx-led-control.yaml
+@@ -0,0 +1,25 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/leds/fsl,mc13xxx-led-control.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++title: Freescale MC13xxx legacy lighting register arrays
++maintainers:
++  - codex <codex@localhost>
++description: Describe the existing MC13892 lighting child register interface. Values and masks remain board data.
++select:
++  required:
++    - led-control
++    - led-control-mask
++properties:
++  led-control:
++    $ref: /schemas/types.yaml#/definitions/uint32-array
++    minItems: 4
++    maxItems: 4
++    description: Four lighting register values, in register order.
++  led-control-mask:
++    $ref: /schemas/types.yaml#/definitions/uint32-array
++    minItems: 4
++    maxItems: 4
++    description: Corresponding four masks selecting the bits to update.
++additionalProperties: true
+--- a/Documentation/devicetree/bindings/mfd/mc13xxx.txt
++++ b/Documentation/devicetree/bindings/mfd/mc13xxx.txt
+@@ -1,13 +1,64 @@
+ * Freescale MC13783/MC13892 Power Management Integrated Circuit (PMIC)
+ 
+ Required properties:
+-- compatible : Should be "fsl,mc13783" or "fsl,mc13892"
++- compatible : Should be "fsl,mc13783" or "fsl,mc13892". Kindle K4/Yoshi
++  may use "amazon,kindle-k4-mc13892", "fsl,mc13892" to select single-word
++  32-bit SPI frames required by its i.MX50 CSPI controller.
+ 
+ Optional properties:
+ - fsl,mc13xxx-uses-adc : Indicate the ADC is being used
+ - fsl,mc13xxx-uses-codec : Indicate the Audio Codec is being used
+ - fsl,mc13xxx-uses-rtc : Indicate the RTC is being used
+ - fsl,mc13xxx-uses-touch : Indicate the touchscreen controller is being used
++
++Kindle K4 charger sub-node (local port only):
++- charger: A child of the K4 PMIC with compatible =
++  "amazon,kindle-k4-mc13892-charger". The MFD attaches this node to the
++  charging policy device. status = "disabled" suppresses this child.
++  The charger starts in observation mode; a node does not authorize writes.
++  Put the following properties on this child, so an unavailable fuel gauge
++  or detector defers the charging consumer without deferring the PMIC's
++  regulators, RTC and power button. Keep fsl,mc13xxx-uses-adc on the PMIC.
++  Earlier experimental trees with amazon,charger-policy and flat parent
++  properties remain supported, but retain their parent-level dependencies.
++- amazon,battery-supply : Phandle to the K4 ti,bq27210 fuel gauge. Required
++  on the charger child; used for power_supply data and read-only pack
++  ID / fresh temperature reads at fixed K4 gauge registers.
++- amazon,usb-budget-supply : Phandle to amazon,k4-usb-phy, providing the
++  gadget current budget. Required on the charger child.
++  Use fsl,mc13xxx-uses-adc as well for the input-voltage measurement path.
++- amazon,charger-detect-supply : Optional phandle to the MAX14656 detector.
++  Its fresh CURRENT_MAX advertises autonomous source permission (zero for
++  SDP); the policy takes the larger of this and the gadget budget. Read
++  failures stop the charge decision. Board/current/thermal/ADC guards still
++  apply. Omission retains gadget-only behavior. A device link orders PM.
++- amazon,max-charge-current-microamp : Optional board ceiling, 80000 (default)
++  through 1600000, rounded down to an MC13892 table 63 regulated DAC setting.
++  The initial software limit remains 80000; userspace must explicitly take
++  control. Source budget and temperature may reduce the selected current.
++  Code 15 is an unregulated external-supply mode and is never selected.
++- amazon,usb-current-reserve-microamp : Allowance outside the regulated
++  charge path, including USB PHY, indicator and board tolerance. Default
++  60000: table 64's 440 mA upper bound for the recommended 400 mA USB DAC
++  setting leaves 60 mA within a 500 mA source budget. This is a board policy
++  allowance, not a measurement of actual input current. The selector uses
++  table 64's upper current bound plus this allowance; insufficient budget
++  stops charging. Verify the allowance against the actual board and load.
++
++- Optional amazon,charge-led-triggers on the charger enables k4-charge-active
++  and k4-charge-full triggers from the charger driver. Bind the GPIO charging
++  gate and MC13892 LED ID 6 to active, and the board's green LEDKP to full.
++  Requires CONFIG_CHARGER_K4_MC13892_LEDS; does not opt into current control.
++
++Example K4 charging consumer (phandles refer to board devices):
++  charger {
++    compatible = "amazon,kindle-k4-mc13892-charger";
++    amazon,battery-supply = <&battery_gauge>;
++    amazon,usb-budget-supply = <&usbphy0>;
++    amazon,charger-detect-supply = <&charger_detector>;
++    amazon,max-charge-current-microamp = <480000>;
++    amazon,usb-current-reserve-microamp = <60000>;
++  };
+ 
+ Sub-nodes:
+ - codec: Contain the Audio Codec node.
+@@ -17,6 +68,11 @@
+   "led-control". Number of register depends of used IC, for MC13783 is 6,
+   for MC13892 is 4, for MC34708 is 1. See datasheet for bits definitions of
+   these registers.
++  Optional "led-control-mask" has the same number of 24-bit entries. When
++  present, initialize only the selected bits with read-modify-write; a zero
++  mask skips the register. Each led-control value must be contained by its
++  mask. This allows warm-start/shared-register boards to preserve unrelated
++  channels. Without masks, the historical full-register initialization applies.
+   - #address-cells: Must be 1.
+   - #size-cells: Must be 0.
+   Each led node should contain "reg", which used as LED ID (described below).
+@@ -46,6 +102,7 @@
+     3  : Red
+     4  : Green
+     5  : Blue
++    6  : CHRGLED (Charger 0 bit 18, brightness 0/1; no current control)
+ 
+ MC34708 LED IDs:
+     0  : Charger Red
+--- /dev/null
++++ b/Documentation/devicetree/bindings/misc/amazon,k4-accessory-inputs.yaml
+@@ -0,0 +1,57 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/misc/amazon,k4-accessory-inputs.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++
++title: Amazon Kindle K4 accessory inputs and Apollo output
++
++maintainers:
++  - codex <codex@localhost>
++
++description: |
++  ACC_PG detects an accessory charging source. ACC_CHRG_B is a separate
++  active-low charging-status input. The controller variant also owns the
++  Apollo output regulator and follows the stock USB/screensaver/PM policy.
++  It does not increase the charging-current budget. Its MC13892 GPO3 node
++  uses amazon,accessory-active-low because the board output is enabled
++  by clearing GPO3EN, unlike the generic regulator polarity.
++
++properties:
++  compatible:
++    enum:
++      - amazon,k4-accessory-inputs
++      - amazon,k4-accessory-controller
++  detect-gpios:
++    maxItems: 1
++    description: Active-high ACC_PG input.
++  charging-gpios:
++    maxItems: 1
++    description: Active-low ACC_CHRG_B input.
++  output-supply:
++    description: Exclusive Apollo output regulator.
++  usb-source:
++    $ref: /schemas/types.yaml#/definitions/phandle
++    description: USB power_supply providing the physical ONLINE property.
++  wakeup-source: true
++  pinctrl-names:
++    items:
++      - const: default
++  pinctrl-0: true
++
++required:
++  - compatible
++  - detect-gpios
++  - charging-gpios
++
++allOf:
++  - if:
++      properties:
++        compatible:
++          const: amazon,k4-accessory-controller
++    then:
++      required:
++        - output-supply
++        - usb-source
++
++additionalProperties: false
+--- a/Documentation/devicetree/bindings/mmc/mmc-pwrseq-simple.yaml
++++ b/Documentation/devicetree/bindings/mmc/mmc-pwrseq-simple.yaml
+@@ -14,9 +14,14 @@
+   of common properties between various SOC designs. It thus enables us to use
+   the same provider for several SOC designs.
+ 
++# The K4 variant uses reset-gpios as the board's independent power-enable:
++# assert/deassert once at probe, wait post-power-on-delay-ms, retain through
++# subsequent MMC power/reset callbacks (factory Yoshi board initialization).
+ properties:
+   compatible:
+-    const: mmc-pwrseq-simple
++    enum:
++      - mmc-pwrseq-simple
++      - amazon,k4-wifi-pwrseq
+ 
+   reset-gpios:
+     minItems: 1
+--- /dev/null
++++ b/Documentation/devicetree/bindings/net/wireless/atheros,ath6kl.yaml
+@@ -0,0 +1,58 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/net/wireless/atheros,ath6kl.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++
++title: Atheros ath6kl SDIO wireless device
++
++maintainers:
++  - Codex <codex@localhost>
++
++allOf:
++  - $ref: ieee80211.yaml#
++
++properties:
++  compatible:
++    const: atheros,ath6kl
++
++  reg:
++    maxItems: 1
++
++  atheros,board-id:
++    $ref: /schemas/types.yaml#/definitions/string
++    description: Board identifier used for a fallback calibration filename.
++
++  atheros,antenna-diversity-parameters:
++    $ref: /schemas/types.yaml#/definitions/uint32-array
++    description: |
++      Optional board policy for the firmware WMI_SET_DIV_PARAMS command.
++      Omit this property to retain firmware defaults. The driver sends it on
++      every firmware start, including restart after power loss in suspend.
++    items:
++      - description: Idle interval in milliseconds before comparing antennas.
++      - description: RSSI difference threshold in dB.
++        maximum: 255
++      - description: Diversity enable flag.
++        enum: [0, 1]
++      - description: Firmware active rate threshold.
++        maximum: 65535
++
++required:
++  - compatible
++  - reg
++
++unevaluatedProperties: false
++
++examples:
++  - |
++    mmc {
++        #address-cells = <1>;
++        #size-cells = <0>;
++
++        wifi@1 {
++            compatible = "atheros,ath6kl";
++            reg = <1>;
++            atheros,antenna-diversity-parameters = <10000 3 1 36>;
++        };
++    };
+--- /dev/null
++++ b/Documentation/devicetree/bindings/nvmem/amazon,kindle-panel-flash.yaml
+@@ -0,0 +1,57 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/nvmem/amazon,kindle-panel-flash.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++
++title: Kindle display panel factory SPI NOR data
++
++maintainers:
++  - codex <codex@localhost>
++
++description: |
++  Kindle display panels carry SPI NOR with factory waveforms and calibration
++  data. This binding exposes that data as read-only NVMEM, with no program,
++  erase, unlock or flash mode changes. Capacity is identified by the complete
++  JEDEC ID; it is not a board-provided sample size. The panel controller and
++  its high-voltage supplies are separate devices.
++
++allOf:
++  - $ref: /schemas/spi/spi-peripheral-props.yaml#
++  - $ref: nvmem.yaml#
++
++properties:
++  compatible:
++    const: amazon,kindle-panel-flash
++  reg:
++    maxItems: 1
++  spi-max-frequency:
++    maximum: 1000000
++  spi-rx-bus-width:
++    const: 1
++  spi-tx-bus-width:
++    const: 1
++  spi-cpha: false
++  spi-cpol: false
++  spi-cs-high: false
++  spi-3wire: false
++  spi-lsb-first: false
++
++required:
++  - compatible
++  - reg
++  - spi-max-frequency
++
++unevaluatedProperties: false
++
++examples:
++  - |
++    spi {
++        #address-cells = <1>;
++        #size-cells = <0>;
++        panel-flash@0 {
++            compatible = "amazon,kindle-panel-flash";
++            reg = <0>;
++            spi-max-frequency = <1000000>;
++        };
++    };
+--- a/Documentation/devicetree/bindings/pinctrl/fsl,imx50-pinctrl.txt
++++ b/Documentation/devicetree/bindings/pinctrl/fsl,imx50-pinctrl.txt
+@@ -30,3 +30,10 @@
+ 
+ Refer to imx50-pinfunc.h in device tree source folder for all available
+ imx50 PIN_FUNC_ID.
++
++Optional controller properties:
++- fsl,sd2-low-voltage: select the SD2 group 1.65--1.95 V output buffer
++  range (SW_PAD_CTL_GRP_SD2 HVE bit 13). Absence preserves boot firmware state.
++- fsl,nandf-low-voltage: same selection for the NANDF group (also SD3).
++These select buffer characteristics, not supply voltages. Apply before consumers
++are enabled; use only with a board whose corresponding supply is in that range.
+--- /dev/null
++++ b/Documentation/devicetree/bindings/power/fsl,imx50-pm.yaml
+@@ -0,0 +1,62 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/power/fsl,imx50-pm.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++title: Freescale i.MX50 platform power control
++maintainers:
++- codex <codex@localhost>
++description: 'Platform WAIT/STOP owner with formal OCRAM DDR self-refresh, PLL restore,
++  ARM/NEON SRPG and optional MC13892 standby. CCM registers are shared with the clock
++  provider. Driver: arch/arm/mach-imx/pm-imx50.c.'
++properties:
++  compatible:
++    const: fsl,imx50-pm
++  reg:
++    items:
++    - description: ARM platform registers
++    - description: GPC and SRPG registers
++    - description: CCM registers shared with the clock provider
++  reg-names:
++    items:
++    - const: cortex
++    - const: gpc
++    - const: ccm
++  clocks:
++    minItems: 1
++    maxItems: 2
++  clock-names:
++    minItems: 1
++    items:
++    - const: gpc
++    - const: weim
++  fsl,stop-with-ocram:
++    type: boolean
++    description: Execute STOP from the formal OCRAM self-refresh core.
++  fsl,srpg-in-stop:
++    type: boolean
++    description: Use stock ARM and NEON SRPG sequencing during STOP.
++  fsl,oscillator-startup-cycles:
++    $ref: /schemas/types.yaml#/definitions/uint32
++    description: CKIL startup cycles for STOP oscillator restoration.
++    minimum: 1
++    maximum: 256
++  amazon,standby-pmic:
++    $ref: /schemas/types.yaml#/definitions/phandle
++    description: MC13892 standby provider.
++  amazon,standby-microvolt:
++    description: SW1, SW2 and SW3 standby voltages in microvolts.
++    items:
++      - description: SW1 standby voltage
++      - description: SW2 standby voltage
++      - description: SW3 standby voltage
++  amazon,standby-mode0-power-off-mask:
++    $ref: /schemas/types.yaml#/definitions/uint32
++    description: Explicit MODE0 standby power-off bits; driver validates allowed rails.
++required:
++- compatible
++- reg
++- reg-names
++- clocks
++- clock-names
++additionalProperties: false
+--- a/Documentation/devicetree/bindings/power/power-domain.yaml
++++ b/Documentation/devicetree/bindings/power/power-domain.yaml
+@@ -22,6 +22,18 @@
+   domains. A consumer node can refer to the provider by a phandle and a set of
+   phandle arguments (so called PM domain specifiers) of length specified by the
+   \#power-domain-cells property in the PM domain provider node.
++
++# i.MX50 platform WAIT/STOP control is not a generic PM domain provider.
++select:
++  properties:
++    $nodename:
++      pattern: "^(power-controller|power-domain)([@-].*)?$"
++    compatible:
++      not:
++        contains:
++          const: fsl,imx50-pm
++  required:
++    - $nodename
+ 
+ properties:
+   $nodename:
+--- /dev/null
++++ b/Documentation/devicetree/bindings/power/reset/amazon,kindle-k4-restart.yaml
+@@ -0,0 +1,29 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/power/reset/amazon,kindle-k4-restart.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++title: Kindle K4 MC13892 board restart
++maintainers:
++- codex <codex@localhost>
++description: 'MC13892 child for RTC-assisted board restart. Named pin states retain
++  WDOG mux during normal operation and GPIO drive during WDI assertion. Driver: drivers/power/reset/k4-mc13892-restart.c.'
++properties:
++  compatible:
++    const: amazon,kindle-k4-restart
++  reset-gpios:
++    maxItems: 1
++    description: PMIC WDI, driven low only during the restart sequence.
++  pinctrl-names:
++    items:
++    - const: watchdog
++    - const: reset
++  pinctrl-0: true
++  pinctrl-1: true
++required:
++- compatible
++- reset-gpios
++- pinctrl-names
++- pinctrl-0
++- pinctrl-1
++additionalProperties: false
+--- /dev/null
++++ b/Documentation/devicetree/bindings/power/supply/amazon,kindle-k4-mc13892-charger.yaml
+@@ -0,0 +1,34 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/power/supply/amazon,kindle-k4-mc13892-charger.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++title: Kindle K4 MC13892 charger policy child
++maintainers:
++- codex <codex@localhost>
++description: 'MC13892 child, separate from regulator/RTC registration. Provider references
++  name power_supply devices, not regulator rails. Current ceilings do not opt into
++  software charging control. Driver: drivers/power/supply/k4-mc13892-charger.c.'
++properties:
++  compatible:
++    const: amazon,kindle-k4-mc13892-charger
++  amazon,battery-supply:
++    description: Fuel gauge providing pack voltage, capacity and temperature.
++  amazon,usb-budget-supply:
++    description: USB gadget power_supply current budget.
++  amazon,charger-detect-supply:
++    description: Optional MAX14656 autonomous charging-source budget.
++  amazon,max-charge-current-microamp:
++    description: Board maximum; source budget and thermal constraints can reduce it.
++    minimum: 80000
++    maximum: 1600000
++  amazon,usb-current-reserve-microamp:
++    description: Input current allowance outside the regulated charge path.
++  amazon,charge-led-triggers:
++    type: boolean
++    description: Publish charging LED triggers without enabling charging control.
++required:
++- compatible
++- amazon,battery-supply
++- amazon,usb-budget-supply
++additionalProperties: false
+--- a/Documentation/devicetree/bindings/power/supply/maxim,max14656.yaml
++++ b/Documentation/devicetree/bindings/power/supply/maxim,max14656.yaml
+@@ -14,7 +14,11 @@
+ 
+ properties:
+   compatible:
+-    const: maxim,max14656
++    oneOf:
++      - const: maxim,max14656
++      - items:
++          - const: amazon,k4-max14656
++          - const: maxim,max14656
+ 
+   reg:
+     maxItems: 1
+--- /dev/null
++++ b/Documentation/devicetree/bindings/regulator/amazon,k4-papyrus.yaml
+@@ -0,0 +1,69 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/regulator/amazon,k4-papyrus.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++title: Kindle K4 Papyrus display power and temperature
++maintainers:
++- codex <codex@localhost>
++description: 'Single owner of Papyrus DISPLAY/VCOM rails. Voltage and sequence codes
++  come from stock board data; optional panel-vcom calibration is resolved before GPIO
++  takeover. Array limits here describe the driver interface, not one measured panel.
++  Driver: drivers/regulator/k4-papyrus.c.'
++properties:
++  compatible:
++    const: amazon,k4-papyrus
++  reg:
++    maxItems: 1
++  wakeup-gpios:
++    maxItems: 1
++    description: Papyrus WAKEUP.
++  vcom-gpios:
++    maxItems: 1
++    description: VCOM gate.
++  powergood-gpios:
++    maxItems: 1
++    description: Power-good sense.
++  interrupt-gpios:
++    maxItems: 1
++    description: Fault/status sense.
++  ti,voltage-codes:
++    $ref: /schemas/types.yaml#/definitions/uint32-array
++    minItems: 3
++    maxItems: 3
++    description: Positive rail, negative rail and VCOM DAC codes.
++  ti,power-sequence:
++    $ref: /schemas/types.yaml#/definitions/uint32-array
++    minItems: 3
++    maxItems: 3
++    description: Three 8-bit power sequencing register values.
++  ti,thermistor-limits:
++    $ref: /schemas/types.yaml#/definitions/uint32-array
++    minItems: 2
++    maxItems: 2
++    description: Signed hot and cool thresholds in degrees Celsius, encoded as cells.
++  display-supply: true
++  nvmem-cells:
++    maxItems: 1
++  nvmem-cell-names:
++    items:
++    - const: panel-vcom
++  regulators:
++    type: object
++    properties:
++      display:
++        $ref: /schemas/regulator/regulator.yaml#
++      vcom:
++        $ref: /schemas/regulator/regulator.yaml#
++    additionalProperties: false
++required:
++- compatible
++- reg
++- wakeup-gpios
++- vcom-gpios
++- powergood-gpios
++- interrupt-gpios
++- ti,voltage-codes
++- ti,power-sequence
++- ti,thermistor-limits
++additionalProperties: false
+--- /dev/null
++++ b/Documentation/devicetree/bindings/soc/imx/fsl,imx50-pxp.yaml
+@@ -0,0 +1,31 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/soc/imx/fsl,imx50-pxp.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++title: Freescale i.MX50 Pixel Pipeline kernel image service
++maintainers:
++  - codex <codex@localhost>
++description: |
++  Synchronous i.MX50 PxP image service. The optional axi_parent specifies
++  the board factory source; after engine idle/reset proof the consumer
++  selects that source and 200 MHz without changing the shared parent rate.
++  Absence of axi_parent preserves the inherited rate/source.
++properties:
++  compatible:
++    const: fsl,imx50-pxp
++  reg:
++    maxItems: 1
++  interrupts:
++    maxItems: 1
++  clocks:
++    minItems: 2
++    maxItems: 3
++  clock-names:
++    minItems: 2
++    items:
++      - const: apbh
++      - const: pxp_axi
++      - const: axi_parent
++required: [compatible, reg, interrupts, clocks, clock-names]
++additionalProperties: false
+--- /dev/null
++++ b/Documentation/devicetree/bindings/sound/fsl,ssi-legacy-properties.yaml
+@@ -0,0 +1,23 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/sound/fsl,ssi-legacy-properties.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++title: Freescale SSI legacy FIFO property types
++maintainers:
++  - codex <codex@localhost>
++description: Supplement the existing fsl,ssi.txt binding without changing its interface.
++select:
++  properties:
++    compatible:
++      contains:
++        enum:
++          - fsl,imx50-ssi
++          - fsl,imx51-ssi
++  required:
++    - compatible
++properties:
++  fsl,fifo-depth:
++    $ref: /schemas/types.yaml#/definitions/uint32
++    description: Number of transmit and receive FIFO elements.
++additionalProperties: true
+--- /dev/null
++++ b/Documentation/devicetree/bindings/sram/fsl,imx50-ocram-probe.yaml
+@@ -0,0 +1,38 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/sram/fsl,imx50-ocram-probe.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++title: i.MX50 OCRAM suspend core resources
++maintainers:
++- codex <codex@localhost>
++description: 'Legacy compatible retained for the formal STOP core. The probe name
++  does not enable diagnostic sysfs; that requires a separate kernel debug option.
++  Code/data/private-page-table pools belong to mmio-sram. Driver: arch/arm/mach-imx/ocram-imx50-core.c.'
++properties:
++  compatible:
++    const: fsl,imx50-ocram-probe
++  reg:
++    items:
++    - description: CCM registers
++    - description: Databahn DDR registers
++    - description: PLL1 registers
++  reg-names:
++    items:
++    - const: ccm
++    - const: databahn
++    - const: pll1
++  sram:
++    $ref: /schemas/types.yaml#/definitions/phandle-array
++    items:
++      - items:
++          - description: Code pool phandle
++          - description: Data pool phandle
++          - description: Private page table pool phandle
++    description: Three contiguous pool phandles, without argument cells.
++required:
++- compatible
++- reg
++- reg-names
++- sram
++additionalProperties: false
+--- /dev/null
++++ b/Documentation/devicetree/bindings/usb/amazon,k4-usb-phy.yaml
+@@ -0,0 +1,34 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/usb/amazon,k4-usb-phy.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++
++title: Kindle K4 peripheral USB PHY
++
++maintainers:
++  - codex <codex@localhost>
++
++description: |
++  K4 board wrapper for the i.MX50 USB PHY. Clock handling is identical to
++  usb-nop-xceiv. A software power supply reports the USB gadget current
++  budget to future board charging policy. It neither measures VBUS nor
++  programs the charger. This binding is local to the experimental K4 port.
++
++properties:
++  compatible:
++    const: amazon,k4-usb-phy
++  clocks:
++    maxItems: 1
++  clock-names:
++    const: main_clk
++  '#phy-cells':
++    const: 0
++
++required:
++  - compatible
++  - clocks
++  - clock-names
++  - '#phy-cells'
++
++additionalProperties: false
+--- a/Documentation/devicetree/bindings/usb/ci-hdrc-usb2.yaml
++++ b/Documentation/devicetree/bindings/usb/ci-hdrc-usb2.yaml
+@@ -85,6 +85,13 @@
+ 
+   dr_mode: true
+ 
++  phy-supply:
++    description: |
++      Optional i.MX PHY rail owned by the controller. Enabled before controller
++      clocks and retained for runtime suspend or USB wakeup. It may be disabled
++      in system sleep when neither controller level requests wakeup. Do not also
++      assign this rail to the PHY's vcc-supply consumer.
++
+   power-domains:
+     maxItems: 1
+ 
+@@ -150,8 +157,10 @@
+     $ref: /schemas/types.yaml#/definitions/phandle-array
+     minItems: 1
+     items:
+-      - description: vbus extcon
+-      - description: id extcon
++      - maxItems: 1
++        description: vbus extcon
++      - maxItems: 1
++        description: id extcon
+ 
+   phy-clkgate-delay-us:
+     description:
+@@ -230,9 +239,10 @@
+       offset, and phy index
+     $ref: /schemas/types.yaml#/definitions/phandle-array
+     items:
+-      - description: phandle to TCSR node
+-      - description: register offset
+-      - description: phy index
++      - items:
++          - description: phandle to TCSR node
++          - description: register offset
++          - description: phy index
+ 
+   vbus-supply:
+     description: reference to the VBUS regulator.
+--- a/Documentation/devicetree/bindings/usb/fsl,usbmisc.yaml
++++ b/Documentation/devicetree/bindings/usb/fsl,usbmisc.yaml
+@@ -17,6 +17,7 @@
+           - fsl,imx25-usbmisc
+           - fsl,imx27-usbmisc
+           - fsl,imx35-usbmisc
++          - fsl,imx50-usbmisc
+           - fsl,imx51-usbmisc
+           - fsl,imx53-usbmisc
+           - fsl,imx6q-usbmisc
+--- a/arch/arm/boot/dts/nxp/imx/Makefile
++++ b/arch/arm/boot/dts/nxp/imx/Makefile
+@@ -386,3 +386,7 @@
+ 	imx7ulp-evk.dtb
+ dtb-$(CONFIG_SOC_IMXRT) += \
+ 	imxrt1050-evk.dtb
++
++# Kindle 4 NT: accepted production tree and legacy recipe alias.
++dtb-$(CONFIG_SOC_IMX50) += imx50-kindle-k4.dtb imx50-kindle-k4-stock-pxp.dtb
++dtb-$(CONFIG_K4_DIAGNOSTICS) += k4-debug/imx50-kindle-k4-debug.dtb
+--- /dev/null
++++ b/arch/arm/boot/dts/nxp/imx/imx50-kindle-k4-common.dtsi
+@@ -0,0 +1,1340 @@
++// SPDX-License-Identifier: GPL-2.0+
++/* Kindle 4 NT D01100 LPDDR1: flat accepted board configuration.
++ * Fragment order and labels deliberately preserve the cold-accepted DTB.
++ * Historical staged sources are local under porting/dts-archive.
++ */
++
++/* Board fragment: imx50-kindle-k4.dts */
++// Initial boot-only device tree for Kindle 4 / Yoshi (D01100).
++// Board peripherals are deliberately added only after they are verified.
++
++
++#include "imx50.dtsi"
++
++/ {
++	model = "Amazon Kindle 4 (Yoshi)";
++	compatible = "amazon,kindle-4", "fsl,imx50";
++
++	chosen {
++		stdout-path = "serial0:115200n8";
++	};
++
++	memory@70000000 {
++		device_type = "memory";
++		reg = <0x70000000 0x10000000>;
++	};
++
++	reserved-memory {
++		#address-cells = <1>;
++		#size-cells = <1>;
++		ranges;
++
++		/* Regions claimed by the 2.6.31 UIO platform device. */
++		legacy-uio@75000000 {
++			reg = <0x75000000 0x10000>;
++			no-map;
++		};
++
++		legacy-uio@75020000 {
++			reg = <0x75020000 0x16000>;
++			no-map;
++		};
++
++		/* Amazon watchdog reboot log: last two pages of 256 MiB RAM. */
++		watchdog-log@7fffe000 {
++			reg = <0x7fffe000 0x2000>;
++			no-map;
++		};
++	};
++};
++
++&iomuxc {
++	pinctrl_uart1_yoshi: uart1-yoshi-grp {
++		fsl,pins = <
++			MX50_PAD_UART1_TXD__UART1_TXD_MUX 0x1e4
++			MX50_PAD_UART1_RXD__UART1_RXD_MUX 0x1e4
++		>;
++	};
++};
++
++&uart1 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pinctrl_uart1_yoshi>;
++	status = "okay";
++};
++
++/* Keep the already-running hardware watchdog as the RAM-test fallback. */
++&wdog1 {
++	status = "disabled";
++};
++
++/* Stock mx50_yoshi_gpio.c:1040-1046: non-FINKLE accessory TX idle low. */
++&iomuxc {
++	pinctrl_accessory_tx_idle: accessory-tx-idle-grp {
++		fsl,pins = <MX50_PAD_UART4_TXD__GPIO6_16 0xc4>;
++	};
++};
++
++&gpio6 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pinctrl_accessory_tx_idle>;
++	accessory-tx-idle-hog {
++		gpio-hog;
++		gpios = <16 GPIO_ACTIVE_HIGH>;
++		output-low;
++		line-name = "accessory-tx-idle";
++	};
++};
++
++/* Board fragment: imx50-kindle-k4-usb.dts */
++// RAM-only USB serial probe. Keep the minimal board DTS as a separate target.
++
++
++/ {
++	model = "Amazon Kindle 4 (Yoshi, USB serial probe)";
++};
++
++&usbotg {
++	dr_mode = "peripheral";
++	phy_type = "utmi_wide";
++	disable-over-current;
++	/* Stock writes O_PWR_POL=1; its low-active comment is inaccurate. */
++	power-active-high;
++	status = "okay";
++};
++
++/* Board fragment: imx50-kindle-k4-pmic-bus.dts */
++// RAM-only probe: enable K4 CSPI pins without creating a PMIC SPI device.
++
++
++/ {
++	model = "Amazon Kindle 4 (Yoshi, PMIC bus probe)";
++};
++
++&iomuxc {
++	pinctrl_cspi_pmic: cspi-pmic-grp {
++		fsl,pins = <
++			MX50_PAD_CSPI_SCLK__CSPI_SCLK 0xc4
++			MX50_PAD_CSPI_MOSI__CSPI_MOSI 0xc4
++			MX50_PAD_CSPI_MISO__CSPI_MISO 0xc4
++			MX50_PAD_CSPI_SS0__CSPI_SS0 0x00
++		>;
++	};
++
++	pinctrl_pmic_irq: pmic-irq-grp {
++		fsl,pins = <
++			/* Old Yoshi pin setup: hysteresis, 100K pull-down. */
++			MX50_PAD_UART1_CTS__GPIO6_8 0x1c4
++		>;
++	};
++};
++
++&cspi {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pinctrl_cspi_pmic>;
++	status = "okay";
++};
++
++/* Board fragment: imx50-kindle-k4-pmic-mfd.dts */
++// RAM-only probe of the MC13892 MFD core. Regulator supplies are added later.
++
++
++#include <dt-bindings/interrupt-controller/irq.h>
++
++/ {
++	model = "Amazon Kindle 4 (Yoshi, PMIC MFD probe)";
++};
++
++&cspi {
++	pmic@0 {
++		compatible = "amazon,kindle-k4-mc13892", "fsl,mc13892";
++		reg = <0>;
++		spi-max-frequency = <2000000>;
++		spi-cs-high;
++		pinctrl-names = "default";
++		pinctrl-0 = <&pinctrl_pmic_irq>;
++		interrupts-extended = <&gpio6 8 IRQ_TYPE_LEVEL_HIGH>;
++	};
++};
++
++/* Board fragment: imx50-kindle-k4-pmic-regulator.dts */
++// RAM-only registration probe of the K4's critical MC13892 rails.
++
++
++/ {
++	model = "Amazon Kindle 4 (Yoshi, PMIC regulator probe)";
++};
++
++&cspi {
++	pmic@0 {
++		regulators {
++			/* Constraints from the old Yoshi board data; retain boot voltages. */
++			sw1_reg: sw1 {
++				regulator-name = "k4-cpu-sw1";
++				regulator-min-microvolt = <600000>;
++				regulator-max-microvolt = <1375000>;
++				regulator-boot-on;
++				regulator-always-on;
++			};
++
++			sw2 {
++				regulator-name = "k4-sw2";
++				regulator-min-microvolt = <900000>;
++				regulator-max-microvolt = <1850000>;
++				regulator-boot-on;
++				regulator-always-on;
++			};
++
++			sw3 {
++				regulator-name = "k4-sw3";
++				regulator-min-microvolt = <900000>;
++				regulator-max-microvolt = <1850000>;
++				regulator-boot-on;
++				regulator-always-on;
++			};
++
++			viohi {
++				regulator-name = "k4-viohi";
++				regulator-min-microvolt = <2775000>;
++				regulator-max-microvolt = <2775000>;
++				regulator-boot-on;
++				regulator-always-on;
++			};
++
++			vpll {
++				regulator-name = "k4-vpll";
++				regulator-min-microvolt = <1050000>;
++				regulator-max-microvolt = <1800000>;
++				regulator-boot-on;
++				regulator-always-on;
++			};
++
++			vdig {
++				regulator-name = "k4-vdig";
++				/* Measured selector is 1.25 V; old 1.20 V is unavailable. */
++				regulator-min-microvolt = <1050000>;
++				regulator-max-microvolt = <1800000>;
++				regulator-boot-on;
++				regulator-always-on;
++			};
++
++			vgen2 {
++				regulator-name = "k4-vgen2";
++				regulator-min-microvolt = <1200000>;
++				regulator-max-microvolt = <3150000>;
++				regulator-boot-on;
++				regulator-always-on;
++			};
++
++			vusb2 {
++				regulator-name = "k4-vusb2";
++				regulator-min-microvolt = <2400000>;
++				regulator-max-microvolt = <2775000>;
++				regulator-boot-on;
++				regulator-always-on;
++			};
++
++			vusb {
++				regulator-name = "k4-vusb";
++				regulator-boot-on;
++				regulator-always-on;
++			};
++
++			/* Off in the measured baseline; old Yoshi uses it for audio. */
++			vgen1 {
++				regulator-name = "k4-vgen1-audio";
++			};
++		};
++	};
++};
++
++/* Board fragment: imx50-kindle-k4-emmc-id.dts */
++// RAM-only eMMC identification; the initramfs never mounts eMMC partitions.
++
++
++/ {
++	model = "Amazon Kindle 4 (Yoshi, eMMC ID probe)";
++};
++
++&iomuxc {
++	pinctrl_emmc_yoshi: emmc-yoshi-grp {
++		fsl,pins = <
++			/* CMD and CLK retain the old board's SION setting. */
++			MX50_PAD_SD3_CMD__ESDHC3_CMD 0x400001e4
++			MX50_PAD_SD3_CLK__ESDHC3_CLK 0x400000d4
++			MX50_PAD_SD3_D0__ESDHC3_DAT0 0x1d4
++			MX50_PAD_SD3_D1__ESDHC3_DAT1 0x1d4
++			MX50_PAD_SD3_D2__ESDHC3_DAT2 0x1d4
++			MX50_PAD_SD3_D3__ESDHC3_DAT3 0x1d4
++			MX50_PAD_SD3_D4__ESDHC3_DAT4 0x1d4
++			MX50_PAD_SD3_D5__ESDHC3_DAT5 0x1d4
++			MX50_PAD_SD3_D6__ESDHC3_DAT6 0x1d4
++			MX50_PAD_SD3_D7__ESDHC3_DAT7 0x1d4
++		>;
++	};
++};
++
++&esdhc3 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pinctrl_emmc_yoshi>;
++	bus-width = <8>;
++	non-removable;
++	no-1-8-v;
++	cap-mmc-highspeed;
++	max-frequency = <40000000>;
++	status = "okay";
++};
++
++/* Board fragment: imx50-kindle-k4-sdio-id.dts */
++// RAM-only SDIO enumeration; Wi-Fi power is inherited from the old kernel.
++
++
++/ {
++	model = "Amazon Kindle 4 (Yoshi, SDIO ID probe)";
++};
++
++&iomuxc {
++	pinctrl_sdio_yoshi: sdio-yoshi-grp {
++		fsl,pins = <
++			/* Old SD2 pad settings, including SION on CMD and CLK. */
++			MX50_PAD_SD2_CMD__ESDHC2_CMD 0x400001e6
++			MX50_PAD_SD2_CLK__ESDHC2_CLK 0x400001d6
++			MX50_PAD_SD2_D0__ESDHC2_DAT0 0x1d6
++			MX50_PAD_SD2_D1__ESDHC2_DAT1 0x1d6
++			MX50_PAD_SD2_D2__ESDHC2_DAT2 0x1d6
++			MX50_PAD_SD2_D3__ESDHC2_DAT3 0x1e6
++		>;
++	};
++};
++
++&esdhc2 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pinctrl_sdio_yoshi>;
++	bus-width = <4>;
++	non-removable;
++	cap-sd-highspeed;
++	cap-sdio-irq;
++	no-1-8-v;
++	max-frequency = <50000000>;
++	status = "okay";
++};
++
++/* Board fragment: imx50-kindle-k4-sdio-power.dts */
++// Hold the old Yoshi Wi-Fi enable GPIO high while enumerating SDIO.
++
++
++#include <dt-bindings/gpio/gpio.h>
++
++/ {
++	model = "Amazon Kindle 4 (Yoshi, SDIO power probe)";
++};
++
++&iomuxc {
++	pinctrl_wifi_power: wifi-power-grp {
++		fsl,pins = <
++			/* Old board: open drain, 100K pull-up on SD3_WP. */
++			MX50_PAD_SD3_WP__GPIO5_28 0xe8
++		>;
++	};
++};
++
++&gpio5 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pinctrl_wifi_power>;
++
++	wifi-power-hog {
++		gpio-hog;
++		gpios = <28 GPIO_ACTIVE_HIGH>;
++		output-high;
++		line-name = "k4-wifi-power";
++	};
++};
++
++&esdhc2 {
++	post-power-on-delay-ms = <40>;
++};
++
++/* Board fragment: imx50-kindle-k4-i2c2-bus.dts */
++// K4 battery/peripheral I2C bus with its board interface enable.
++
++
++#include <dt-bindings/gpio/gpio.h>
++
++/ {
++	model = "Amazon Kindle 4 (Yoshi, I2C2 bus probe)";
++};
++
++&iomuxc {
++	pinctrl_i2c2_yoshi: i2c2-yoshi-grp {
++		fsl,pins = <
++			/* SSI_RXC is GPIO6_5; the old label "gp5_6" is misleading. */
++			MX50_PAD_SSI_RXC__GPIO6_5 0x6
++			/* Old board: SION, hysteresis, max drive, open drain. */
++			MX50_PAD_I2C2_SCL__I2C2_SCL 0x4000010e
++			MX50_PAD_I2C2_SDA__I2C2_SDA 0x4000010e
++		>;
++	};
++};
++
++&i2c2 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pinctrl_i2c2_yoshi>;
++	/* Original gpio_ssi_rxc_enable(): high, then wait 20 ms for I2C. */
++	bus-enable-gpios = <&gpio6 5 GPIO_ACTIVE_HIGH>;
++	bus-enable-delay-ms = <20>;
++	clock-frequency = <100000>;
++	status = "okay";
++};
++
++/* Board fragment: imx50-kindle-k4-battery.dts */
++// bq27210-compatible fuel-gauge probe on the Yoshi I2C2 bus.
++
++
++/ {
++	model = "Amazon Kindle 4 (Yoshi, battery probe)";
++};
++
++&i2c2 {
++	battery_gauge: battery@55 {
++		compatible = "ti,bq27210";
++		reg = <0x55>;
++	};
++};
++
++/* Board fragment: imx50-kindle-k4-charger-detector.dts */
++// Probe the K4 MAX14656/AL32 USB charger detector.
++
++
++#include <dt-bindings/interrupt-controller/irq.h>
++
++/ {
++	model = "Amazon Kindle 4 (Yoshi, charger detector probe)";
++};
++
++&iomuxc {
++	pinctrl_max14656_irq: max14656-irq-grp {
++		fsl,pins = <
++			/* Old board OWIRE GPIO6_26: pull-up, hysteresis. */
++			MX50_PAD_OWIRE__GPIO6_26 0x1e4
++		>;
++	};
++};
++
++&i2c2 {
++	charger_detector: charger-detector@35 {
++		compatible = "amazon,k4-max14656", "maxim,max14656";
++		reg = <0x35>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&pinctrl_max14656_irq>;
++		interrupt-parent = <&gpio6>;
++		interrupts = <26 IRQ_TYPE_EDGE_RISING>;
++	};
++};
++
++/* Board fragment: imx50-kindle-k4-fiveway.dts */
++// Tequila five-way switch probe; button presses still require human testing.
++
++
++#include <dt-bindings/input/input.h>
++
++/ {
++	model = "Amazon Kindle 4 (Tequila, five-way switch probe)";
++
++	fiveway: fiveway-keys {
++		compatible = "gpio-keys";
++		pinctrl-names = "default";
++		pinctrl-0 = <&pinctrl_fiveway>;
++
++		up {
++			label = "fiveway-up";
++			gpios = <&gpio1 20 GPIO_ACTIVE_HIGH>;
++			linux,code = <KEY_UP>;
++			debounce-interval = <60>;
++		};
++
++		down {
++			label = "fiveway-down";
++			gpios = <&gpio1 19 GPIO_ACTIVE_HIGH>;
++			linux,code = <KEY_DOWN>;
++			debounce-interval = <60>;
++		};
++
++		left {
++			label = "fiveway-left";
++			gpios = <&gpio1 16 GPIO_ACTIVE_HIGH>;
++			linux,code = <KEY_LEFT>;
++			debounce-interval = <60>;
++		};
++
++		right {
++			label = "fiveway-right";
++			gpios = <&gpio1 17 GPIO_ACTIVE_HIGH>;
++			linux,code = <KEY_RIGHT>;
++			debounce-interval = <60>;
++		};
++
++		select {
++			label = "fiveway-select";
++			gpios = <&gpio1 18 GPIO_ACTIVE_HIGH>;
++			/* Old input capability bitmap includes KEY_F24 for select. */
++			linux,code = <KEY_F24>;
++			debounce-interval = <60>;
++		};
++	};
++};
++
++&iomuxc {
++	pinctrl_fiveway: fiveway-grp {
++		fsl,pins = <
++			/* Tequila: pull-down, GPIO high means asserted. */
++			MX50_PAD_EIM_EB1__GPIO1_20 0xc4
++			MX50_PAD_EIM_EB0__GPIO1_19 0xc4
++			MX50_PAD_EIM_CS2__GPIO1_16 0xc4
++			MX50_PAD_EIM_CS1__GPIO1_17 0xc4
++			MX50_PAD_EIM_CS0__GPIO1_18 0xc4
++		>;
++	};
++};
++
++/* Board fragment: imx50-kindle-k4-keypad.dts */
++// Tequila one-column, eight-row key matrix probe.
++
++
++#include <dt-bindings/input/input.h>
++
++/ {
++	model = "Amazon Kindle 4 (Tequila, keypad probe)";
++
++	keypad: matrix-keypad {
++		compatible = "gpio-matrix-keypad";
++		pinctrl-names = "default";
++		pinctrl-0 = <&pinctrl_tequila_keypad>;
++
++		/* Old tequila_row_gpios order; asserted high by the column. */
++		row-gpios = <&gpio4 1 GPIO_ACTIVE_HIGH>,
++			    <&gpio4 3 GPIO_ACTIVE_HIGH>,
++			    <&gpio4 5 GPIO_ACTIVE_HIGH>,
++			    <&gpio4 7 GPIO_ACTIVE_HIGH>,
++			    <&gpio4 0 GPIO_ACTIVE_HIGH>,
++			    <&gpio4 2 GPIO_ACTIVE_HIGH>,
++			    <&gpio4 4 GPIO_ACTIVE_HIGH>,
++			    <&gpio4 6 GPIO_ACTIVE_HIGH>;
++		col-gpios = <&gpio5 12 GPIO_ACTIVE_HIGH>;
++
++		linux,keymap = <
++			MATRIX_KEY(0, 0, KEY_LEFTCTRL)
++			MATRIX_KEY(1, 0, KEY_MENU)
++			MATRIX_KEY(2, 0, KEY_PAGEDOWN)
++			MATRIX_KEY(3, 0, KEY_F21)
++			MATRIX_KEY(4, 0, KEY_F23)
++			MATRIX_KEY(5, 0, KEY_PAGEUP)
++			MATRIX_KEY(6, 0, KEY_HOME)
++			MATRIX_KEY(7, 0, KEY_BACK)
++		>;
++
++		debounce-delay-ms = <10>;
++		col-scan-delay-us = <10>;
++		linux,no-autorepeat;
++	};
++};
++
++&iomuxc {
++	pinctrl_tequila_keypad: tequila-keypad-grp {
++		fsl,pins = <
++			/* Old TEQUILA_KEYB_PAD_CONFIG: pull-down, high drive. */
++			MX50_PAD_KEY_ROW0__GPIO4_1 0xc4
++			MX50_PAD_KEY_ROW1__GPIO4_3 0xc4
++			MX50_PAD_KEY_ROW2__GPIO4_5 0xc4
++			MX50_PAD_KEY_ROW3__GPIO4_7 0xc4
++			MX50_PAD_KEY_COL0__GPIO4_0 0xc4
++			MX50_PAD_KEY_COL1__GPIO4_2 0xc4
++			MX50_PAD_KEY_COL2__GPIO4_4 0xc4
++			MX50_PAD_KEY_COL3__GPIO4_6 0xc4
++			/* Matrix scan output, not ESDHC2 data 4. */
++			MX50_PAD_SD2_D4__GPIO5_12 0x4
++		>;
++	};
++};
++
++/* Board fragment: imx50-kindle-k4-charge-led.dts */
++// USB charging indicator GPIO; start in the observed old-kernel off state.
++
++
++/ {
++	model = "Amazon Kindle 4 (Tequila, charge LED probe)";
++
++	leds {
++		compatible = "gpio-leds";
++		pinctrl-names = "default";
++		pinctrl-0 = <&pinctrl_charge_led>;
++
++		charge-led {
++			label = "k4:charging";
++			gpios = <&gpio1 2 GPIO_ACTIVE_LOW>;
++			default-state = "off";
++		};
++	};
++};
++
++&iomuxc {
++	pinctrl_charge_led: charge-led-grp {
++		fsl,pins = <
++			/* Old CHRGLED_DIS: GPIO1_2, low enables the indicator. */
++			MX50_PAD_EIM_DA2__GPIO1_2 0xc4
++		>;
++	};
++};
++
++/* Board fragment: imx50-kindle-k4-rtc.dts */
++// RAM-only probe of the i.MX50 SRTC used as the K4's primary RTC.
++
++
++/ {
++	model = "Amazon Kindle 4 (Tequila, SRTC probe)";
++};
++
++&srtc {
++	status = "okay";
++};
++
++/* Board fragment: imx50-kindle-k4-papyrus-monitor.dts */
++// RAM-only Papyrus register probe. GPIO and display rails are not driven.
++
++
++/ {
++	model = "Amazon Kindle 4 (Tequila, Papyrus read-only probe)";
++};
++
++&i2c2 {
++	papyrus@48 {
++		compatible = "amazon,k4-papyrus-monitor";
++		reg = <0x48>;
++	};
++};
++
++/* Board fragment: imx50-kindle-k4-cpufreq-probe.dts */
++// RAM-only CPU clock/rail integration probe. No frequency transition is allowed.
++
++
++/ {
++	model = "Amazon Kindle 4 (Tequila, fixed CPU OPP probe)";
++
++	cpu_opp_table: opp-table {
++		compatible = "operating-points-v2";
++
++		/* Only the observed 800 MHz / 1.05 V state is enabled. */
++		/* Old 160 MHz / 0.85 V working point needs a separate RAM test. */
++		opp-800000000 {
++			opp-hz = /bits/ 64 <800000000>;
++			opp-microvolt = <1050000>;
++		};
++	};
++};
++
++&{/cpus/cpu@0} {
++	clocks = <&clks IMX5_CLK_ARM>;
++	cpu-supply = <&sw1_reg>;
++	operating-points-v2 = <&cpu_opp_table>;
++};
++
++/* Board fragment: imx50-kindle-k4-wifi-pwrseq-probe.dts */
++// RAM-only test of the old K4 SDIO Wi-Fi enable GPIO under MMC sequencing.
++
++
++#include <dt-bindings/gpio/gpio.h>
++
++/ {
++	model = "Amazon Kindle 4 (Tequila, Wi-Fi power sequence probe)";
++
++	wifi_pwrseq: wifi-pwrseq {
++		compatible = "mmc-pwrseq-simple";
++		/* Old GPIO5_28 low disables Wi-Fi; high enables it. */
++		reset-gpios = <&gpio5 28 GPIO_ACTIVE_LOW>;
++		post-power-on-delay-ms = <40>;
++	};
++};
++
++&gpio5 {
++	/delete-node/ wifi-power-hog;
++};
++
++&esdhc2 {
++	/delete-property/ post-power-on-delay-ms;
++	mmc-pwrseq = <&wifi_pwrseq>;
++};
++
++/* Board fragment: imx50-kindle-k4-cpu-divider-probe.dts */
++// RAM-only frequency transition test, initially retaining 1.05 V at both OPPs.
++
++/ {
++	model = "Amazon Kindle 4 (Tequila, CPU divider probe)";
++};
++
++&cpu_opp_table {
++	opp-160000000 {
++		opp-hz = /bits/ 64 <160000000>;
++		opp-microvolt = <1050000>;
++	};
++};
++
++/* Board fragment: imx50-kindle-k4-dvfs-probe.dts */
++// RAM-only test of the two working points from the old K4 board code.
++
++/ {
++	model = "Amazon Kindle 4 (Tequila, CPU DVFS probe)";
++};
++
++&cpu_opp_table {
++	opp-160000000 {
++		opp-microvolt = <850000>;
++	};
++};
++
++&sw1_reg {
++	/* Conservative probe delay, not a measured PMIC slew rate. */
++	regulator-settling-time-us = <1000>;
++};
++
++/* Board fragment: imx50-kindle-k4-usb-budget-probe.dts */
++/ {
++	model = "Amazon Kindle 4 (Tequila, USB current budget probe)";
++};
++
++&usbphy0 {
++	compatible = "amazon,k4-usb-phy";
++};
++
++/* Board fragment: imx50-kindle-k4-adc-probe.dts */
++/ {
++	model = "Amazon Kindle 4 (Tequila, PMIC ADC probe)";
++};
++
++&cspi {
++	pmic@0 {
++		fsl,mc13xxx-uses-adc;
++	};
++};
++
++/* Board fragment: imx50-kindle-k4-charge-policy-probe.dts */
++/ {
++	model = "Amazon Kindle 4 (Tequila, charger policy probe)";
++};
++
++&cspi {
++	pmic@0 {
++		k4_charger: charger {
++			compatible = "amazon,kindle-k4-mc13892-charger";
++			amazon,battery-supply = <&battery_gauge>;
++			amazon,usb-budget-supply = <&usbphy0>;
++		};
++	};
++};
++
++/* Board fragment: imx50-kindle-k4-charge-240-probe.dts */
++/ {
++	model = "Amazon Kindle 4 (Tequila, 240 mA charging probe)";
++};
++
++&k4_charger {
++	amazon,max-charge-current-microamp = <240000>;
++};
++
++/* Board fragment: imx50-kindle-k4-green-led-probe.dts */
++/ {
++	model = "Amazon Kindle 4 (Tequila, PMIC green LED probe)";
++};
++
++&cspi {
++	pmic@0 {
++		leds {
++			#address-cells = <1>;
++			#size-cells = <0>;
++			/* LEDKP: current code 7, low range, no ramp, initially off.
++			 * Preserve spare bits and every other lighting channel.
++			 */
++			led-control = <0 0x000e00 0 0>;
++			led-control-mask = <0 0x000ffe 0 0>;
++
++			led@2 {
++				reg = <2>;
++				label = "k4:green:status";
++			};
++		};
++	};
++};
++
++/* Board fragment: imx50-kindle-k4-charge-led-policy.dts */
++/ {
++	model = "Amazon Kindle 4 (Tequila, charging indicators)";
++};
++
++&{/leds/charge-led} {
++	linux,default-trigger = "k4-charge-active";
++};
++
++&k4_charger {
++	amazon,charge-led-triggers;
++};
++
++&cspi {
++	pmic@0 {
++		leds {
++			led@2 {
++				linux,default-trigger = "k4-charge-full";
++			};
++			led@6 {
++				reg = <6>;
++				label = "k4:amber:charge-source";
++				linux,default-trigger = "k4-charge-active";
++			};
++		};
++	};
++};
++
++/* Board fragment: imx50-kindle-k4-pxp-service.dts */
++/ {
++	model = "Amazon Kindle 4 (Tequila, PxP kernel service)";
++
++	pxp-client-test {
++		compatible = "amazon,k4-pxp-client-test";
++		pxp = <&pxp_kernel>;
++	};
++};
++
++&soc {
++	pxp_kernel: pxp@4100c000 {
++		compatible = "fsl,imx50-pxp";
++		reg = <0x4100c000 0x2000>;
++		interrupts = <21>;
++		clocks = <&clks IMX5_CLK_APBH_DMA>, <&clks IMX5_CLK_PXP_AXI>;
++		clock-names = "apbh", "pxp_axi";
++	};
++};
++
++/* Board fragment: imx50-kindle-k4-watchdog.dts */
++/ {
++	model = "Amazon Kindle 4 (Tequila, bounded watchdog takeover)";
++
++	chosen {
++		/* No userspace owner: stop kernel feeding after the finite deadline. */
++		bootargs = "console=ttymxc0,115200 watchdog.open_timeout=120 imx2_wdt.nowayout=1";
++	};
++};
++
++&wdog1 {
++	status = "okay";
++	timeout-sec = <30>;
++	/* Stock mxc_wdt_config enables WDT (WCR bit3 / WDOG_B timeout). */
++	fsl,ext-reset-output;
++};
++
++/* Board fragment: imx50-kindle-k4-papyrus-power.dts */
++/ {
++	model = "Amazon Kindle 4 (Tequila, Papyrus power ownership)";
++
++	papyrus-power-test {
++		compatible = "amazon,k4-papyrus-power-test";
++		display-supply = <&papyrus_display>;
++		vcom-supply = <&papyrus_vcom>;
++	};
++};
++
++&iomuxc {
++	pinctrl_papyrus_control: papyrus-control-grp {
++		fsl,pins = <
++			MX50_PAD_EPDC_PWRCOM__GPIO3_27 0x84
++			MX50_PAD_EPDC_PWRSTAT__GPIO3_28 0xec
++			MX50_PAD_EPDC_PWRCTRL0__GPIO3_29 0x84
++			MX50_PAD_EPDC_PWRCTRL1__GPIO3_30 0x84
++		>;
++	};
++};
++
++&i2c2 {
++	papyrus: papyrus@48 {
++		compatible = "amazon,k4-papyrus";
++		reg = <0x48>;
++		/* Deliberately no default mux: driver preloads VCOM low first. */
++		pinctrl-names = "control";
++		pinctrl-0 = <&pinctrl_papyrus_control>;
++		wakeup-gpios = <&gpio3 29 GPIO_ACTIVE_HIGH>;
++		vcom-gpios = <&gpio3 27 GPIO_ACTIVE_HIGH>;
++		powergood-gpios = <&gpio3 28 GPIO_ACTIVE_HIGH>;
++		interrupt-gpios = <&gpio3 30 GPIO_ACTIVE_LOW>;
++		/* Board/panel profile; 0xcf is this panel's recorded raw DAC code. */
++		ti,voltage-codes = <0x23 0xa3 0xcf>;
++		ti,power-sequence = <0xe4 0x22 0x22>;
++		ti,thermistor-limits = <50 45>;
++		display-supply = <&papyrus_display>;
++
++		regulators {
++			papyrus_display: display {
++				regulator-name = "DISPLAY";
++			};
++			papyrus_vcom: vcom {
++				regulator-name = "VCOM";
++			};
++		};
++	};
++};
++
++/* Board fragment: imx50-kindle-k4-epdc.dts */
++/ {
++	model = "Amazon Kindle 4 (Tequila, EPDC display service)";
++	/delete-node/ papyrus-power-test;
++	/delete-node/ pxp-client-test;
++};
++
++&anatop_clks {
++	status = "okay";
++};
++
++&iomuxc {
++	pinctrl_epdc_active: epdc-active-grp {
++		fsl,pins = <
++			MX50_PAD_EPDC_D0__EPDC_SDDO_0 0x84
++			MX50_PAD_EPDC_D1__EPDC_SDDO_1 0x84
++			MX50_PAD_EPDC_D2__EPDC_SDDO_2 0x84
++			MX50_PAD_EPDC_D3__EPDC_SDDO_3 0x84
++			MX50_PAD_EPDC_D4__EPDC_SDDO_4 0x84
++			MX50_PAD_EPDC_D5__EPDC_SDDO_5 0x84
++			MX50_PAD_EPDC_D6__EPDC_SDDO_6 0x84
++			MX50_PAD_EPDC_D7__EPDC_SDDO_7 0x84
++			MX50_PAD_EPDC_D8__EPDC_SDDO_8 0x84
++			MX50_PAD_EPDC_D9__EPDC_SDDO_9 0x84
++			MX50_PAD_EPDC_D10__EPDC_SDDO_10 0x84
++			MX50_PAD_EPDC_D11__EPDC_SDDO_11 0x84
++			MX50_PAD_EPDC_D12__EPDC_SDDO_12 0x84
++			MX50_PAD_EPDC_D13__EPDC_SDDO_13 0x84
++			MX50_PAD_EPDC_D14__EPDC_SDDO_14 0x84
++			MX50_PAD_EPDC_D15__EPDC_SDDO_15 0x84
++			MX50_PAD_EPDC_GDCLK__EPDC_GDCLK 0x84
++			MX50_PAD_EPDC_GDSP__EPCD_GDSP 0x84
++			MX50_PAD_EPDC_GDOE__EPCD_GDOE 0x84
++			MX50_PAD_EPDC_GDRL__EPCD_GDRL 0x84
++			MX50_PAD_EPDC_SDCLK__EPCD_SDCLK 0x84
++			MX50_PAD_EPDC_SDOEZ__EPCD_SDOEZ 0x84
++			MX50_PAD_EPDC_SDOED__EPCD_SDOED 0x84
++			MX50_PAD_EPDC_SDOE__EPCD_SDOE 0x84
++			MX50_PAD_EPDC_SDLE__EPCD_SDLE 0x84
++			MX50_PAD_EPDC_SDCLKN__EPCD_SDCLKN 0x84
++			MX50_PAD_EPDC_SDSHR__EPCD_SDSHR 0x84
++			MX50_PAD_EPDC_SDCE0__EPCD_SDCE_0 0x84
++		>;
++	};
++
++	pinctrl_epdc_idle: epdc-idle-grp {
++		fsl,pins = <
++			MX50_PAD_EPDC_GDSP__GPIO3_17 0x84
++			MX50_PAD_EPDC_SDCE0__GPIO4_25 0x84
++		>;
++	};
++};
++
++&soc {
++	epdc: display-controller@41010000 {
++		compatible = "amazon,k4-imx50-epdc";
++		reg = <0x41010000 0x1000>;
++		interrupts = <27>;
++		clocks = <&clks IMX5_CLK_APBH_DMA>, <&clks IMX5_CLK_EPDC_AXI>,
++			 <&clks IMX5_CLK_EPDC_PIX>, <&clks IMX5_CLK_PLL1_SW>;
++		clock-names = "apbh", "epdc_axi", "epdc_pix", "pixel_parent";
++		/* No default mux or assigned clocks: owner first verifies idle. */
++		pinctrl-names = "active", "idle";
++		pinctrl-0 = <&pinctrl_epdc_active>;
++		pinctrl-1 = <&pinctrl_epdc_idle>;
++		gdsp-gpios = <&gpio3 17 GPIO_ACTIVE_HIGH>;
++		sdce-gpios = <&gpio4 25 GPIO_ACTIVE_HIGH>;
++		pxp = <&pxp_kernel>;
++		papyrus = <&papyrus>;
++		display-supply = <&papyrus_display>;
++		vcom-supply = <&papyrus_vcom>;
++		wbf-firmware = "amazon/k4/panel-stock.wbf";
++		wrf-firmware = "amazon/k4/panel-stock.wrf";
++	};
++};
++
++/* Board fragment: imx50-kindle-k4-fb.dts */
++/ {
++	model = "Amazon Kindle 4 (Tequila, EPDC framebuffer)";
++
++	/* Keep the SRTC primary when the PMIC child probes. */
++	aliases {
++		rtc0 = &srtc;
++		rtc1 = &k4_fb_pmic;
++	};
++
++	framebuffer {
++		compatible = "amazon,k4-epdc-fb";
++		epdc = <&epdc>;
++		update-delay-ms = <100>;
++		idle-delay-ms = <500>;
++	};
++};
++
++/* Keep the original Tequila RF configuration in the integrated display board. */
++&esdhc2 {
++	#address-cells = <1>;
++	#size-cells = <0>;
++
++	wifi@1 {
++		compatible = "atheros,ath6kl";
++		reg = <1>;
++		/* Original Tequila: idle ms, RSSI delta, enable, rate threshold. */
++		atheros,antenna-diversity-parameters = <10000 3 1 36>;
++	};
++};
++
++/* Keep the validated charge ceiling and source detection in the fb board. */
++&cspi {
++	k4_fb_pmic: pmic@0 {
++		fsl,mc13xxx-uses-rtc;
++	};
++};
++
++&k4_charger {
++	/* Original Tequila wall ceiling; USB budget separately caps the DAC. */
++	amazon,max-charge-current-microamp = <480000>;
++	amazon,usb-current-reserve-microamp = <60000>;
++	amazon,charger-detect-supply = <&charger_detector>;
++};
++
++/* The USB controller orders this rail before clocks and after child teardown. */
++&cspi {
++	pmic@0 {
++		regulators {
++			k4_vusb2: vusb2 {
++				/delete-property/ regulator-always-on;
++				/* Original Tequila code waits 10 ms after enable. */
++				regulator-enable-ramp-delay = <10000>;
++			};
++		};
++	};
++};
++
++&usbotg {
++	phy-supply = <&k4_vusb2>;
++};
++
++/* Board fragment: imx50-kindle-k4-panel-flash.dts */
++/ {
++	model = "Amazon Kindle 4 (Tequila, panel Flash read only)";
++};
++
++&iomuxc {
++	pinctrl_k4_panel_flash: k4-panel-flash {
++		fsl,pins = <
++			MX50_PAD_ECSPI2_SCLK__ECSPI2_SCLK 0x0c4
++			MX50_PAD_ECSPI2_MOSI__ECSPI2_MOSI 0x0c4
++			MX50_PAD_ECSPI2_MISO__ECSPI2_MISO 0x1c4
++			MX50_PAD_ECSPI2_SS0__ECSPI2_SS0 0x0e4
++		>;
++	};
++};
++
++&ecspi2 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pinctrl_k4_panel_flash>;
++	status = "okay";
++
++	panel_flash: panel-flash@0 {
++		compatible = "amazon,kindle-panel-flash";
++		reg = <0>;
++		spi-max-frequency = <1000000>;
++	};
++};
++
++/* Board fragment: imx50-kindle-k4-panel-waveform.dts */
++/ {
++	model = "Amazon Kindle 4 (Tequila, factory WBF metadata)";
++};
++
++&epdc {
++	/delete-property/ wbf-firmware;
++	nvmem = <&panel_flash>;
++	nvmem-names = "wbf";
++	/* Original flash layout: WBF ends before panel calibration at 0x30000. */
++	wbf-nvmem-offset = <0x886>;
++	wbf-nvmem-size = <0x2f77a>;
++};
++
++/* Board fragment: imx50-kindle-k4-panel-decoder.dts */
++/ {
++	model = "Amazon Kindle 4 (Tequila, decoded factory WBF)";
++};
++
++&epdc {
++	/delete-property/ wrf-firmware;
++	wbf-decode;
++};
++
++/* Board fragment: imx50-kindle-k4-display-stop.dts */
++/ {
++	model = "Amazon Kindle 4 (Tequila, display and SRAM STOP)";
++};
++
++&pm {
++	status = "okay";
++	fsl,stop-with-ocram;
++	fsl,srpg-in-stop;
++	fsl,oscillator-startup-cycles = <256>;
++	clocks = <&clks IMX5_CLK_GPC_DVFS>, <&clks IMX5_CLK_EMI_SLOW_GATE>;
++	clock-names = "gpc", "weim";
++};
++
++&soc {
++	ocram_probe: ocram-probe@53fd4000 {
++		compatible = "fsl,imx50-ocram-probe";
++		reg = <0x53fd4000 0x1000>, <0x14000000 0x1000>, <0x63f80000 0x1000>;
++		reg-names = "ccm", "databahn", "pll1";
++		sram = <&ocram_code>, <&ocram_data>, <&ocram_tables>;
++	};
++
++	/* Inherit sys_clk_root and CCGR6 CG1; probe checks the gate before use. */
++	sram@f8000000 {
++		compatible = "mmio-sram";
++		reg = <0xf8000000 0x20000>;
++		ranges = <0 0xf8000000 0x20000>;
++		#address-cells = <1>;
++		#size-cells = <1>;
++
++		ocram_tables: tables-sram@0 {
++			reg = <0 0x8000>;
++			pool;
++		};
++
++		ocram_code: code-sram@1e000 {
++			reg = <0x1e000 0x1000>;
++			protect-exec;
++		};
++		ocram_data: data-sram@1f000 {
++			reg = <0x1f000 0x1000>;
++			pool;
++		};
++	};
++};
++
++/* Board fragment: imx50-kindle-k4-display-vstby.dts */
++/ {
++	model = "Amazon Kindle 4 (Tequila, display and retained-LDO VSTBY)";
++};
++
++&sw1_reg {
++	regulator-state-mem {
++		regulator-on-in-suspend;
++		regulator-suspend-microvolt = <850000>;
++	};
++};
++
++&cspi {
++	pmic@0 {
++		regulators {
++			sw2 {
++				regulator-state-mem {
++					regulator-on-in-suspend;
++					regulator-suspend-microvolt = <950000>;
++				};
++			};
++			sw3 {
++				regulator-state-mem {
++					regulator-on-in-suspend;
++					regulator-suspend-microvolt = <950000>;
++				};
++			};
++		};
++	};
++};
++
++&cspi {
++	k4_display_standby_pmic: pmic@0 { };
++};
++
++&pm {
++	amazon,standby-pmic = <&k4_display_standby_pmic>;
++	amazon,standby-microvolt = <850000 950000 950000>;
++};
++
++/* Board fragment: imx50-kindle-k4-display-vusb2.dts */
++/ {
++	model = "Amazon Kindle 4 (Tequila, display and VUSB2 standby)";
++};
++
++&pm {
++	/* The USB controller already owns device sleep supply ordering. */
++	amazon,standby-mode0-power-off-mask = <0x80000>;
++};
++
++/* Board fragment: imx50-kindle-k4-accessory-inputs.dts */
++/ {
++	model = "Amazon Kindle 4 (Tequila, accessory input stage)";
++	accessory_inputs: accessory-inputs {
++		compatible = "amazon,k4-accessory-inputs";
++		pinctrl-names = "default";
++		pinctrl-0 = <&pinctrl_accessory_inputs>;
++		detect-gpios = <&gpio1 13 GPIO_ACTIVE_HIGH>;
++		charging-gpios = <&gpio1 14 GPIO_ACTIVE_LOW>;
++		wakeup-source;
++	};
++};
++
++&iomuxc {
++	pinctrl_accessory_inputs: accessory-inputs-grp {
++		fsl,pins = <
++			/* Match old input pulls: detect down, charge-status up. */
++			MX50_PAD_EIM_DA13__GPIO1_13 0xcc
++			MX50_PAD_EIM_DA14__GPIO1_14 0xec
++		>;
++	};
++};
++
++/* Board fragment: imx50-kindle-k4-restart.dts */
++&cspi {
++	pmic@0 {
++		restart {
++			compatible = "amazon,kindle-k4-restart";
++			reset-gpios = <&gpio6 28 GPIO_ACTIVE_LOW>;
++			/* No default state: preserve WDOG until reboot preparation. */
++			pinctrl-names = "watchdog", "reset";
++			pinctrl-0 = <&pinctrl_restart_watchdog>;
++			pinctrl-1 = <&pinctrl_restart_gpio>;
++		};
++	};
++};
++
++&iomuxc {
++	pinctrl_restart_watchdog: restart-watchdog-grp {
++		fsl,pins = <MX50_PAD_WDOG__WDOG1_WDOG_RST_B_DEB 0x4>;
++	};
++	pinctrl_restart_gpio: restart-gpio-grp {
++		/* Original high-drive push-pull/no keeper/no hysteresis. */
++		fsl,pins = <MX50_PAD_WDOG__GPIO6_28 0x4>;
++	};
++};
++
++/* Match the factory Yoshi SDHC source, keeping its root at 200 MHz. */
++&esdhc2 {
++	assigned-clocks = <&clks IMX5_CLK_ESDHC_A_SEL>,
++			  <&clks IMX5_CLK_ESDHC_A_PRED>,
++			  <&clks IMX5_CLK_ESDHC_A_PODF>,
++			  <&clks IMX5_CLK_ESDHC_C_SEL>;
++	assigned-clock-parents = <&clks IMX5_CLK_PLL1_SW>, <0>, <0>,
++				 <&clks IMX5_CLK_ESDHC_A_PODF>;
++	assigned-clock-rates = <0 200000000 200000000 0>;
++};
++
++/* Board fragment: imx50-kindle-k4-accessory-policy.dts */
++&cspi {
++ pmic@0 {
++  regulators {
++   accessory_output: gpo3 {
++    regulator-name = "k4-apollo";
++    amazon,accessory-active-low;
++   };
++  };
++ };
++};
++&accessory_inputs {
++ compatible = "amazon,k4-accessory-controller";
++ output-supply = <&accessory_output>;
++ usb-source = <&charger_detector>;
++};
++
++/* Board fragment: imx50-kindle-k4-panel-vcom.dts */
++&panel_flash {
++	nvmem-layout {
++		compatible = "fixed-layout";
++		#address-cells = <1>;
++		#size-cells = <1>;
++		panel_vcom: calibration@30010 {
++			reg = <0x30010 5>;
++		};
++	};
++};
++
++&papyrus {
++	nvmem-cells = <&panel_vcom>;
++	nvmem-cell-names = "panel-vcom";
++};
++
++/* Board fragment: imx50-kindle-k4-stock-ldo.dts */
++&pm {
++	/* Factory VDIG/VGEN2/VPLL/VUSB2 standby disable bits. */
++	amazon,standby-mode0-power-off-mask = <0x92400>;
++};
++
++/* Board fragment: imx50-kindle-k4-stock-sw1-ramp.dts */
++&sw1_reg {
++	/* MC13892 SW1DVSSPEED=01: 25 mV per 4 us, unchanged factory speed. */
++	/delete-property/ regulator-settling-time-us;
++	regulator-ramp-delay = <6250>;
++};
++
++/* Board fragment: imx50-kindle-k4-stock-pxp.dts */
++&pxp_kernel {
++	clocks = <&clks IMX5_CLK_APBH_DMA>, <&clks IMX5_CLK_PXP_AXI>,
++		 <&clks IMX5_CLK_PLL1_SW>;
++	clock-names = "apbh", "pxp_axi", "axi_parent";
++};
++
++/* Original mx50_yoshi_io_init supplies GPIO5_28 before host registration;
++ * mx_sdhci's MMC power/reset path has no Wi-Fi GPIO power-off callback.
++ */
++&wifi_pwrseq {
++	compatible = "amazon,k4-wifi-pwrseq";
++};
++
++/* Yoshi PMIC init sets all four switchers AUTO independently of revision. */
++&cspi {
++	pmic@0 {
++		regulators {
++			/* mx50_yoshi_pmic_mc13892.c:461-463: COINCHEN=1, 3.0 V.
++			 * Use the existing regulator provider, not a raw PMIC write.
++			 */
++			vcoincell {
++				regulator-name = "k4-coin-backup-charger";
++				regulator-min-microvolt = <3000000>;
++				regulator-max-microvolt = <3000000>;
++				regulator-boot-on;
++				regulator-always-on;
++			};
++			/* Stock apply_uV initializes the selector even with no consumer. */
++			vvideo {
++				regulator-name = "k4-vvideo-unused";
++				regulator-min-microvolt = <2775000>;
++				regulator-max-microvolt = <2775000>;
++			};
++			sw1 { regulator-allowed-modes = <8>; regulator-initial-mode = <8>; };
++			sw2 { regulator-allowed-modes = <8>; regulator-initial-mode = <8>; };
++			sw3 { regulator-allowed-modes = <8>; regulator-initial-mode = <8>; };
++			sw4 {
++				regulator-name = "k4-sw4";
++				regulator-min-microvolt = <1100000>;
++				regulator-max-microvolt = <1850000>;
++				regulator-boot-on;
++				regulator-always-on;
++				regulator-allowed-modes = <8>;
++				regulator-initial-mode = <8>;
++			};
++		};
++	};
++};
++
++/* mx50_yoshi_gpio.c:1061/1063; SD2 and SD3/NANDF output buffers use 1.8 V. */
++&iomuxc {
++	fsl,sd2-low-voltage;
++	fsl,nandf-low-voltage;
++};
++
++/* Stock clock_mx50_yoshi.c:3536 and 3662 select the 24 MHz LP_APM
++ * source. Keep inherited dividers: the stock CSPI 12 MHz rate request
++ * has no set_rate callback and does not program a divider.
++ */
++&uart1 {
++	assigned-clocks = <&clks IMX5_CLK_UART_SEL>;
++	assigned-clock-parents = <&clks IMX5_CLK_LP_APM>;
++};
++
++&ecspi2 {
++	assigned-clocks = <&clks IMX5_CLK_ECSPI_SEL>;
++	assigned-clock-parents = <&clks IMX5_CLK_LP_APM>;
++};
+--- /dev/null
++++ b/arch/arm/boot/dts/nxp/imx/imx50-kindle-k4-stock-pxp.dts
+@@ -0,0 +1,3 @@
++// SPDX-License-Identifier: GPL-2.0+
++/* Compatibility target for existing accepted RAM recipes. */
++#include "imx50-kindle-k4.dts"
+--- /dev/null
++++ b/arch/arm/boot/dts/nxp/imx/imx50-kindle-k4.dts
+@@ -0,0 +1,3 @@
++// SPDX-License-Identifier: GPL-2.0+
++/dts-v1/;
++#include "imx50-kindle-k4-common.dtsi"
+--- a/arch/arm/boot/dts/nxp/imx/imx50.dtsi
++++ b/arch/arm/boot/dts/nxp/imx/imx50.dtsi
+@@ -101,6 +101,25 @@
+ 		interrupt-parent = <&tzic>;
+ 		ranges;
+ 
++		anatop_clks: clock-controller@41018000 {
++			compatible = "fsl,imx50-anatop-clocks";
++			reg = <0x41018000 0x1000>;
++			#clock-cells = <1>;
++			clocks = <&clks IMX5_CLK_APBH_DMA>;
++			clock-names = "apbh";
++			status = "disabled";
++		};
++
++		pm: power-controller@63fa0000 {
++			compatible = "fsl,imx50-pm";
++			reg = <0x63fa0000 0x1000>, <0x53fd8000 0x1000>,
++			      <0x53fd4000 0x1000>;
++			reg-names = "cortex", "gpc", "ccm";
++			clocks = <&clks IMX5_CLK_GPC_DVFS>;
++			clock-names = "gpc";
++			status = "disabled";
++		};
++
+ 		aips1: bus@50000000 { /* AIPS1 */
+ 			compatible = "fsl,aips-bus", "simple-bus";
+ 			#address-cells = <1>;
+@@ -207,6 +226,7 @@
+ 				interrupts = <18>;
+ 				clocks = <&clks IMX5_CLK_USBOH3_GATE>;
+ 				fsl,usbphy = <&usbphy0>;
++				fsl,usbmisc = <&usbmisc 0>;
+ 				status = "disabled";
+ 			};
+ 
+@@ -217,6 +237,12 @@
+ 				clocks = <&clks IMX5_CLK_USB_PHY2_GATE>;
+ 				dr_mode = "host";
+ 				status = "disabled";
++			};
++
++			usbmisc: usbmisc@53f80800 {
++				#index-cells = <1>;
++				compatible = "fsl,imx50-usbmisc";
++				reg = <0x53f80800 0x200>;
+ 			};
+ 
+ 			gpio1: gpio@53f84000 {
+@@ -283,6 +309,14 @@
+ 				clock-names = "ipg", "per";
+ 			};
+ 
++			srtc: rtc@53fa4000 {
++				compatible = "fsl,imx53-rtc";
++				reg = <0x53fa4000 0x4000>;
++				interrupts = <24>;
++				clocks = <&clks IMX5_CLK_SRTC_GATE>;
++				status = "disabled";
++			};
++
+ 			iomuxc: iomuxc@53fa8000 {
+ 				compatible = "fsl,imx50-iomuxc", "fsl,imx53-iomuxc";
+ 				reg = <0x53fa8000 0x4000>;
