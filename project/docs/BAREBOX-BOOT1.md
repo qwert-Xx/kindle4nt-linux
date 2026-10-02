@@ -82,3 +82,5 @@ USB 物理拔线/电池独立冷启动、长时耐久及电源轨仍未验证；
 完整部署顺序与 p1 回退见 [eMMC 根](EMMC-ROOT.md)。上键 USB 加载 Linux RAM 后也可修改179回boot0或重写p1；boot0回退仅在已有原厂系统布局仍可用时有效。
 
 维护包可附带 barebox/boot1/set-partition-config-draft.sh 与 rollback-boot0-draft.sh，和静态 mmc 放在同一 RAM 目录；它们不会被构建脚本自动执行。
+
+公开v7配方已按固定元数据重建，完整镜像与部署版逐字节一致，SHA256 `dbbb7d9f83773cdbf88adc26b6c7f7115b55c6f91b404fe2c1a35956b4e8ebb1`。emmc-v7/host-ram-v7/usbconsole-v7使用同名 .license 旁注，构建仅复制脚本原字节；不得将许可注释插入环境脚本改变正式镜像。

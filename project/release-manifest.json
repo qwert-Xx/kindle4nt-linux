@@ -77,11 +77,13 @@
     },
     "barebox": {
       "build_pass": true,
-      "sha256": "b638f6c2b26f644548f4f36f5d3c43e35bfeb3e428b1047d5a7ae05b5806310d",
+      "sha256": "dbbb7d9f83773cdbf88adc26b6c7f7115b55c6f91b404fe2c1a35956b4e8ebb1",
       "accepted_v7_sha256": "dbbb7d9f83773cdbf88adc26b6c7f7115b55c6f91b404fe2c1a35956b4e8ebb1",
-      "binary_equal": false,
+      "binary_equal": true,
       "config_equal": true,
-      "note": "Public default environment includes SPDX notices; binary equality with deployed v7 is not claimed."
+      "note": "Exact deployed v7 environment bytes preserved; SPDX in .license sidecars, not compiled into image.",
+      "environment_scripts_byte_equal": true,
+      "license_sidecars": true
     },
     "device_operations": false,
     "private_inputs_used_for_kernel_build": false,

@@ -1,5 +1,4 @@
 #!/bin/sh
-# SPDX-License-Identifier: GPL-2.0-only
 # Compiled environment only; no persistent eMMC environment.
 global.autoboot=boot
 global.boot.default="emmc host-ram"
