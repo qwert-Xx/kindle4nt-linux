@@ -35,7 +35,7 @@ def main():
   text=(src/name).read_text();notices.append(name+'\n'+text[:text.index('*/')+2])
  (bundle/'NOTICES').write_text('\n\n'.join(notices)+'\n')
  for name in ('set-partition-config-draft.sh','rollback-boot0-draft.sh'):
-  shutil.copyfile(HERE.parents[1]/'porting/barebox-emmc'/name,bundle/name)
+  shutil.copyfile(HERE.parents[1]/'barebox/boot1'/name,bundle/name)
   (bundle/name).chmod(0o755)
  shutil.copyfile(v.source,bundle/'mmc-utils-1.0.tar.gz')
  entries=[x for x in sorted(bundle.iterdir()) if x.name!='SHA256SUMS']

@@ -64,7 +64,7 @@ def verify(a):
         assert set(changed)=={'etc/init.d/rcS','etc/init.d/rcShutdown','etc/inittab','etc/k4-root-profile'} | ({'etc/fstab'} if 'etc/fstab' in old else set()),changed
         for n in ('etc/init.d/rcS','etc/init.d/rcS.k4-base','etc/init.d/rcShutdown'):subprocess.run(['sh','-n',str(emmc/'rootfs'/n)],check=True)
         entry_checks={'entries':len(members),'files':len(files),'unchanged_ram_files':unchanged,'changed_ram_files':changed,'tar_all_file_checksums':'pass','tar_ownership_and_times':'all zero','no_guard_or_mke2fs':'pass'}
-    v7=(a.v7/'porting/barebox-emmc/emmc-v7').read_text();defaults=(a.v7/'porting/barebox-emmc/usbconsole-v7').read_text()
+    v7=(a.v7/'barebox/boot1/emmc-v7').read_text();defaults=(a.v7/'barebox/boot1/usbconsole-v7').read_text()
     assert 'global k4.kernel=/boot/zImage' in defaults and 'global k4.dtb=/boot/imx50-kindle-k4.dtb' in defaults
     args=re.search(r'global linux.bootargs.k4="([^"]+)"',v7).group(1)
     for val in ('root=/dev/mmcblk2p1','rw','rootwait','watchdog.open_timeout=120','imx2_wdt.nowayout=1','ath6kl_sdio.force_virtual_scatter=0','fbcon=map:1','logo.nologo'):assert val in args.split(),val

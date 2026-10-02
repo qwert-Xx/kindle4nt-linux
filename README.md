@@ -14,3 +14,5 @@ boot1 barebox v7 + eMMC p1 ext4 BusyBox 根已部署并读回核验，EXT_CSD[17
 USB 物理拔线/电池独立冷启动、长时耐久及电源轨仍未验证；RAM 维护 guard 到期掉 ROM 的历史根因未定。新版模块 RAM 维护根尚未重新实机验证。Alpine feat/alpine-root 仅列路线图，未实机验证，未纳入本草案正式内容。
 
 构建与部署见 [eMMC 根](project/docs/EMMC-ROOT.md) 与 [barebox v7](project/docs/BAREBOX-BOOT1.md)。上述是既有实机结果整理，本次仅离线编辑与构建，不操作设备。
+
+离线补丁构建与隐私/许可检查见 [复现记录](project/docs/REPRO-20261003.md)。

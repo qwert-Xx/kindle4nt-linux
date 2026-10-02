@@ -80,3 +80,5 @@ boot1 barebox v7 + eMMC p1 ext4 BusyBox 根已部署并读回核验，EXT_CSD[17
 USB 物理拔线/电池独立冷启动、长时耐久及电源轨仍未验证；RAM 维护 guard 到期掉 ROM 的历史根因未定。新版模块 RAM 维护根尚未重新实机验证。Alpine feat/alpine-root 仅列路线图，未实机验证，未纳入本草案正式内容。
 
 完整部署顺序与 p1 回退见 [eMMC 根](EMMC-ROOT.md)。上键 USB 加载 Linux RAM 后也可修改179回boot0或重写p1；boot0回退仅在已有原厂系统布局仍可用时有效。
+
+维护包可附带 barebox/boot1/set-partition-config-draft.sh 与 rollback-boot0-draft.sh，和静态 mmc 放在同一 RAM 目录；它们不会被构建脚本自动执行。

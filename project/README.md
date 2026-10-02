@@ -37,6 +37,8 @@ Wi-Fi 配置、SSH key、ath6kl 固件/校准、WBF/WRF 波形和所有含这些
 
 Stage 4 input profile: production GPIO_KEYS is modular; power-button and recovery drivers stay builtin. Structured RAM-root generation wraps the unchanged external rcS as rcS.k4-base, then runs generic modalias coldplug after protected startup succeeds (10 s per request, 60 s total). Coldplug is nonfatal, does not feed watchdog, uses existing modprobe without -b or blacklist, and skips already bound devices. Original SPI coldplug is preserved. Production excludes dmatest/usbtest and rejects diagnostic modules in the installed root; debug does not automatically run generic coldplug. BusyBox/modutils binaries are external hashed inputs and unchanged. Hardware acceptance remains pending the combined stage4 checklist.
 
-公共草稿入口：[范围与状态](docs/README.md)、[构建](docs/BUILD.md)、[RAM启动/恢复](docs/RAM-BOOT.md)、[zqcal](docs/ZQCAL.md)、[限制](docs/KNOWN-ISSUES.md)。这些说明不扩大既有硬件验收范围，不提供boot1安装方案。
+公共草稿入口：[范围与状态](docs/README.md)、[构建](docs/BUILD.md)、[RAM启动/恢复](docs/RAM-BOOT.md)、[zqcal](docs/ZQCAL.md)、[限制](docs/KNOWN-ISSUES.md)。这些说明不扩大既有硬件验收范围，boot1和eMMC安装与回退说明见 docs/BAREBOX-BOOT1.md 与 docs/EMMC-ROOT.md。
 
 阶段7可选 `filesystem_recipe.reproducible_metadata=true` 固定主机ext3内部时间与目录hash seed；默认false保留旧配方。仅元数据，不改条目内容/模式/链接/设备号，guard/只读保护代码不变。两次clean比对使用独立外部配方启用，不重写任何冻结包。
+
+当前配置入口为 k4_defconfig + configs 下的小型 profile 片段，替代旧完整 .config；ATH6KL/SDIO=m。emmc-root 使用 production 片段与标准直接根挂载，详 [eMMC根](docs/EMMC-ROOT.md)。上文模块数量、旧冷门槛为历史阶段记录，以 README 与 docs 当前状态为准。
