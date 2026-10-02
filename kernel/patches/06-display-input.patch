@@ -1,0 +1,4123 @@
+--- a/drivers/hwmon/mc13783-adc.c
++++ b/drivers/hwmon/mc13783-adc.c
+@@ -76,7 +76,7 @@
+ 		return ret;
+ 
+ 	if (driver_data & MC13783_ADC_BPDIV2)
+-		val = DIV_ROUND_CLOSEST(val * 9, 2);
++		val = DIV_ROUND_CLOSEST(val * 4800, 1024);
+ 	else
+ 		/*
+ 		 * BP (channel 2) reports with offset 2.4V to the actual value
+@@ -92,18 +92,35 @@
+ 				   char *buf)
+ {
+ 	unsigned val;
+-	int ret = mc13783_adc_read(dev, devattr, &val);
+-
+-	if (ret)
+-		return ret;
+-
+-	/*
+-	 * input range is [0, 2.3V], val has 10 bits, so each bit
+-	 * is worth 9/4 mV.
+-	 */
+-	val = DIV_ROUND_CLOSEST(val * 9, 4);
++	struct platform_device *pdev = to_platform_device(dev);
++	kernel_ulong_t driver_data = platform_get_device_id(pdev)->driver_data;
++	int ret = mc13783_adc_read(dev, devattr, &val);
++
++	if (ret)
++		return ret;
++
++	/* MC13892 has a 2.4 V ADC range; retain the MC13783 9/4 mV scale. */
++	if (driver_data & MC13783_ADC_BPDIV2)
++		val = DIV_ROUND_CLOSEST(val * 2400, 1024);
++	else
++		val = DIV_ROUND_CLOSEST(val * 9, 4);
+ 
+ 	return sprintf(buf, "%u\n", val);
++}
++
++static ssize_t mc13892_adc_voltage_show(struct device *dev,
++				       struct device_attribute *devattr,
++				       char *buf)
++{
++	struct sensor_device_attribute *attr = to_sensor_dev_attr(devattr);
++	unsigned int val, range_mv = attr->index == 3 ? 12000 : 4800;
++	int ret = mc13783_adc_read(dev, devattr, &val);
++
++	if (ret)
++		return ret;
++
++	/* The conversion helper sets CHRGRAWDIV=1 (divide CHRGRAW by 5). */
++	return sysfs_emit(buf, "%u\n", DIV_ROUND_CLOSEST(val * range_mv, 1024));
+ }
+ 
+ static ssize_t mc13783_adc_uid_show(struct device *dev,
+@@ -174,6 +191,18 @@
+ static SENSOR_DEVICE_ATTR_RO(in15_input, mc13783_adc_gp, 15);
+ static SENSOR_DEVICE_ATTR_RO(in16_input, mc13783_adc_uid, 16);
+ static SENSOR_DEVICE_ATTR_RO(temp1_input, mc13783_adc_temp, 17);
++static SENSOR_DEVICE_ATTR_RO(in0_input, mc13892_adc_voltage, 0);
++static SENSOR_DEVICE_ATTR_RO(in3_input, mc13892_adc_voltage, 3);
++
++static struct attribute *mc13892_voltage_attrs[] = {
++	&sensor_dev_attr_in0_input.dev_attr.attr,
++	&sensor_dev_attr_in3_input.dev_attr.attr,
++	NULL
++};
++
++static const struct attribute_group mc13892_voltage_group = {
++	.attrs = mc13892_voltage_attrs,
++};
+ 
+ static struct attribute *mc13783_attr_base[] = {
+ 	&dev_attr_name.attr,
+@@ -243,6 +272,12 @@
+ 
+ 	platform_set_drvdata(pdev, priv);
+ 
++	if (id->driver_data & MC13783_ADC_BPDIV2) {
++		ret = devm_device_add_group(&pdev->dev, &mc13892_voltage_group);
++		if (ret)
++			return ret;
++	}
++
+ 	/* Register sysfs hooks */
+ 	ret = sysfs_create_group(&pdev->dev.kobj, &mc13783_group_base);
+ 	if (ret)
+--- a/drivers/input/misc/Kconfig
++++ b/drivers/input/misc/Kconfig
+@@ -264,6 +264,14 @@
+ 
+ 	  To compile this driver as a module, choose M here: the module
+ 	  will be called mc13783-pwrbutton.
++
++config INPUT_K4_MC13892_POWER_BUTTON
++	bool "Kindle K4 MC13892 ONOFD1 power button"
++	depends on MFD_MC13XXX && OF
++	help
++	  Report the Kindle K4's ONOFD1 button as KEY_POWER without changing
++	  the MC13892 debounce or reset configuration. A delayed read catches
++	  button release even if only the press generates an interrupt.
+ 
+ config INPUT_MMA8450
+ 	tristate "MMA8450 - Freescale's 3-Axis, 8/12-bit Digital Accelerometer"
+--- a/drivers/input/misc/Makefile
++++ b/drivers/input/misc/Makefile
+@@ -54,6 +54,7 @@
+ obj-$(CONFIG_INPUT_MAX8925_ONKEY)	+= max8925_onkey.o
+ obj-$(CONFIG_INPUT_MAX8997_HAPTIC)	+= max8997_haptic.o
+ obj-$(CONFIG_INPUT_MC13783_PWRBUTTON)	+= mc13783-pwrbutton.o
++obj-$(CONFIG_INPUT_K4_MC13892_POWER_BUTTON) += k4-mc13892-power-button.o
+ obj-$(CONFIG_INPUT_MMA8450)		+= mma8450.o
+ obj-$(CONFIG_INPUT_PALMAS_PWRBUTTON)	+= palmas-pwrbutton.o
+ obj-$(CONFIG_INPUT_PCAP)		+= pcap_keys.o
+--- /dev/null
++++ b/drivers/input/misc/k4-mc13892-power-button.c
+@@ -0,0 +1,254 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* Kindle K4 power button on the MC13892 ONOFD1 input. */
++
++#include <linux/bitops.h>
++#include <linux/input.h>
++#include <linux/interrupt.h>
++#include <linux/jiffies.h>
++#include <linux/k4_ram_trace.h>
++#include <linux/mfd/mc13783.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/platform_device.h>
++#include <linux/pm_wakeup.h>
++#include <linux/workqueue.h>
++
++#define MC13892_INT_SENSE1 5
++#define MC13892_POWER_CONTROL2 15
++#define MC13892_ONOFD1_SENSE BIT(3)
++
++struct k4_power_button {
++	struct device *dev;
++	struct mc13xxx *pmic;
++	struct input_dev *input;
++	struct delayed_work release_work;
++	struct mutex lock;
++	int irq;
++	bool suspended, stopped, pending, pressed, wake_armed, irq_disabled;
++	unsigned int wake_arms, wake_disarms, irqs, read_errors;
++};
++
++/* Caller holds lock; no SPI or requeue once suspend/remove has quiesced us. */
++static void k4_power_button_report(struct k4_power_button *button)
++{
++	u32 sense;
++	int ret;
++	bool pressed;
++
++	if (button->suspended || button->stopped)
++		return;
++	ret = mc13xxx_reg_read(button->pmic, MC13892_INT_SENSE1, &sense);
++
++	if (ret) {
++		button->read_errors++;
++		mod_delayed_work(system_wq, &button->release_work,
++				 msecs_to_jiffies(50));
++		return;
++	}
++
++	pressed = !(sense & MC13892_ONOFD1_SENSE);
++	/* Both edges latch this IRQ; never invent a press from a release IRQ. */
++	button->pending = false;
++	button->pressed = pressed;
++	input_report_key(button->input, KEY_POWER, pressed);
++	input_sync(button->input);
++
++	if (pressed)
++		mod_delayed_work(system_wq, &button->release_work,
++				 msecs_to_jiffies(50));
++}
++
++static void k4_power_button_release_work(struct work_struct *work)
++{
++	struct k4_power_button *button =
++		container_of(to_delayed_work(work), struct k4_power_button,
++			     release_work);
++
++	mutex_lock(&button->lock);
++	k4_power_button_report(button);
++	mutex_unlock(&button->lock);
++}
++
++static irqreturn_t k4_power_button_irq(int irq, void *data)
++{
++	struct k4_power_button *button = data;
++
++	pm_wakeup_event(button->dev, 500);
++	mutex_lock(&button->lock);
++	if (!button->stopped) {
++		button->irqs++;
++		button->pending = true;
++		k4_power_button_report(button);
++	}
++	mutex_unlock(&button->lock);
++	return IRQ_HANDLED;
++}
++
++static int k4_power_button_resume(struct device *dev)
++{
++	struct k4_power_button *button = dev_get_drvdata(dev);
++	int ret = 0;
++
++	if (button->wake_armed) {
++		ret = disable_irq_wake(button->irq);
++		if (!ret) {
++			button->wake_armed = false;
++			button->wake_disarms++;
++			k4_ram_trace_mark("K4_BUTTON_WAKE_DISARMED");
++		}
++	}
++	mutex_lock(&button->lock);
++	button->suspended = false;
++	k4_power_button_report(button);
++	mutex_unlock(&button->lock);
++	if (button->irq_disabled) {
++		button->irq_disabled = false;
++		enable_irq(button->irq);
++	}
++	return ret;
++}
++
++static int k4_power_button_suspend(struct device *dev)
++{
++	struct k4_power_button *button = dev_get_drvdata(dev);
++	int ret;
++
++	if (button->wake_armed)
++		return -EBUSY;
++	mutex_lock(&button->lock);
++	button->suspended = true;
++	mutex_unlock(&button->lock);
++	cancel_delayed_work_sync(&button->release_work);
++	/* Do this while SPI is awake: regmap wake propagation can use its bus. */
++	if (device_may_wakeup(dev)) {
++		ret = enable_irq_wake(button->irq);
++		if (ret) {
++			k4_power_button_resume(dev);
++			return ret;
++		}
++		button->wake_armed = true;
++		button->wake_arms++;
++		k4_ram_trace_mark("K4_BUTTON_WAKE_ARMED");
++	} else {
++		disable_irq(button->irq);
++		button->irq_disabled = true;
++	}
++	return 0;
++}
++
++static DEFINE_SIMPLE_DEV_PM_OPS(k4_power_button_pm,
++			       k4_power_button_suspend, k4_power_button_resume);
++
++static ssize_t state_show(struct device *dev, struct device_attribute *attr,
++			 char *buf)
++{
++	struct k4_power_button *button = dev_get_drvdata(dev);
++	ssize_t len;
++
++	mutex_lock(&button->lock);
++	len = sysfs_emit(buf, "irq=%d suspended=%u pending=%u pressed=%u wake_armed=%u arms=%u disarms=%u irqs=%u read_errors=%u\n",
++		button->irq, button->suspended, button->pending, button->pressed,
++		button->wake_armed, button->wake_arms, button->wake_disarms,
++		button->irqs, button->read_errors);
++	mutex_unlock(&button->lock);
++	return len;
++}
++static DEVICE_ATTR_RO(state);
++static struct attribute *k4_power_button_attrs[] = { &dev_attr_state.attr, NULL };
++ATTRIBUTE_GROUPS(k4_power_button);
++
++static int k4_power_button_probe(struct platform_device *pdev)
++{
++	struct k4_power_button *button;
++	u32 sense, powerctl;
++	int ret;
++
++	button = devm_kzalloc(&pdev->dev, sizeof(*button), GFP_KERNEL);
++	if (!button)
++		return -ENOMEM;
++
++	button->dev = &pdev->dev;
++	button->irq = platform_get_irq(pdev, 0);
++	if (button->irq < 0)
++		return button->irq;
++	mutex_init(&button->lock);
++	button->pmic = dev_get_drvdata(pdev->dev.parent);
++	ret = mc13xxx_reg_read(button->pmic, MC13892_INT_SENSE1, &sense);
++	if (ret)
++		return ret;
++	/* Stock board init sets code1 for all buttons (31.25ms), then
++	 * yoshi_button.c:226 selects code2 for ON1B. Reproduce the final
++	 * initialization mechanism; change only debounce, keep reset policy.
++	 */
++	ret = mc13xxx_reg_rmw(button->pmic, MC13892_POWER_CONTROL2,
++			      GENMASK(9, 4), BIT(5) | BIT(6) | BIT(8));
++	if (ret)
++		return ret;
++	ret = mc13xxx_reg_read(button->pmic, MC13892_POWER_CONTROL2,
++			       &powerctl);
++	if (ret)
++		return ret;
++	if ((powerctl & GENMASK(9, 4)) != (BIT(5) | BIT(6) | BIT(8)))
++		return -EIO;
++
++	button->input = devm_input_allocate_device(&pdev->dev);
++	if (!button->input)
++		return -ENOMEM;
++	button->input->name = "k4-power-button";
++	button->input->phys = "mc13892/onofd1";
++	button->input->id.bustype = BUS_HOST;
++	input_set_capability(button->input, EV_KEY, KEY_POWER);
++
++	ret = input_register_device(button->input);
++	if (ret)
++		return ret;
++
++	INIT_DELAYED_WORK(&button->release_work, k4_power_button_release_work);
++	platform_set_drvdata(pdev, button);
++	ret = device_init_wakeup(&pdev->dev, true);
++	if (ret)
++		return ret;
++	ret = request_threaded_irq(button->irq, NULL, k4_power_button_irq,
++				   IRQF_ONESHOT, "k4-power-button", button);
++	if (ret) {
++		device_init_wakeup(&pdev->dev, false);
++		return dev_err_probe(&pdev->dev, ret,
++				     "failed to request ONOFD1 IRQ\n");
++	}
++
++	mutex_lock(&button->lock);
++	k4_power_button_report(button);
++	mutex_unlock(&button->lock);
++	dev_info(&pdev->dev,
++		 "ONOFD1 registered; sense1=0x%06x powerctl2=0x%06x (stock ON1B debounce=2)\n",
++		 sense, powerctl);
++	return 0;
++}
++
++static void k4_power_button_remove(struct platform_device *pdev)
++{
++	struct k4_power_button *button = platform_get_drvdata(pdev);
++
++	mutex_lock(&button->lock);
++	button->stopped = true;
++	mutex_unlock(&button->lock);
++	if (button->wake_armed)
++		disable_irq_wake(button->irq);
++	free_irq(button->irq, button);
++	cancel_delayed_work_sync(&button->release_work);
++	device_init_wakeup(&pdev->dev, false);
++}
++
++static struct platform_driver k4_power_button_driver = {
++	.probe = k4_power_button_probe,
++	.remove_new = k4_power_button_remove,
++	.driver = {
++		.name = "k4-mc13892-power-button",
++		.pm = pm_sleep_ptr(&k4_power_button_pm),
++		.dev_groups = k4_power_button_groups,
++	},
++};
++module_platform_driver(k4_power_button_driver);
++
++MODULE_DESCRIPTION("Kindle K4 MC13892 ONOFD1 power button");
++MODULE_LICENSE("GPL");
+--- a/drivers/leds/leds-mc13783.c
++++ b/drivers/leds/leds-mc13783.c
+@@ -37,10 +37,14 @@
+ 	struct mc13xxx_led_devtype	*devtype;
+ 	int				num_leds;
+ 	struct mc13xxx_led		*led;
++	bool				masked_init;
++	u32				init_mask[MAX_LED_CONTROL_REGS];
+ };
+ 
+ static unsigned int mc13xxx_max_brightness(int id)
+ {
++	if (id == MC13892_LED_CHRG)
++		return 1;
+ 	if (id >= MC13783_LED_MD && id <= MC13783_LED_KP)
+ 		return 0x0f;
+ 	else if (id >= MC13783_LED_R1 && id <= MC13783_LED_B3)
+@@ -56,6 +60,11 @@
+ 		container_of(led_cdev, struct mc13xxx_led, cdev);
+ 	struct mc13xxx_leds *leds = led->leds;
+ 	unsigned int reg, bank, off, shift;
++
++	/* Do not replay self-clearing CHGTMRRST/CHGRESTART during LED RMW. */
++	if (led->id == MC13892_LED_CHRG)
++		return mc13xxx_reg_rmw(leds->master, 48, BIT(18) | BIT(19) | BIT(20),
++				       value ? BIT(18) : 0);
+ 
+ 	switch (led->id) {
+ 	case MC13783_LED_MD:
+@@ -108,7 +117,7 @@
+ }
+ 
+ #ifdef CONFIG_OF
+-static struct mc13xxx_leds_platform_data __init *mc13xxx_led_probe_dt(
++static struct mc13xxx_leds_platform_data *mc13xxx_led_probe_dt(
+ 	struct platform_device *pdev)
+ {
+ 	struct mc13xxx_leds *leds = platform_get_drvdata(pdev);
+@@ -131,6 +140,24 @@
+ 	if (ret)
+ 		goto out_node_put;
+ 
++	/* Optional selective initialization for boards sharing LED registers. */
++	if (of_find_property(parent, "led-control-mask", NULL)) {
++		ret = of_property_read_u32_array(parent, "led-control-mask",
++						leds->init_mask,
++						leds->devtype->num_regs);
++		if (ret)
++			goto out_node_put;
++		for (i = 0; i < leds->devtype->num_regs; i++) {
++			if (leds->init_mask[i] & ~0xffffffU ||
++			    pdata->led_control[i] & ~leds->init_mask[i]) {
++				ret = -EINVAL;
++				goto out_node_put;
++			}
++		}
++		leds->masked_init = true;
++		i = 0;
++	}
++
+ 	pdata->num_leds = of_get_available_child_count(parent);
+ 
+ 	pdata->led = devm_kcalloc(dev, pdata->num_leds, sizeof(*pdata->led),
+@@ -166,14 +193,14 @@
+ 	return ret ? ERR_PTR(ret) : pdata;
+ }
+ #else
+-static inline struct mc13xxx_leds_platform_data __init *mc13xxx_led_probe_dt(
++static inline struct mc13xxx_leds_platform_data *mc13xxx_led_probe_dt(
+ 	struct platform_device *pdev)
+ {
+ 	return ERR_PTR(-ENOSYS);
+ }
+ #endif
+ 
+-static int __init mc13xxx_led_probe(struct platform_device *pdev)
++static int mc13xxx_led_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+ 	struct mc13xxx_leds_platform_data *pdata = dev_get_platdata(dev);
+@@ -213,8 +240,24 @@
+ 		return -ENOMEM;
+ 
+ 	for (i = 0; i < devtype->num_regs; i++) {
+-		ret = mc13xxx_reg_write(mcdev, leds->devtype->ledctrl_base + i,
+-					pdata->led_control[i]);
++		if (leds->masked_init) {
++			u32 before;
++
++			if (!leds->init_mask[i])
++				continue;
++			ret = mc13xxx_reg_read(mcdev, devtype->ledctrl_base + i,
++					       &before);
++			if (ret)
++				return ret;
++			ret = mc13xxx_reg_rmw(mcdev, devtype->ledctrl_base + i,
++					      leds->init_mask[i], pdata->led_control[i]);
++			if (!ret)
++				dev_info(dev, "LED control %d initial=0x%06x mask=0x%06x value=0x%06x\n",
++					 i, before, leds->init_mask[i], pdata->led_control[i]);
++		} else {
++			ret = mc13xxx_reg_write(mcdev, devtype->ledctrl_base + i,
++						pdata->led_control[i]);
++		}
+ 		if (ret)
+ 			return ret;
+ 	}
+@@ -281,7 +324,7 @@
+ 
+ static const struct mc13xxx_led_devtype mc13892_led_devtype = {
+ 	.led_min	= MC13892_LED_MD,
+-	.led_max	= MC13892_LED_B,
++	.led_max	= MC13892_LED_CHRG,
+ 	.num_regs	= 4,
+ 	.ledctrl_base	= 51,
+ };
+@@ -306,9 +349,11 @@
+ 		.name	= "mc13xxx-led",
+ 	},
+ 	.remove		= mc13xxx_led_remove,
++	.probe		= mc13xxx_led_probe,
+ 	.id_table	= mc13xxx_led_id_table,
+ };
+-module_platform_driver_probe(mc13xxx_led_driver, mc13xxx_led_probe);
++/* The SPI PMIC may register its children after deferred parent probing. */
++module_platform_driver(mc13xxx_led_driver);
+ 
+ MODULE_DESCRIPTION("LEDs driver for Freescale MC13XXX PMIC");
+ MODULE_AUTHOR("Philippe Retornaz <philippe.retornaz@epfl.ch>");
+--- a/drivers/misc/Kconfig
++++ b/drivers/misc/Kconfig
+@@ -4,6 +4,15 @@
+ #
+ 
+ menu "Misc devices"
++
++config K4_PAPYRUS_MONITOR
++	bool "Kindle K4 Papyrus read-only display PMIC monitor"
++	depends on I2C && OF && SYSFS
++	depends on K4_DIAGNOSTICS
++	help
++	  Read the K4's Papyrus e-ink power chip identification and state
++	  registers. This RAM-boot diagnostic does not control display rails,
++	  VCOM, GPIOs, or waveform loading.
+ 
+ config SENSORS_LIS3LV02D
+ 	tristate
+@@ -579,4 +588,88 @@
+ source "drivers/misc/uacce/Kconfig"
+ source "drivers/misc/pvpanic/Kconfig"
+ source "drivers/misc/mchp_pci1xxxx/Kconfig"
++
++config K4_DISPLAY_CLOCK_PROBE
++	bool "Kindle K4 display AXI clock RAM experiment"
++	depends on SOC_IMX50 && OF && COMMON_CLK
++	depends on K4_DIAGNOSTICS
++	help
++	  Test inherited 200 MHz EPDC/PxP AXI clocks in an independent RAM
++	  device tree. No controller MMIO, pixel clock, DMA or panel power.
++
++config K4_PXP_STATE_PROBE
++	bool "Kindle K4 explicit ePXP state capture"
++	depends on SOC_IMX50 && OF && COMMON_CLK && K4_PM_RAM_TRACE
++	depends on K4_DIAGNOSTICS
++	help
++	  Independent RAM diagnostic for the documented i.MX50 CTRL and STAT
++	  registers. No reads until explicit sysfs capture.
++	  A separate test DT may opt in to an explicit idle-only reset action.
++	  A further opt-in allows a one-shot conversion in retained DMA buffers.
++	  The IRQ test DT permits up to sixteen sequential jobs with buffer reuse.
++	  Requires enabled RAM tracing and a confirmed recovery path.
++
++config K4_PXP_CLIENT_TEST
++	bool "Kindle K4 test consumer for the PxP kernel service"
++	depends on IMX50_PXP_KERNEL
++	depends on K4_DIAGNOSTICS
++	help
++	  Explicit sysfs-run full-size, stride, pool-lifetime and concurrent
++	  consumer tests. Does not access controller registers directly.
++
++config K4_EPDC_ID_PROBE
++	bool "Kindle K4 explicit EPDC register capture"
++	depends on SOC_IMX50 && OF && COMMON_CLK && K4_PM_RAM_TRACE
++	depends on K4_DIAGNOSTICS
++	help
++	  Independent RAM diagnostic with a one-shot sysfs capture trigger.
++	  Requires enabled RAM tracing before any controller read. A bus read
++	  may still hang; first confirm watchdog and manual recovery access.
++
++config K4_EPDC_IMAGE_TEST
++	bool "Kindle K4 EPDC image preparation test consumer"
++	depends on K4_PXP_CLIENT_TEST && IMX50_EPDC_IMAGE
++	depends on K4_DIAGNOSTICS
++	help
++	  Test sub-block partial updates, formats, rotation and panel coordinates
++	  through the preparation API and real PxP. Does not access EPDC or power.
++
++config K4_PAPYRUS_POWER_TEST
++	bool "Kindle K4 explicit Papyrus regulator consumer"
++	depends on REGULATOR_K4_PAPYRUS
++	depends on K4_DIAGNOSTICS
++	help
++	  Register a test consumer which uses the real regulator API to enable
++	  DISPLAY then VCOM, inspect status and release both. Only a sysfs write
++	  starts a cycle; no power is enabled by the consumer during probe.
++	  Use for supervised RAM trials before connecting the display owner.
++
++config K4_PAPYRUS_TEMPERATURE
++	bool "Kindle K4 Papyrus fresh thermistor acquisition"
++	depends on SOC_IMX50 && I2C && OF && HWMON=y
++	depends on K4_DIAGNOSTICS
++	help
++	  Independent RAM-stage hwmon driver for the TPS65180B in inherited
++	  standby. Explicit reads trigger a fresh conversion and acknowledge
++	  interrupt status with cached diagnostics. No GPIO or rail control.
++
++config K4_MC13892_ID_PROBE
++	bool "Kindle K4 read-only MC13892 revision probe"
++	depends on SOC_IMX50 && SPI && OF && GPIOLIB
++	depends on K4_DIAGNOSTICS
++	help
++	  Diagnostic-only SPI driver for Kindle K4 RAM boots. It reads the
++	  MC13892 revision register once, without configuring PMIC power,
++	  interrupt or regulator registers. Do not use as a PMIC driver.
++
++config K4_ACCESSORY_INPUTS
++	tristate "Kindle K4 accessory inputs and Apollo output"
++	depends on OF && GPIOLIB && REGULATOR && POWER_SUPPLY
++	help
++	  Own the accessory detect and active-low charging GPIO inputs,
++	  debounce detection IRQs and pair wake IRQ setup across sleep.
++	  With the controller compatible, use an exclusive GPO3 regulator
++	  and pair factory policy with USB source and display blank events.
++	  Unknown accessory input-current capability does not raise USB budgets.
++
+ endmenu
+--- a/drivers/misc/Makefile
++++ b/drivers/misc/Makefile
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: GPL-2.0
++obj-$(CONFIG_K4_PAPYRUS_MONITOR) += k4-debug/k4-papyrus-monitor.o
+ #
+ # Makefile for misc devices that really don't fit anywhere else.
+ #
+@@ -67,3 +68,11 @@
+ obj-$(CONFIG_TMR_INJECT)	+= xilinx_tmr_inject.o
+ obj-$(CONFIG_TPS6594_ESM)	+= tps6594-esm.o
+ obj-$(CONFIG_TPS6594_PFSM)	+= tps6594-pfsm.o
++obj-$(CONFIG_K4_MC13892_ID_PROBE) += k4-debug/k4-mc13892-id.o
++obj-$(CONFIG_K4_DISPLAY_CLOCK_PROBE) += k4-debug/k4-display-clock-probe.o
++obj-$(CONFIG_K4_EPDC_ID_PROBE) += k4-debug/k4-epdc-id.o
++obj-$(CONFIG_K4_PXP_STATE_PROBE) += k4-debug/k4-pxp-state.o
++obj-$(CONFIG_K4_PXP_CLIENT_TEST) += k4-debug/k4-pxp-client-test.o
++obj-$(CONFIG_K4_PAPYRUS_TEMPERATURE) += k4-debug/k4-papyrus-temperature.o
++obj-$(CONFIG_K4_PAPYRUS_POWER_TEST) += k4-debug/k4-papyrus-power-test.o
++obj-$(CONFIG_K4_ACCESSORY_INPUTS) += k4-accessory-inputs.o
+--- /dev/null
++++ b/drivers/misc/k4-accessory-inputs.c
+@@ -0,0 +1,470 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* K4 accessory inputs and optional factory Apollo output policy. */
++#include <linux/gpio/consumer.h>
++#include <linux/fb.h>
++#include <linux/power_supply.h>
++#include <linux/regulator/consumer.h>
++#include "k4-accessory-policy.h"
++#include <linux/interrupt.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/pm_wakeup.h>
++#include <linux/property.h>
++#include <linux/slab.h>
++#include <linux/workqueue.h>
++
++struct k4_accessory_inputs {
++	struct device *dev;
++	struct gpio_desc *detect, *charging;
++	struct mutex lock;
++	struct delayed_work work;
++	int irq, detected, charge_active, error, wake_error;
++	unsigned long events, samples;
++	bool suspended, stopping, wake_armed;
++	struct regulator *output;
++	struct power_supply *usb_supply;
++	struct notifier_block source_nb, fb_nb;
++	bool output_claim, screen, source_registered, fb_registered;
++	int usb_online, output_enabled, output_error;
++	int policy_detected, policy_usb;
++	unsigned long output_requests;
++
++};
++
++static int k4_accessory_power_read(void *context)
++{
++	struct k4_accessory_inputs *a = context;
++	int ret = regulator_is_enabled(a->output);
++
++	a->output_enabled = ret < 0 ? -1 : !!ret;
++	return ret;
++}
++
++static int k4_accessory_power_set(void *context, int enabled)
++{
++	struct k4_accessory_inputs *a = context;
++	int ret;
++
++	/* Recover a confirmed hardware/count mismatch without growing use_count. */
++	if (a->output_claim == !!enabled) {
++		ret = enabled ? regulator_disable(a->output) :
++			regulator_enable(a->output);
++		if (ret)
++			return ret;
++		a->output_claim = !enabled;
++	}
++	ret = enabled ? regulator_enable(a->output) : regulator_disable(a->output);
++	if (!ret)
++		a->output_claim = enabled;
++	return ret;
++}
++
++static const struct k4_accessory_power_io k4_accessory_output_io = {
++	.read = k4_accessory_power_read,
++	.set = k4_accessory_power_set,
++};
++
++static int k4_accessory_policy(struct k4_accessory_inputs *a, int event)
++{
++	int target, ret;
++
++	if (!a->output)
++		return 0;
++	if (event != K4_ACC_SHUTDOWN && a->error)
++		return a->error;
++	target = k4_accessory_decide(event, a->detected, a->usb_online, a->screen);
++	if (target < -1)
++		return target;
++	a->output_requests++;
++	ret = k4_accessory_power_apply(&k4_accessory_output_io, a, target);
++	a->output_error = ret;
++	if (!ret) {
++		if (event == K4_ACC_SCREEN_ENTER)
++			a->screen = true;
++		else if (event == K4_ACC_SCREEN_EXIT)
++			a->screen = false;
++	}
++	return ret;
++}
++
++static int k4_accessory_sample(struct k4_accessory_inputs *a)
++{
++	int detected, charging;
++
++	detected = gpiod_get_value_cansleep(a->detect);
++	if (detected < 0) {
++		a->error = detected;
++		return detected;
++	}
++	charging = gpiod_get_value_cansleep(a->charging);
++	if (charging < 0) {
++		a->error = charging;
++		return charging;
++	}
++	a->detected = detected;
++	a->charge_active = charging;
++	a->samples++;
++	a->error = 0;
++	if (a->usb_supply) {
++		union power_supply_propval value;
++		int ret = power_supply_get_property(a->usb_supply,
++						  POWER_SUPPLY_PROP_ONLINE, &value);
++		if (ret) {
++			a->error = ret;
++			return ret;
++		}
++		a->usb_online = !!value.intval;
++	}
++	return 0;
++}
++
++static void k4_accessory_work(struct work_struct *work)
++{
++	struct k4_accessory_inputs *a = container_of(to_delayed_work(work),
++										struct k4_accessory_inputs, work);
++
++	mutex_lock(&a->lock);
++	if (!a->suspended && !a->stopping) {
++		int old_detected = a->policy_detected, old_usb = a->policy_usb;
++		int ret = 0;
++
++		if (!k4_accessory_sample(a)) {
++			if (old_detected != a->detected)
++				ret = k4_accessory_policy(a, a->detected ? K4_ACC_ENABLE : K4_ACC_DISABLE);
++			else if (old_usb != a->usb_online)
++				ret = k4_accessory_policy(a, a->usb_online ? K4_ACC_DISABLE : K4_ACC_ENABLE);
++			if (!ret) {
++				a->policy_detected = a->detected;
++				a->policy_usb = a->usb_online;
++			}
++		}
++	}
++	mutex_unlock(&a->lock);
++}
++
++static irqreturn_t k4_accessory_irq(int irq, void *data)
++{
++	struct k4_accessory_inputs *a = data;
++
++	mutex_lock(&a->lock);
++	if (!a->stopping) {
++		a->events++;
++		if (a->suspended) {
++			if (device_may_wakeup(a->dev))
++				pm_wakeup_event(a->dev, 0);
++		} else {
++			mod_delayed_work(system_wq, &a->work, msecs_to_jiffies(10));
++		}
++	}
++	mutex_unlock(&a->lock);
++	return IRQ_HANDLED;
++}
++
++static ssize_t state_show(struct device *dev, struct device_attribute *attr,
++				char *buf)
++{
++	struct k4_accessory_inputs *a = dev_get_drvdata(dev);
++	ssize_t len;
++
++	mutex_lock(&a->lock);
++	if (a->stopping || a->suspended) {
++		mutex_unlock(&a->lock);
++		return -EBUSY;
++	}
++	/* ACC_CHRG_B has no dedicated IRQ in the original board implementation. */
++	k4_accessory_sample(a);
++	len = sysfs_emit(buf,
++			"detected=%d charging=%d samples=%lu irq_events=%lu error=%d wake_error=%d wake_armed=%u\n",
++			a->detected, a->charge_active, a->samples, a->events,
++			a->error, a->wake_error, a->wake_armed);
++	mutex_unlock(&a->lock);
++	return len;
++}
++static DEVICE_ATTR_RO(state);
++static ssize_t output_state_show(struct device *dev,
++				 struct device_attribute *attr, char *buf)
++{
++	struct k4_accessory_inputs *a = dev_get_drvdata(dev);
++	ssize_t len;
++
++	mutex_lock(&a->lock);
++	if (a->output && !a->stopping && !a->suspended)
++		k4_accessory_power_read(a);
++	len = sysfs_emit(buf, "owned=%u enabled=%d usb=%d screen=%u requests=%lu error=%d\n",
++			!!a->output, a->output_enabled, a->usb_online, a->screen,
++			a->output_requests, a->output_error);
++	mutex_unlock(&a->lock);
++	return len;
++}
++static DEVICE_ATTR_RO(output_state);
++
++static ssize_t screensaver_store(struct device *dev, struct device_attribute *attr,
++				 const char *buf, size_t count)
++{
++	struct k4_accessory_inputs *a = dev_get_drvdata(dev);
++	bool blank;
++	int ret = kstrtobool(buf, &blank);
++
++	if (ret)
++		return ret;
++	mutex_lock(&a->lock);
++	if (!a->output)
++		ret = -EOPNOTSUPP;
++	else if (a->stopping || a->suspended)
++		ret = -EBUSY;
++	else {
++		ret = k4_accessory_sample(a);
++		if (!ret)
++			ret = k4_accessory_policy(a, blank ? K4_ACC_SCREEN_ENTER : K4_ACC_SCREEN_EXIT);
++	}
++	mutex_unlock(&a->lock);
++	return ret ? ret : count;
++}
++static DEVICE_ATTR_WO(screensaver);
++
++static int k4_accessory_source_notify(struct notifier_block *nb,
++				      unsigned long event, void *data)
++{
++	struct k4_accessory_inputs *a = container_of(nb, struct k4_accessory_inputs, source_nb);
++
++	/* power_supply callbacks run on an atomic chain: only queue sleeping I/O. */
++	if (data == a->usb_supply && !READ_ONCE(a->stopping) && !READ_ONCE(a->suspended))
++		mod_delayed_work(system_wq, &a->work, 0);
++	return NOTIFY_OK;
++}
++
++static int k4_accessory_fb_notify(struct notifier_block *nb,
++				  unsigned long event, void *data)
++{
++	struct k4_accessory_inputs *a = container_of(nb, struct k4_accessory_inputs, fb_nb);
++	struct fb_event *ev = data;
++
++	if (event != FB_EVENT_BLANK || !ev || !ev->info || !ev->data ||
++	    strcmp(ev->info->fix.id, "k4-epdc"))
++		return NOTIFY_DONE;
++	mutex_lock(&a->lock);
++	if (!a->stopping && !a->suspended && !k4_accessory_sample(a))
++		k4_accessory_policy(a, *(int *)ev->data == FB_BLANK_UNBLANK ?
++				    K4_ACC_SCREEN_EXIT : K4_ACC_SCREEN_ENTER);
++	mutex_unlock(&a->lock);
++	return NOTIFY_OK;
++}
++
++static void k4_accessory_put_supply(void *data)
++{
++	power_supply_put(data);
++}
++
++static struct attribute *k4_accessory_attrs[] = {
++	&dev_attr_state.attr, &dev_attr_output_state.attr,
++	&dev_attr_screensaver.attr, NULL,
++};
++ATTRIBUTE_GROUPS(k4_accessory);
++
++static void k4_accessory_stop(void *data)
++{
++	struct k4_accessory_inputs *a = data;
++	int ret;
++
++	mutex_lock(&a->lock);
++	a->stopping = true;
++	mutex_unlock(&a->lock);
++	if (a->source_registered) {
++		power_supply_unreg_notifier(&a->source_nb);
++		a->source_registered = false;
++	}
++	if (IS_REACHABLE(CONFIG_FB) && a->fb_registered) {
++		fb_unregister_client(&a->fb_nb);
++		a->fb_registered = false;
++	}
++	cancel_delayed_work_sync(&a->work);
++	mutex_lock(&a->lock);
++	ret = k4_accessory_policy(a, K4_ACC_SHUTDOWN);
++	if (ret)
++		dev_err(a->dev, "output shutdown failed: %d\n", ret);
++	mutex_unlock(&a->lock);
++	if (a->wake_armed) {
++		ret = disable_irq_wake(a->irq);
++		if (ret)
++			dev_warn(a->dev, "wake IRQ cleanup failed: %d\n", ret);
++		else
++			a->wake_armed = false;
++	}
++	device_init_wakeup(a->dev, false);
++}
++
++static int k4_accessory_suspend(struct device *dev)
++{
++	struct k4_accessory_inputs *a = dev_get_drvdata(dev);
++	bool wake = device_may_wakeup(dev);
++	int ret = 0;
++
++	mutex_lock(&a->lock);
++	if (a->stopping || a->wake_armed) {
++		mutex_unlock(&a->lock);
++		return -EBUSY;
++	}
++	ret = k4_accessory_sample(a);
++	if (!ret)
++		ret = k4_accessory_policy(a, K4_ACC_SUSPEND);
++	if (ret) {
++		mutex_unlock(&a->lock);
++		return ret;
++	}
++	a->suspended = true;
++	mutex_unlock(&a->lock);
++	cancel_delayed_work_sync(&a->work);
++	if (wake)
++		ret = enable_irq_wake(a->irq);
++	mutex_lock(&a->lock);
++	a->wake_error = ret;
++	if (ret) {
++		a->suspended = false;
++		k4_accessory_policy(a, K4_ACC_ENABLE);
++		mod_delayed_work(system_wq, &a->work, 0);
++	} else {
++		a->wake_armed = wake;
++	}
++	mutex_unlock(&a->lock);
++	return ret;
++}
++
++static int k4_accessory_resume(struct device *dev)
++{
++	struct k4_accessory_inputs *a = dev_get_drvdata(dev);
++	int ret = 0;
++
++	if (a->wake_armed)
++		ret = disable_irq_wake(a->irq);
++	mutex_lock(&a->lock);
++	a->wake_error = ret;
++	if (!ret)
++		a->wake_armed = false;
++	a->suspended = false;
++	if (!a->stopping) {
++		int output_ret = k4_accessory_sample(a);
++
++		if (!output_ret)
++			output_ret = k4_accessory_policy(a, K4_ACC_ENABLE);
++		if (!ret)
++			ret = output_ret;
++	}
++	if (!a->stopping)
++		mod_delayed_work(system_wq, &a->work, 0);
++	mutex_unlock(&a->lock);
++	return ret;
++}
++static DEFINE_SIMPLE_DEV_PM_OPS(k4_accessory_pm_ops,
++								k4_accessory_suspend, k4_accessory_resume);
++
++static int k4_accessory_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct k4_accessory_inputs *a;
++	int ret;
++
++	a = devm_kzalloc(dev, sizeof(*a), GFP_KERNEL);
++	if (!a)
++		return -ENOMEM;
++	a->dev = dev;
++	a->detected = a->charge_active = -1;
++	a->usb_online = a->output_enabled = -1;
++	mutex_init(&a->lock);
++	INIT_DELAYED_WORK(&a->work, k4_accessory_work);
++	a->detect = devm_gpiod_get(dev, "detect", GPIOD_IN);
++	if (IS_ERR(a->detect))
++		return dev_err_probe(dev, PTR_ERR(a->detect), "detect GPIO\n");
++	a->charging = devm_gpiod_get(dev, "charging", GPIOD_IN);
++	if (IS_ERR(a->charging))
++		return dev_err_probe(dev, PTR_ERR(a->charging), "charging GPIO\n");
++	a->irq = gpiod_to_irq(a->detect);
++	if (a->irq < 0)
++		return dev_err_probe(dev, a->irq, "detect IRQ\n");
++	ret = k4_accessory_sample(a);
++	if (ret)
++		return dev_err_probe(dev, ret, "input sampling\n");
++	if (of_device_is_compatible(dev->of_node, "amazon,k4-accessory-controller")) {
++		a->usb_supply = power_supply_get_by_phandle(dev->of_node, "usb-source");
++		if (IS_ERR(a->usb_supply))
++			return dev_err_probe(dev, PTR_ERR(a->usb_supply), "USB source\n");
++		if (!a->usb_supply)
++			return -EPROBE_DEFER;
++		ret = devm_add_action_or_reset(dev, k4_accessory_put_supply, a->usb_supply);
++		if (ret)
++			return ret;
++		ret = k4_accessory_sample(a);
++		if (ret)
++			return dev_err_probe(dev, ret, "source sampling\n");
++		a->output = devm_regulator_get_exclusive(dev, "output");
++		if (IS_ERR(a->output))
++			return dev_err_probe(dev, PTR_ERR(a->output), "Apollo output\n");
++		ret = k4_accessory_power_read(a);
++		if (ret < 0)
++			return ret;
++		a->output_claim = !!ret;
++	}
++	platform_set_drvdata(pdev, a);
++	ret = devm_request_threaded_irq(dev, a->irq, NULL, k4_accessory_irq,
++				IRQF_ONESHOT | IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING,
++				dev_name(dev), a);
++	if (ret) {
++		k4_accessory_stop(a);
++		return dev_err_probe(dev, ret, "detect IRQ request");
++	}
++	/* Drain work/notifiers before devres releases the IRQ and GPIOs. */
++	ret = devm_add_action_or_reset(dev, k4_accessory_stop, a);
++	if (ret)
++		return ret;
++	a->policy_detected = a->detected;
++	a->policy_usb = a->usb_online;
++	if (a->output) {
++		a->source_nb.notifier_call = k4_accessory_source_notify;
++		ret = power_supply_reg_notifier(&a->source_nb);
++		if (ret)
++			return ret;
++		a->source_registered = true;
++		a->fb_nb.notifier_call = k4_accessory_fb_notify;
++		if (IS_REACHABLE(CONFIG_FB)) {
++			ret = fb_register_client(&a->fb_nb);
++			if (ret)
++				return ret;
++			a->fb_registered = true;
++		}
++		mutex_lock(&a->lock);
++		ret = k4_accessory_policy(a, K4_ACC_ENABLE);
++		mutex_unlock(&a->lock);
++		if (ret)
++			return dev_err_probe(dev, ret, "Apollo initial output\n");
++	}
++	ret = device_init_wakeup(dev, device_property_read_bool(dev, "wakeup-source"));
++	if (ret)
++		return ret;
++	return 0;
++}
++
++static void k4_accessory_shutdown(struct platform_device *pdev)
++{
++	k4_accessory_stop(platform_get_drvdata(pdev));
++}
++
++static const struct of_device_id k4_accessory_of_match[] = {
++	{ .compatible = "amazon,k4-accessory-inputs" },
++	{ .compatible = "amazon,k4-accessory-controller" }, { }
++};
++MODULE_DEVICE_TABLE(of, k4_accessory_of_match);
++
++static struct platform_driver k4_accessory_driver = {
++	.probe = k4_accessory_probe,
++	.shutdown = k4_accessory_shutdown,
++	.driver = {
++		.name = "k4-accessory-inputs",
++		.of_match_table = k4_accessory_of_match,
++		.dev_groups = k4_accessory_groups,
++		.pm = pm_sleep_ptr(&k4_accessory_pm_ops),
++	},
++};
++module_platform_driver(k4_accessory_driver);
++MODULE_DESCRIPTION("Kindle K4 accessory detection and factory output policy");
++MODULE_LICENSE("GPL");
+--- /dev/null
++++ b/drivers/misc/k4-accessory-policy.h
+@@ -0,0 +1,48 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef K4_ACCESSORY_POLICY_H
++#define K4_ACCESSORY_POLICY_H
++#ifdef __KERNEL__
++#include <linux/errno.h>
++#else
++#include <errno.h>
++#endif
++
++enum k4_accessory_event {
++ K4_ACC_ENABLE, K4_ACC_DISABLE, K4_ACC_SCREEN_ENTER,
++ K4_ACC_SCREEN_EXIT, K4_ACC_SUSPEND, K4_ACC_SHUTDOWN
++};
++/* -1 keeps the prior output, matching the factory conditional no-write paths. */
++static inline int k4_accessory_decide(int event, int detected, int usb, int screen)
++{
++ if (event == K4_ACC_SHUTDOWN) return 0;
++ if ((detected & ~1) || (usb & ~1) || (screen & ~1)) return -EINVAL;
++ switch (event) {
++ case K4_ACC_ENABLE:
++  return (detected && usb) || (!detected && screen) ? -1 : 1;
++ case K4_ACC_DISABLE: return detected || screen ? 0 : -1;
++ case K4_ACC_SCREEN_ENTER: return detected && !usb ? -1 : 0;
++ case K4_ACC_SCREEN_EXIT: return detected && usb ? -1 : 1;
++ case K4_ACC_SUSPEND: return detected && !usb;
++ default: return -EINVAL;
++ }
++}
++struct k4_accessory_power_io {
++ int (*read)(void *context);
++ int (*set)(void *context, int enabled);
++};
++static inline int k4_accessory_power_apply(const struct k4_accessory_power_io *io,
++                                         void *context, int requested)
++{
++ int read_value, ret;
++ if (requested == -1) return 0;
++ if (requested != 0 && requested != 1) return -EINVAL;
++ read_value = io->read(context);
++ if (read_value < 0) return read_value;
++ if (!!read_value == requested) return 0;
++ ret = io->set(context, requested);
++ if (ret) return ret;
++ read_value = io->read(context);
++ if (read_value < 0) return read_value;
++ return !!read_value == requested ? 0 : -EIO;
++}
++#endif
+--- /dev/null
++++ b/drivers/misc/k4-papyrus-registers.h
+@@ -0,0 +1,48 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef K4_PAPYRUS_REGISTERS_H
++#define K4_PAPYRUS_REGISTERS_H
++
++/* TI TPS65180B, SLVSA76G sections 9.5 and 10.1.11. */
++#define PAPYRUS_TMST_VALUE	0x00
++#define PAPYRUS_ENABLE		0x01
++#define PAPYRUS_VP_ADJUST		0x02
++#define PAPYRUS_VN_ADJUST		0x03
++#define PAPYRUS_VCOM_ADJUST	0x04
++#define PAPYRUS_INT_ENABLE1	0x05
++#define PAPYRUS_INT_ENABLE2	0x06
++/* 0x07/0x08 are read-to-clear interrupt status, never monitor them. */
++#define PAPYRUS_PWR_SEQ0		0x09
++#define PAPYRUS_PWR_SEQ1		0x0a
++#define PAPYRUS_PWR_SEQ2		0x0b
++#define PAPYRUS_TMST_CONFIG	0x0c
++#define PAPYRUS_TMST_OS		0x0d
++#define PAPYRUS_TMST_HYST		0x0e
++#define PAPYRUS_PG_STATUS		0x0f
++#define PAPYRUS_REVID		0x10
++#define PAPYRUS_K4_REVID		0x80
++
++static inline bool k4_papyrus_monitor_readable(unsigned int reg)
++{
++	switch (reg) {
++	case PAPYRUS_TMST_VALUE:
++	case PAPYRUS_ENABLE:
++	case PAPYRUS_VP_ADJUST:
++	case PAPYRUS_VN_ADJUST:
++	case PAPYRUS_VCOM_ADJUST:
++	case PAPYRUS_INT_ENABLE1:
++	case PAPYRUS_INT_ENABLE2:
++	case PAPYRUS_PWR_SEQ0:
++	case PAPYRUS_PWR_SEQ1:
++	case PAPYRUS_PWR_SEQ2:
++	case PAPYRUS_TMST_CONFIG:
++	case PAPYRUS_TMST_OS:
++	case PAPYRUS_TMST_HYST:
++	case PAPYRUS_PG_STATUS:
++	case PAPYRUS_REVID:
++		return true;
++	default:
++		return false;
++	}
++}
++
++#endif
+--- a/drivers/video/fbdev/Kconfig
++++ b/drivers/video/fbdev/Kconfig
+@@ -1956,3 +1956,51 @@
+ source "drivers/video/fbdev/mmp/Kconfig"
+ 
+ source "drivers/video/fbdev/core/Kconfig"
++
++config IMX50_EPDC_IMAGE
++	bool
++
++config IMX50_EPDC_BUFFER
++	bool
++
++config IMX50_EPDC_DMA_DEBUG
++	bool "Check i.MX50 EPDC DMA guards and content CRCs"
++	depends on IMX50_EPDC_BUFFER
++	help
++	  Fill/scan guard regions and checksum waveform/update memory around
++	  every submission. Disable for normal operation to avoid full-buffer
++	  scans. File CRC, DMA bounds and in-flight ownership checks stay active.
++	  Say N for normal use; enable while investigating memory corruption.
++
++config IMX50_EPDC_HW
++	bool
++
++config IMX50_EPDC_WAVEFORM
++	bool
++
++config IMX50_EPDC
++	tristate "Kindle K4 i.MX50 EPDC display service"
++	depends on IMX50_PXP_KERNEL
++	select IMX50_EPDC_IMAGE
++	select IMX50_EPDC_BUFFER
++	select IMX50_EPDC_HW
++	select IMX50_EPDC_WAVEFORM
++	select CRC32
++	select FW_LOADER
++	depends on REGULATOR_K4_PAPYRUS && OF && GPIOLIB && PINCTRL
++	help
++	  Own the K4 800x600 controller, clocks, supplies, waveform and IRQ.
++	  Provide serialized image updates to in-kernel display consumers.
++	  No automatic refresh on probe; requires panel-specific firmware.
++	  The fixed SoC device cannot be unbound while DMA state is uncertain.
++	  A modular service can load late, but cannot unload before reboot.
++
++config FB_IMX50_EPDC
++	tristate "Kindle K4 EPDC RAM framebuffer"
++	depends on FB=y && IMX50_EPDC
++	select FB_SYSMEM_HELPERS_DEFERRED
++	help
++	  Provide an 800x600 XRGB8888 /dev/fb device using the K4 display
++	  service, deferred writes/mmap updates and idle panel powerdown.
++	  Console binding or writes can initiate a real display refresh.
++	  The initial modular frontend cannot unload while open users may remain.
+--- a/drivers/video/fbdev/Makefile
++++ b/drivers/video/fbdev/Makefile
+@@ -128,3 +128,6 @@
+ 
+ # the test framebuffer is last
+ obj-$(CONFIG_FB_VIRTUAL)          += vfb.o
++obj-$(CONFIG_FB_IMX50_EPDC) += imx50-epdc-fb.o
++obj-$(CONFIG_IMX50_EPDC) += imx50-k4-epdc.o
++imx50-k4-epdc-y := imx50-epdc.o imx50-epdc-image.o imx50-epdc-buffer.o imx50-epdc-hw.o imx50-epdc-waveform.o
+--- /dev/null
++++ b/drivers/video/fbdev/imx50-epdc-buffer.c
+@@ -0,0 +1,251 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* EPDC DMA ownership and serial update descriptors. No controller MMIO. */
++#include <linux/crc32.h>
++#include <linux/dma-mapping.h>
++#include <linux/err.h>
++#include <linux/imx50-epdc-buffer.h>
++#include <linux/imx50-epdc-image.h>
++#include <linux/module.h>
++#include <linux/overflow.h>
++#include <linux/slab.h>
++
++#define EPDC_GUARD 4096
++/* EPDC_RES horizontal/vertical fields are 13 bits (RM 24.4.4). */
++#define EPDC_RES_MAX 0x1fff
++
++struct imx50_epdc_dma {
++	u8 *cpu;
++	dma_addr_t dma;
++	size_t bytes, allocation;
++};
++
++struct imx50_epdc_buffers {
++	struct device *dev;
++	struct imx50_epdc_dma wave, work, update;
++	struct imx50_epdc_rect rect;
++	u32 width, height, modes, temperatures, stride;
++	u32 wave_crc, update_crc;
++	bool ready, active, initializing, primed;
++	int fault;
++};
++
++static void epdc_dma_free(struct device *dev, struct imx50_epdc_dma *d)
++{
++	if (d->cpu)
++		dma_free_coherent(dev, d->allocation, d->cpu, d->dma);
++}
++
++static int epdc_dma_alloc(struct device *dev, struct imx50_epdc_dma *d, size_t bytes)
++{
++	d->bytes = bytes;
++	if (check_add_overflow(bytes, (size_t)EPDC_GUARD - 1, &d->allocation))
++		return -EOVERFLOW;
++	d->allocation &= ~((size_t)EPDC_GUARD - 1);
++	if (check_add_overflow(d->allocation, (size_t)2 * EPDC_GUARD, &d->allocation))
++		return -EOVERFLOW;
++	d->cpu = dma_alloc_coherent(dev, d->allocation, &d->dma, GFP_KERNEL);
++	if (!d->cpu)
++		return -ENOMEM;
++	/* Check the entire allocation, including guards, for 32-bit reachability. */
++	if ((u64)d->dma > U32_MAX || d->allocation - 1 > U32_MAX - (u64)d->dma ||
++	    (d->dma & 7))
++		return -ERANGE;
++	if (IS_ENABLED(CONFIG_IMX50_EPDC_DMA_DEBUG))
++		memset(d->cpu, 0xa5, d->allocation);
++	memset(d->cpu + EPDC_GUARD, 0, bytes);
++	return 0;
++}
++
++static bool epdc_dma_guard(const struct imx50_epdc_dma *d)
++{
++	return !memchr_inv(d->cpu, 0xa5, EPDC_GUARD) &&
++	       !memchr_inv(d->cpu + EPDC_GUARD + d->bytes, 0xa5,
++			   d->allocation - EPDC_GUARD - d->bytes);
++}
++
++static int epdc_buffers_check(struct imx50_epdc_buffers *b, bool check_update)
++{
++	if (!IS_ENABLED(CONFIG_IMX50_EPDC_DMA_DEBUG))
++		return 0;
++	if (!epdc_dma_guard(&b->wave) || !epdc_dma_guard(&b->work) ||
++	    !epdc_dma_guard(&b->update))
++		return -EOVERFLOW;
++	if (crc32_le(~0, b->wave.cpu + EPDC_GUARD, b->wave.bytes) != b->wave_crc ||
++	    (check_update && crc32_le(~0, b->update.cpu + EPDC_GUARD,
++				     b->update.bytes) != b->update_crc))
++		return -EILSEQ;
++	return 0;
++}
++
++struct imx50_epdc_buffers *imx50_epdc_buffers_alloc(struct device *dev,
++	u32 width, u32 height, const void *waveform, size_t waveform_size,
++	u32 modes, u32 temperatures)
++{
++	struct imx50_epdc_buffers *b;
++	size_t work_bytes, update_bytes;
++	int ret;
++
++	if (!dev || !waveform || !waveform_size ||
++	    !width || !height || width > EPDC_RES_MAX || height > EPDC_RES_MAX || (width & 3) ||
++	    !modes || modes > 256 || !temperatures || temperatures > 256)
++		return ERR_PTR(-EINVAL);
++	if (check_mul_overflow((size_t)width * 2, (size_t)height, &work_bytes) ||
++	    check_mul_overflow((size_t)ALIGN(width, 8), (size_t)height, &update_bytes))
++		return ERR_PTR(-EOVERFLOW);
++	b = kzalloc(sizeof(*b), GFP_KERNEL);
++	if (!b)
++		return ERR_PTR(-ENOMEM);
++	b->dev = dev;
++	b->width = width;
++	b->height = height;
++	b->modes = modes;
++	b->temperatures = temperatures;
++	ret = epdc_dma_alloc(dev, &b->wave, waveform_size);
++	if (ret)
++		goto fail;
++	ret = epdc_dma_alloc(dev, &b->work, work_bytes);
++	if (ret)
++		goto fail;
++	ret = epdc_dma_alloc(dev, &b->update, update_bytes);
++	if (ret)
++		goto fail;
++	memcpy(b->wave.cpu + EPDC_GUARD, waveform, waveform_size);
++	if (IS_ENABLED(CONFIG_IMX50_EPDC_DMA_DEBUG))
++		b->wave_crc = crc32_le(~0, b->wave.cpu + EPDC_GUARD, waveform_size);
++	return b;
++fail:
++	epdc_dma_free(dev, &b->update);
++	epdc_dma_free(dev, &b->work);
++	epdc_dma_free(dev, &b->wave);
++	kfree(b);
++	return ERR_PTR(ret);
++}
++
++int imx50_epdc_buffers_prepare(struct imx50_epdc_buffers *b, struct imx50_pxp *pxp,
++			       const struct imx50_epdc_source *src)
++{
++	u32 w, h;
++	int ret;
++
++	if (b->fault || b->active)
++		return b->fault ? b->fault : -EBUSY;
++	if (!src || src->rotation > 270 || src->rotation % 90)
++		return -EINVAL;
++	w = src->rotation % 180 ? src->height : src->width;
++	h = src->rotation % 180 ? src->width : src->height;
++	if (w != b->width || h != b->height)
++		return -EINVAL;
++	w = src->rotation % 180 ? src->region.height : src->region.width;
++	if (!w || w > b->width)
++		return -EINVAL;
++	/* A new request replaces the queued image; a failed preparation discards it. */
++	b->ready = false;
++	b->stride = ALIGN(w, 8);
++	memset(b->update.cpu + EPDC_GUARD, 0xff, b->update.bytes);
++	ret = imx50_epdc_prepare(pxp, src, b->update.cpu + EPDC_GUARD,
++				b->update.bytes, b->stride, &b->rect);
++	if (ret)
++		return ret;
++	b->ready = true;
++	return 0;
++}
++
++int imx50_epdc_buffers_begin(struct imx50_epdc_buffers *b, bool initialize,
++			     bool full, u32 mode, u32 temperature,
++			     struct imx50_epdc_command *command)
++{
++	struct imx50_epdc_rect r = b->rect;
++	struct imx50_epdc_command next;
++	int ret;
++
++	if (b->fault || b->active)
++		return b->fault ? b->fault : -EBUSY;
++	if (!command || mode >= b->modes || temperature >= b->temperatures ||
++	    (!initialize && !mode))
++		return -EINVAL;
++	ret = epdc_buffers_check(b, false);
++	if (ret) {
++		b->fault = ret;
++		return ret;
++	}
++	if (initialize) {
++		if (!full || mode)
++			return -EINVAL;
++		r = (struct imx50_epdc_rect){ 0, 0, b->width, b->height };
++		memset(b->update.cpu + EPDC_GUARD, 0xff, b->update.bytes);
++	} else if (!b->primed || !b->ready) {
++		return -ENODATA;
++	}
++	next = (struct imx50_epdc_command) {
++		.waveform_addr = b->wave.dma + EPDC_GUARD,
++		.working_addr = b->work.dma + EPDC_GUARD,
++		.update_addr = b->update.dma + EPDC_GUARD,
++		.resolution = b->width | (b->height << 16),
++		.coordinates = r.left | (r.top << 16),
++		.size = r.width | (r.height << 16),
++		.fixed = initialize ? 0xc000ffff : 0,
++		.control = (initialize ? BIT(31) : 0) | (mode << 8) | (full ? 1 : 0),
++		.temperature = temperature,
++	};
++	if (IS_ENABLED(CONFIG_IMX50_EPDC_DMA_DEBUG))
++		b->update_crc = crc32_le(~0, b->update.cpu + EPDC_GUARD, b->update.bytes);
++	b->initializing = initialize;
++	b->ready = false;
++	b->active = true;
++	dma_wmb();
++	*command = next;
++	return 0;
++}
++
++int imx50_epdc_buffers_complete(struct imx50_epdc_buffers *b, int error)
++{
++	if (b->fault)
++		return b->fault;
++	if (!b->active)
++		return -EINVAL;
++	if (error > 0)
++		error = -EIO;
++	dma_rmb();
++	if (!error)
++		error = epdc_buffers_check(b, true);
++	if (error) {
++		b->fault = error;
++		return error;
++	}
++	b->active = false;
++	if (b->initializing)
++		b->primed = true;
++	return 0;
++}
++
++int imx50_epdc_buffers_abort_unsubmitted(struct imx50_epdc_buffers *b)
++{
++	if (b->fault || !b->active)
++		return b->fault ? b->fault : -EINVAL;
++	b->active = false;
++	b->ready = false;
++	b->initializing = false;
++	b->primed = false;
++	return 0;
++}
++
++int imx50_epdc_buffers_invalidate(struct imx50_epdc_buffers *b)
++{
++	if (b->fault || b->active)
++		return b->fault ? b->fault : -EBUSY;
++	b->primed = false;
++	b->ready = false;
++	return 0;
++}
++
++int imx50_epdc_buffers_free(struct imx50_epdc_buffers *b)
++{
++	if (b->fault || b->active)
++		return b->fault ? b->fault : -EBUSY;
++	epdc_dma_free(b->dev, &b->update);
++	epdc_dma_free(b->dev, &b->work);
++	epdc_dma_free(b->dev, &b->wave);
++	kfree(b);
++	return 0;
++}
++MODULE_LICENSE("GPL");
+--- /dev/null
++++ b/drivers/video/fbdev/imx50-epdc-fb.c
+@@ -0,0 +1,634 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* RAM framebuffer consumer of the K4 EPDC service. */
++#include <linux/fb.h>
++#include <linux/imx50-epdc.h>
++#include <linux/imx50-epdc-image.h>
++#include <linux/jiffies.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/spinlock.h>
++#include <linux/string.h>
++#include <linux/vmalloc.h>
++#include <linux/workqueue.h>
++
++#define K4_FB_WIDTH 800
++#define K4_FB_HEIGHT 600
++#define K4_FB_BYTES (K4_FB_WIDTH * K4_FB_HEIGHT * 4)
++
++/* Same canonical ordering as imx50_epdc_mode; file indices belong to the loader. */
++static const char * const k4_fb_waveforms[] = {
++	"du", "gc16", "gc16-fast", "a2", "gl16", "gl16-fast",
++};
++
++struct k4_fb {
++	struct fb_info *info;
++	struct imx50_epdc *epdc;
++	struct fb_deferred_io defio;
++	struct delayed_work idle_work;
++	struct mutex io_lock;
++	spinlock_t dirty_lock;
++	struct imx50_epdc_rect damage;
++	void *snapshot;
++	u32 palette[16], updates;
++	u32 width, height, stride, bpp, rotation;
++	enum imx50_epdc_format format;
++	enum imx50_epdc_mode waveform_mode;
++	unsigned long idle_delay, idle_deadline;
++	int last_error, power_error;
++	bool dirty, blanked, suspended, stopped, needs_full, full_requested;
++};
++
++/* Damage callbacks can be called by console drawing: no sleeping or DMA. */
++static void k4_fb_merge(struct k4_fb *f, u32 x, u32 y, u32 w, u32 h, bool queue)
++{
++	struct imx50_epdc_rect *r = &f->damage;
++	unsigned long flags;
++	u32 right, bottom;
++	bool schedule;
++
++	spin_lock_irqsave(&f->dirty_lock, flags);
++	if (!w || !h || x >= f->width || y >= f->height)
++		goto out;
++	w = min(w, f->width - x);
++	h = min(h, f->height - y);
++	if (f->dirty) {
++		right = max(r->left + r->width, x + w);
++		bottom = max(r->top + r->height, y + h);
++		r->left = min(r->left, x);
++		r->top = min(r->top, y);
++		r->width = right - r->left;
++		r->height = bottom - r->top;
++	} else {
++		*r = (struct imx50_epdc_rect){ x, y, w, h };
++	}
++	f->dirty = true;
++	schedule = queue && !f->blanked && !f->suspended && !f->stopped;
++	if (schedule)
++		schedule_delayed_work(&f->info->deferred_work, f->defio.delay);
++out:
++	spin_unlock_irqrestore(&f->dirty_lock, flags);
++}
++
++static void k4_fb_damage(struct k4_fb *f, u32 x, u32 y, u32 w, u32 h)
++{
++	k4_fb_merge(f, x, y, w, h, true);
++}
++
++/* Publish the full rectangle and algorithm request together before queueing. */
++static void k4_fb_request_full(struct k4_fb *f)
++{
++	unsigned long flags;
++
++	spin_lock_irqsave(&f->dirty_lock, flags);
++	f->damage = (struct imx50_epdc_rect){ 0, 0, f->width, f->height };
++	f->dirty = true;
++	f->full_requested = true;
++	if (!f->blanked && !f->suspended && !f->stopped)
++		schedule_delayed_work(&f->info->deferred_work, f->defio.delay);
++	spin_unlock_irqrestore(&f->dirty_lock, flags);
++}
++
++static void k4_fb_range(struct k4_fb *f, off_t offset, size_t len, bool queue)
++{
++	unsigned long flags, first, last;
++	u32 bytes, width, stride;
++
++	spin_lock_irqsave(&f->dirty_lock, flags);
++	bytes = f->stride * f->height;
++	width = f->width;
++	stride = f->stride;
++	if (offset < 0 || offset >= bytes || !len) {
++		spin_unlock_irqrestore(&f->dirty_lock, flags);
++		return;
++	}
++	len = min_t(size_t, len, bytes - offset);
++	first = offset / stride;
++	last = (offset + len - 1) / stride;
++	spin_unlock_irqrestore(&f->dirty_lock, flags);
++	/* A simultaneous mode change itself marks the whole new canvas dirty. */
++	k4_fb_merge(f, 0, first, width, last - first + 1, queue);
++}
++
++static void k4_fb_damage_range(struct fb_info *info, off_t offset, size_t len)
++{
++	k4_fb_range(info->par, offset, len, true);
++}
++
++static void k4_fb_damage_area(struct fb_info *info, u32 x, u32 y, u32 w, u32 h)
++{
++	k4_fb_damage(info->par, x, y, w, h);
++}
++
++FB_GEN_DEFAULT_DEFERRED_SYSMEM_OPS(k4_fb, k4_fb_damage_range, k4_fb_damage_area)
++
++static void k4_fb_idle(struct work_struct *work)
++{
++	struct k4_fb *f = container_of(to_delayed_work(work), struct k4_fb, idle_work);
++	unsigned long flags;
++	bool paused;
++
++	mutex_lock(&f->io_lock);
++	spin_lock_irqsave(&f->dirty_lock, flags);
++	paused = f->blanked || f->suspended || f->stopped;
++	spin_unlock_irqrestore(&f->dirty_lock, flags);
++	if (paused)
++		goto out;
++	/* A queued old idle worker may have waited behind a newer update. */
++	if (time_before(jiffies, f->idle_deadline)) {
++		mod_delayed_work(system_wq, &f->idle_work, f->idle_deadline - jiffies);
++	} else {
++		f->needs_full = true;
++		f->power_error = imx50_epdc_powerdown(f->epdc);
++	}
++out:
++	mutex_unlock(&f->io_lock);
++}
++
++static void k4_fb_deferred(struct fb_info *info, struct list_head *pages)
++{
++	struct k4_fb *f = info->par;
++	struct fb_deferred_io_pageref *page;
++	struct imx50_epdc_source source;
++	struct imx50_epdc_rect rect;
++	unsigned long flags;
++	bool full;
++	int ret;
++
++	/* Core has write-protected the dirty mmap pages before this callback. */
++	list_for_each_entry(page, pages, list)
++		k4_fb_range(f, page->offset, PAGE_SIZE, false);
++	mutex_lock(&f->io_lock);
++	spin_lock_irqsave(&f->dirty_lock, flags);
++	if (!f->dirty || f->blanked || f->suspended || f->stopped) {
++		spin_unlock_irqrestore(&f->dirty_lock, flags);
++		goto out;
++	}
++	rect = f->damage;
++	full = f->needs_full || f->full_requested;
++	f->full_requested = false;
++	f->dirty = false;
++	spin_unlock_irqrestore(&f->dirty_lock, flags);
++	cancel_delayed_work(&f->idle_work);
++	/* After idle powerdown the owner runs INIT, which affects the full panel.
++	 * Restore the entire shadow image, even when the new damage is small.
++	 * Explicit refresh also applies the waveform to every unchanged pixel.
++	 */
++	if (full)
++		rect = (struct imx50_epdc_rect){ 0, 0, f->width, f->height };
++	memcpy(f->snapshot, info->screen_buffer, f->stride * f->height);
++	source = (struct imx50_epdc_source) {
++		.pixels = f->snapshot, .size = f->stride * f->height,
++		.width = f->width, .height = f->height, .stride = f->stride,
++		.format = f->format, .rotation = f->rotation * 90, .region = rect,
++	};
++	ret = imx50_epdc_update(f->epdc, &source, f->waveform_mode, full);
++	f->last_error = ret;
++	if (ret) {
++		/* Keep damage for an explicit retry/new write, not a busy retry loop. */
++		spin_lock_irqsave(&f->dirty_lock, flags);
++		f->damage = (struct imx50_epdc_rect){ 0, 0, f->width, f->height };
++		f->dirty = true;
++		spin_unlock_irqrestore(&f->dirty_lock, flags);
++		f->needs_full = true;
++		f->power_error = imx50_epdc_powerdown(f->epdc);
++	} else {
++		f->updates++;
++		f->needs_full = false;
++		f->idle_deadline = jiffies + f->idle_delay;
++		mod_delayed_work(system_wq, &f->idle_work, f->idle_delay);
++	}
++out:
++	mutex_unlock(&f->io_lock);
++}
++
++static int k4_fb_check_var(struct fb_var_screeninfo *v, struct fb_info *info)
++{
++	u32 width = v->rotate & 1 ? K4_FB_HEIGHT : K4_FB_WIDTH;
++	u32 height = v->rotate & 1 ? K4_FB_WIDTH : K4_FB_HEIGHT;
++
++	if (v->rotate > FB_ROTATE_CCW || v->xres != width || v->yres != height ||
++	    v->xres_virtual != width || v->yres_virtual != height ||
++	    (v->bits_per_pixel != 32 && v->bits_per_pixel != 16 && v->bits_per_pixel != 8) ||
++	    v->xoffset || v->yoffset || v->nonstd || v->grayscale > 1 ||
++	    v->vmode != FB_VMODE_NONINTERLACED)
++		return -EINVAL;
++	if (v->bits_per_pixel == 32) {
++		v->red = (struct fb_bitfield){ 16, 8, 0 };
++		v->green = (struct fb_bitfield){ 8, 8, 0 };
++		v->blue = (struct fb_bitfield){ 0, 8, 0 };
++	} else if (v->bits_per_pixel == 16) {
++		v->red = (struct fb_bitfield){ 11, 5, 0 };
++		v->green = (struct fb_bitfield){ 5, 6, 0 };
++		v->blue = (struct fb_bitfield){ 0, 5, 0 };
++	} else {
++		/* Direct Y8; overlapping grayscale components, no mutable color LUT. */
++		v->red = v->green = v->blue = (struct fb_bitfield){ 0, 8, 0 };
++		v->grayscale = 1;
++	}
++	v->transp = (struct fb_bitfield){ 0, 0, 0 };
++	return 0;
++}
++
++static int k4_fb_set_par(struct fb_info *info)
++{
++	struct k4_fb *f = info->par;
++	struct fb_var_screeninfo v = info->var;
++	unsigned long flags;
++	int ret;
++
++	ret = k4_fb_check_var(&v, info);
++	if (ret)
++		return ret;
++	mutex_lock(&f->io_lock);
++	if (f->stopped || f->suspended) {
++		ret = -EBUSY;
++		goto out;
++	}
++	if (f->width == v.xres && f->height == v.yres &&
++	    f->bpp == v.bits_per_pixel && f->rotation == v.rotate)
++		goto out;
++	cancel_delayed_work(&f->idle_work);
++	f->needs_full = true;
++	ret = imx50_epdc_powerdown(f->epdc);
++	f->power_error = ret;
++	if (ret)
++		goto out;
++	/* Keep allocation and deferred-IO page references stable for existing VMAs.
++	 * A mode switch changes their layout, not the mapped memory's lifetime.
++	 */
++	memset(info->screen_buffer, 0xff, K4_FB_BYTES);
++	spin_lock_irqsave(&f->dirty_lock, flags);
++	f->width = v.xres;
++	f->height = v.yres;
++	f->bpp = v.bits_per_pixel;
++	f->rotation = v.rotate;
++	f->stride = f->width * (f->bpp / 8);
++	f->format = f->bpp == 32 ? IMX50_EPDC_XRGB8888 :
++		    f->bpp == 16 ? IMX50_EPDC_RGB565 : IMX50_EPDC_Y8;
++	info->fix.line_length = f->stride;
++	f->damage = (struct imx50_epdc_rect){ 0, 0, f->width, f->height };
++	f->dirty = true;
++	if (!f->blanked)
++		schedule_delayed_work(&info->deferred_work, f->defio.delay);
++	spin_unlock_irqrestore(&f->dirty_lock, flags);
++out:
++	mutex_unlock(&f->io_lock);
++	return ret;
++}
++
++static int k4_fb_setcolreg(unsigned int reg, unsigned int red, unsigned int green,
++			 unsigned int blue, unsigned int transp, struct fb_info *info)
++{
++	struct k4_fb *f = info->par;
++
++	if (reg >= ARRAY_SIZE(f->palette))
++		return -EINVAL;
++	red >>= 8;
++	green >>= 8;
++	blue >>= 8;
++	if (info->var.bits_per_pixel == 8)
++		f->palette[reg] = (77 * red + 150 * green + 29 * blue + 128) >> 8;
++	else if (info->var.bits_per_pixel == 16)
++		f->palette[reg] = ((red >> 3) << 11) | ((green >> 2) << 5) | (blue >> 3);
++	else
++		f->palette[reg] = (red << 16) | (green << 8) | blue;
++	return 0;
++}
++
++static int k4_fb_blank(int blank, struct fb_info *info)
++{
++	struct k4_fb *f = info->par;
++	unsigned long flags;
++	int ret = 0;
++
++	if (blank < FB_BLANK_UNBLANK || blank > FB_BLANK_POWERDOWN)
++		return -EINVAL;
++	mutex_lock(&f->io_lock);
++	spin_lock_irqsave(&f->dirty_lock, flags);
++	f->blanked = blank != FB_BLANK_UNBLANK;
++	spin_unlock_irqrestore(&f->dirty_lock, flags);
++	if (blank) {
++		cancel_delayed_work(&f->idle_work);
++		f->needs_full = true;
++		ret = imx50_epdc_powerdown(f->epdc);
++		f->power_error = ret;
++	} else {
++		k4_fb_damage(f, 0, 0, ~0U, ~0U);
++	}
++	mutex_unlock(&f->io_lock);
++	return ret;
++}
++
++static const struct fb_ops k4_fb_ops = {
++	.owner = THIS_MODULE,
++	FB_DEFAULT_DEFERRED_OPS(k4_fb),
++	.fb_check_var = k4_fb_check_var,
++	.fb_set_par = k4_fb_set_par,
++	.fb_setcolreg = k4_fb_setcolreg,
++	.fb_blank = k4_fb_blank,
++};
++
++static int k4_fb_suspend(struct device *dev)
++{
++	struct k4_fb *f = dev_get_drvdata(dev);
++	unsigned long flags;
++	int ret;
++
++	mutex_lock(&f->io_lock);
++	spin_lock_irqsave(&f->dirty_lock, flags);
++	f->suspended = true;
++	spin_unlock_irqrestore(&f->dirty_lock, flags);
++	cancel_delayed_work(&f->idle_work);
++	f->needs_full = true;
++	ret = imx50_epdc_powerdown(f->epdc);
++	f->power_error = ret;
++	if (ret) {
++		spin_lock_irqsave(&f->dirty_lock, flags);
++		f->suspended = false;
++		spin_unlock_irqrestore(&f->dirty_lock, flags);
++	}
++	mutex_unlock(&f->io_lock);
++	return ret;
++}
++
++static int k4_fb_resume(struct device *dev)
++{
++	struct k4_fb *f = dev_get_drvdata(dev);
++	unsigned long flags;
++
++	mutex_lock(&f->io_lock);
++	spin_lock_irqsave(&f->dirty_lock, flags);
++	f->suspended = false;
++	if (!f->blanked && !f->stopped)
++		schedule_delayed_work(&f->info->deferred_work, f->defio.delay);
++	spin_unlock_irqrestore(&f->dirty_lock, flags);
++	mutex_unlock(&f->io_lock);
++	return 0;
++}
++static DEFINE_SIMPLE_DEV_PM_OPS(k4_fb_pm, k4_fb_suspend, k4_fb_resume);
++
++static int k4_fb_flush(struct k4_fb *f, bool full)
++{
++	unsigned long flags;
++	int ret;
++
++	if (full) {
++		k4_fb_request_full(f);
++	} else {
++		/* A prior failure retains damage without a busy retry loop. An
++		 * explicit flush is permission to retry that damage once.
++		 * mmap page faults already queue deferred work independently.
++		 */
++		spin_lock_irqsave(&f->dirty_lock, flags);
++		if (f->dirty && !f->stopped && !f->suspended && !f->blanked)
++			schedule_delayed_work(&f->info->deferred_work, f->defio.delay);
++		spin_unlock_irqrestore(&f->dirty_lock, flags);
++	}
++	flush_delayed_work(&f->info->deferred_work);
++	mutex_lock(&f->io_lock);
++	spin_lock_irqsave(&f->dirty_lock, flags);
++	ret = f->stopped || f->suspended || f->blanked ? -EBUSY : f->last_error;
++	spin_unlock_irqrestore(&f->dirty_lock, flags);
++	mutex_unlock(&f->io_lock);
++	return ret;
++}
++
++static ssize_t refresh_store(struct device *dev, struct device_attribute *attr,
++			     const char *buf, size_t count)
++{
++	struct k4_fb *f = dev_get_drvdata(dev);
++	bool request;
++	int ret;
++
++	ret = kstrtobool(buf, &request);
++	if (ret || !request)
++		return -EINVAL;
++	ret = k4_fb_flush(f, true);
++	if (ret)
++		return ret;
++	return count;
++}
++static DEVICE_ATTR_WO(refresh);
++
++static ssize_t flush_store(struct device *dev, struct device_attribute *attr,
++			   const char *buf, size_t count)
++{
++	struct k4_fb *f = dev_get_drvdata(dev);
++	bool request;
++	int ret;
++
++	ret = kstrtobool(buf, &request);
++	if (ret || !request)
++		return -EINVAL;
++	ret = k4_fb_flush(f, false);
++	if (ret)
++		return ret;
++	return count;
++}
++static DEVICE_ATTR_WO(flush);
++
++static ssize_t waveform_mode_show(struct device *dev, struct device_attribute *attr,
++				  char *buf)
++{
++	struct k4_fb *f = dev_get_drvdata(dev);
++	ssize_t n;
++
++	mutex_lock(&f->io_lock);
++	n = sysfs_emit(buf, "%s\n", k4_fb_waveforms[f->waveform_mode - IMX50_EPDC_MODE_DU]);
++	mutex_unlock(&f->io_lock);
++	return n;
++}
++
++static ssize_t waveform_mode_store(struct device *dev, struct device_attribute *attr,
++				   const char *buf, size_t count)
++{
++	struct k4_fb *f = dev_get_drvdata(dev);
++	int mode, ret = 0;
++
++	mode = sysfs_match_string(k4_fb_waveforms, buf);
++	if (mode < 0)
++		return -EINVAL;
++	mutex_lock(&f->io_lock);
++	if (f->stopped)
++		ret = -EBUSY;
++	else
++		/* Configuration only: do not queue a refresh or power the panel.
++		 * Work not yet started uses this mode; an in-flight snapshot holds
++		 * io_lock and finishes before the setting can change.
++		 */
++		f->waveform_mode = mode + IMX50_EPDC_MODE_DU;
++	mutex_unlock(&f->io_lock);
++	if (ret)
++		return ret;
++	return count;
++}
++static DEVICE_ATTR_RW(waveform_mode);
++
++static ssize_t state_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++	struct k4_fb *f = dev_get_drvdata(dev);
++	unsigned long flags;
++	bool dirty, full_requested;
++	ssize_t n;
++
++	mutex_lock(&f->io_lock);
++	spin_lock_irqsave(&f->dirty_lock, flags);
++	dirty = f->dirty;
++	full_requested = f->full_requested;
++	spin_unlock_irqrestore(&f->dirty_lock, flags);
++	n = sysfs_emit(buf, "updates=%u last_error=%d power_error=%d dirty=%u needs_full=%u\n",
++		       f->updates, f->last_error, f->power_error, dirty, f->needs_full);
++	n += sysfs_emit_at(buf, n, "width=%u height=%u bpp=%u rotation=%u stride=%u\n",
++			   f->width, f->height, f->bpp, f->rotation * 90, f->stride);
++	n += sysfs_emit_at(buf, n, "waveform_mode=%s\n",
++			   k4_fb_waveforms[f->waveform_mode - IMX50_EPDC_MODE_DU]);
++	n += sysfs_emit_at(buf, n, "full_requested=%u\n", full_requested);
++	mutex_unlock(&f->io_lock);
++	return n;
++}
++static DEVICE_ATTR_RO(state);
++
++static struct attribute *k4_fb_attrs[] = {
++	&dev_attr_refresh.attr,
++	&dev_attr_flush.attr,
++	&dev_attr_waveform_mode.attr,
++	&dev_attr_state.attr,
++	NULL,
++};
++ATTRIBUTE_GROUPS(k4_fb);
++
++static int k4_fb_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct fb_info *info;
++	struct k4_fb *f;
++	u32 update_ms = 100, idle_ms = 500;
++	int ret;
++
++	info = framebuffer_alloc(sizeof(*f), dev);
++	if (!info)
++		return -ENOMEM;
++	f = info->par;
++	f->info = info;
++	f->needs_full = true;
++	f->width = K4_FB_WIDTH;
++	f->height = K4_FB_HEIGHT;
++	f->bpp = 32;
++	f->stride = K4_FB_WIDTH * 4;
++	f->format = IMX50_EPDC_XRGB8888;
++	f->waveform_mode = IMX50_EPDC_MODE_GC16;
++	f->epdc = devm_imx50_epdc_get(dev, "epdc");
++	if (IS_ERR(f->epdc)) {
++		ret = dev_err_probe(dev, PTR_ERR(f->epdc), "EPDC supplier\n");
++		goto free_info;
++	}
++	if (of_find_property(dev->of_node, "update-delay-ms", NULL)) {
++		ret = of_property_read_u32(dev->of_node, "update-delay-ms", &update_ms);
++		if (ret)
++			goto free_info;
++	}
++	if (of_find_property(dev->of_node, "idle-delay-ms", NULL)) {
++		ret = of_property_read_u32(dev->of_node, "idle-delay-ms", &idle_ms);
++		if (ret)
++			goto free_info;
++	}
++	mutex_init(&f->io_lock);
++	spin_lock_init(&f->dirty_lock);
++	INIT_DELAYED_WORK(&f->idle_work, k4_fb_idle);
++	f->idle_delay = msecs_to_jiffies(idle_ms);
++	f->defio.delay = max_t(unsigned long, 1, msecs_to_jiffies(update_ms));
++	f->defio.deferred_io = k4_fb_deferred;
++	info->screen_buffer = vzalloc(K4_FB_BYTES);
++	f->snapshot = vzalloc(K4_FB_BYTES);
++	if (!info->screen_buffer || !f->snapshot) {
++		ret = -ENOMEM;
++		goto free_memory;
++	}
++	memset(info->screen_buffer, 0xff, K4_FB_BYTES);
++	info->screen_size = K4_FB_BYTES;
++	info->fbops = &k4_fb_ops;
++	info->flags = FBINFO_VIRTFB;
++	info->pseudo_palette = f->palette;
++	info->fix = (struct fb_fix_screeninfo) {
++		.id = "k4-epdc", .type = FB_TYPE_PACKED_PIXELS,
++		.visual = FB_VISUAL_TRUECOLOR, .line_length = K4_FB_WIDTH * 4,
++		.smem_len = K4_FB_BYTES, .accel = FB_ACCEL_NONE,
++	};
++	info->var = (struct fb_var_screeninfo) {
++		.xres = K4_FB_WIDTH, .yres = K4_FB_HEIGHT,
++		.xres_virtual = K4_FB_WIDTH, .yres_virtual = K4_FB_HEIGHT,
++		.bits_per_pixel = 32, .width = -1, .height = -1,
++	};
++	k4_fb_check_var(&info->var, info);
++	info->fbdefio = &f->defio;
++	ret = fb_alloc_cmap(&info->cmap, 256, 0);
++	if (ret)
++		goto free_memory;
++	ret = fb_deferred_io_init(info);
++	if (ret)
++		goto free_cmap;
++	platform_set_drvdata(pdev, f);
++	ret = register_framebuffer(info);
++	if (ret)
++		goto free_defio;
++	dev_info(dev, "fb%d: K4 800x600, 8/16/32 bpp and four orientations\n", info->node);
++	return 0;
++free_defio:
++	spin_lock_irq(&f->dirty_lock);
++	f->stopped = true;
++	spin_unlock_irq(&f->dirty_lock);
++	fb_deferred_io_cleanup(info);
++	cancel_delayed_work_sync(&f->idle_work);
++	imx50_epdc_powerdown(f->epdc);
++free_cmap:
++	fb_dealloc_cmap(&info->cmap);
++free_memory:
++	vfree(f->snapshot);
++	vfree(info->screen_buffer);
++free_info:
++	framebuffer_release(info);
++	return ret;
++}
++
++static void k4_fb_shutdown(struct platform_device *pdev)
++{
++	struct k4_fb *f = platform_get_drvdata(pdev);
++	unsigned long flags;
++
++	spin_lock_irqsave(&f->dirty_lock, flags);
++	f->stopped = true;
++	spin_unlock_irqrestore(&f->dirty_lock, flags);
++	cancel_delayed_work_sync(&f->info->deferred_work);
++	cancel_delayed_work_sync(&f->idle_work);
++	mutex_lock(&f->io_lock);
++	f->power_error = imx50_epdc_powerdown(f->epdc);
++	mutex_unlock(&f->io_lock);
++}
++
++static const struct of_device_id k4_fb_match[] = {
++	{ .compatible = "amazon,k4-epdc-fb" }, { }
++};
++
++static struct platform_driver k4_fb_driver = {
++	.probe = k4_fb_probe,
++	.shutdown = k4_fb_shutdown,
++	.driver = {
++		.name = "k4-epdc-fb",
++		.of_match_table = k4_fb_match,
++		.pm = pm_sleep_ptr(&k4_fb_pm),
++		.dev_groups = k4_fb_groups,
++		.suppress_bind_attrs = true,
++	},
++};
++/* No module_exit: an inherited/faulted DMA arena or an open framebuffer
++ * must survive until reboot. Late loading is supported; unloading is not.
++ */
++static int __init k4_display_init(void)
++{
++	return platform_driver_register(&k4_fb_driver);
++}
++module_init(k4_display_init);
++MODULE_DEVICE_TABLE(of, k4_fb_match);
++MODULE_LICENSE("GPL");
+--- /dev/null
++++ b/drivers/video/fbdev/imx50-epdc-hw.c
+@@ -0,0 +1,478 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* i.MX50 RM Rev.2 chapter 24: reset, K4 timing, serial DMA and IRQ drain. */
++#include <linux/bitops.h>
++#include <linux/imx50-epdc-buffer.h>
++#include <linux/io.h>
++#include <linux/iopoll.h>
++#include <linux/jiffies.h>
++#include <linux/k4_ram_trace.h>
++#include <linux/module.h>
++
++#include "imx50-epdc-hw.h"
++
++#define E_CTRL		0x000
++#define E_CTRL_SET	0x004
++#define E_CTRL_CLR	0x008
++#define E_WAVE		0x020
++#define E_WORK		0x030
++#define E_RES		0x040
++#define E_UPDATE	0x100
++#define E_COORD		0x120
++#define E_SIZE		0x140
++#define E_COMMAND	0x160
++#define E_FIXED		0x180
++#define E_TEMP		0x1a0
++#define E_MASK		0x400
++#define E_IRQ		0x420
++#define E_IRQ_CLR	0x428
++#define E_LUTS		0x440
++#define E_STATUS	0x4a0
++#define E_GPIO		0x700
++#define E_VERSION	0x7f0
++
++#define E_RESET		BIT(31)
++#define E_GATE		BIT(30)
++#define E_LUT0		BIT(0)
++#define E_WB		BIT(16)
++#define E_COLLISION	BIT(17)
++#define E_UNDERRUN	BIT(18)
++#define E_BUS_ERROR	BIT(20)
++#define E_IDLE		BIT(21)
++#define E_ERRORS	(E_COLLISION | E_UNDERRUN | E_BUS_ERROR)
++#define E_DONE		(E_LUT0 | E_WB | E_IDLE)
++#define E_IRQS		(0xffff | E_WB | E_ERRORS | E_IDLE)
++#define E_ALL_IRQS	0x3fffff
++#define E_PANEL_RES	((600 << 16) | 800)
++
++/* Same E60_V220_WJ values as the original mx50_yoshi board mode. All registers
++ * here are configuration, not UPD_CTRL, DEBUG or a panel power-enable register.
++ */
++static const struct {
++	u32 offset, value;
++} k4_epdc_timing[] = {
++	{ 0x050, 0x00000400 }, /* P4N buffer; 2-bit TFT, default neutral pixel */
++	{ 0x0a0, 0x0064c864 }, /* FIFO initial/high/low = 100/200/100 */
++	{ E_RES, E_PANEL_RES },
++	{ 0x200, 0x00040002 }, /* holdoff 4, 4 pixels/SDCLK */
++	{ 0x220, 0x00314320 }, /* hold, SDSHR, CE1, pixel flip, 800 pixels/CE */
++	{ 0x240, 0x00000010 }, /* GDRL */
++	{ 0x260, 0x000f000f }, /* line sync width/end = 15/15 */
++	{ 0x280, 0x00ac0011 }, /* line end/begin = 172/17 */
++	{ 0x2a0, 0x00120404 }, /* frame end/begin/sync = 18/4/4 */
++	{ 0x2c0, 0x0a140a14 }, /* SDOED/Z width/delay = 10/20 */
++	{ 0x2e0, 0x0000000e }, /* SDLE/SDOE/GDOE active high */
++	{ 0x300, 0x00000000 },
++	{ 0x310, 0x01a90014 }, /* GDCLK half period/GDSP = 425/20 */
++	{ 0x320, 0x00000011 }, /* GDOE/GDCLK offset = 0/17 */
++};
++
++void imx50_epdc_hw_init(struct imx50_epdc_hw *hw, void __iomem *base)
++{
++	*hw = (struct imx50_epdc_hw){ .base = base };
++	mutex_init(&hw->lock);
++	spin_lock_init(&hw->irq_lock);
++	init_completion(&hw->done);
++}
++
++/* STATUS.LUTS_BUSY means ALL LUTs busy, not that there are no active LUTs.
++ * Always inspect the full STATUS_LUTS bitmap as well. No writes to DEBUG.
++ */
++static bool epdc_hw_quiet(struct imx50_epdc_hw *hw)
++{
++	return !(readl(hw->base + E_STATUS) & 7) &&
++	       !(readl(hw->base + E_LUTS) & 0xffff);
++}
++
++static int epdc_hw_reset(struct imx50_epdc_hw *hw)
++{
++	u32 value;
++	int ret;
++
++	k4_ram_trace_mark("EPDC reset begin");
++	/* Inherited CLKGATE must not satisfy the reset-assert handshake. */
++	writel(E_RESET | E_GATE, hw->base + E_CTRL_CLR);
++	ret = readl_poll_timeout(hw->base + E_CTRL, value,
++				 !(value & (E_RESET | E_GATE)), 10, 1000);
++	if (ret)
++		return ret;
++	writel(E_RESET, hw->base + E_CTRL_SET);
++	ret = readl_poll_timeout(hw->base + E_CTRL, value, value & E_GATE, 10, 1000);
++	if (ret)
++		return ret;
++	writel(E_RESET | E_GATE, hw->base + E_CTRL_CLR);
++	ret = readl_poll_timeout(hw->base + E_CTRL, value,
++				 !(value & (E_RESET | E_GATE)), 10, 1000);
++	if (!ret)
++		k4_ram_trace_mark("EPDC reset done");
++	return ret;
++}
++
++int imx50_epdc_hw_inherited_idle(struct imx50_epdc_hw *hw)
++{
++	hw->preflight_count++;
++	hw->preflight_version = readl(hw->base + E_VERSION);
++	hw->preflight_ctrl = hw->preflight_status = 0;
++	hw->preflight_luts = hw->preflight_irq = 0;
++	if (hw->preflight_version >> 24 != 1) {
++		hw->preflight_result = -ENODEV;
++		return hw->preflight_result;
++	}
++	hw->preflight_ctrl = readl(hw->base + E_CTRL);
++	hw->preflight_status = readl(hw->base + E_STATUS);
++	hw->preflight_luts = readl(hw->base + E_LUTS);
++	hw->preflight_irq = readl(hw->base + E_IRQ);
++	/* Preserve the inherited-DMA policy; the snapshot explains rejection. */
++	hw->preflight_result = (hw->preflight_status & 7) ||
++		(hw->preflight_luts & 0xffff) ||
++		(!(hw->preflight_ctrl & E_GATE) &&
++		 !(hw->preflight_irq & E_IDLE)) ? -EBUSY : 0;
++	return hw->preflight_result;
++}
++
++int imx50_epdc_hw_configure(struct imx50_epdc_hw *hw, struct imx50_epdc_buffers *buffers)
++{
++	unsigned long flags;
++	u32 value, actual;
++	const char *stage = "inherited";
++	unsigned int i;
++	int ret;
++
++	if (!buffers)
++		return -EINVAL;
++	mutex_lock(&hw->lock);
++	if (hw->fault || hw->configured) {
++		ret = hw->fault ? hw->fault : -EALREADY;
++		goto out;
++	}
++	ret = imx50_epdc_buffers_invalidate(buffers);
++	if (ret)
++		goto out;
++	k4_ram_trace_mark("EPDC configure begin");
++	/* Never reset an inherited DMA operation or discard its buffers. */
++	ret = imx50_epdc_hw_inherited_idle(hw);
++	if (ret)
++		goto fault;
++	stage = "reset";
++	ret = epdc_hw_reset(hw);
++	if (ret)
++		goto fault;
++	/* The inherited controller gate blocks ordinary register writes.
++	 * Reset ungates it first; the owner's Linux IRQ remains disabled.
++	 */
++	stage = "mask";
++	writel(0, hw->base + E_MASK);
++	if (readl(hw->base + E_MASK)) {
++		ret = -EIO;
++		goto fault;
++	}
++	stage = "control";
++	/* Clear SRAM powerdown and both data swizzles, preserve other bits. */
++	writel(0x1f0, hw->base + E_CTRL_CLR);
++	if (readl(hw->base + E_CTRL) & (E_RESET | E_GATE | 0x1f0)) {
++		ret = -EIO;
++		goto fault;
++	}
++	stage = "timing";
++	for (i = 0; i < ARRAY_SIZE(k4_epdc_timing); i++) {
++		writel(k4_epdc_timing[i].value, hw->base + k4_epdc_timing[i].offset);
++		actual = readl(hw->base + k4_epdc_timing[i].offset);
++		if (actual != k4_epdc_timing[i].value) {
++			pr_err("imx50-epdc: timing %03x expected=%08x actual=%08x\n",
++			       k4_epdc_timing[i].offset, k4_epdc_timing[i].value, actual);
++			ret = -EIO;
++			goto fault;
++		}
++	}
++	stage = "idle";
++	value = readl(hw->base + E_GPIO) & ~0x7f;
++	writel(value, hw->base + E_GPIO);
++	writel(0, hw->base + E_MASK);
++	writel(E_ALL_IRQS, hw->base + E_IRQ_CLR);
++	if (readl(hw->base + E_GPIO) != value || readl(hw->base + E_MASK) ||
++	    (readl(hw->base + E_IRQ) & E_ALL_IRQS) ||
++	    !epdc_hw_quiet(hw)) {
++		ret = -EIO;
++		goto fault;
++	}
++	hw->buffers = buffers;
++	spin_lock_irqsave(&hw->irq_lock, flags);
++	hw->configured = true;
++	hw->drained = true; /* Reset/config only; no update has started. */
++	spin_unlock_irqrestore(&hw->irq_lock, flags);
++	k4_ram_trace_mark("EPDC configure done");
++	ret = 0;
++	goto out;
++fault:
++	pr_err("imx50-epdc: configure %s error=%d ctrl=%08x irq=%08x status=%08x luts=%08x\n",
++	       stage, ret, readl(hw->base + E_CTRL), readl(hw->base + E_IRQ),
++	       readl(hw->base + E_STATUS), readl(hw->base + E_LUTS));
++	hw->fault = ret;
++	k4_ram_trace_mark("EPDC configure fault");
++out:
++	mutex_unlock(&hw->lock);
++	return ret;
++}
++
++irqreturn_t imx50_epdc_hw_irq(int irq, void *data)
++{
++	struct imx50_epdc_hw *hw = data;
++	unsigned long flags;
++	u32 pending;
++	irqreturn_t handled = IRQ_NONE;
++
++	(void)irq;
++	spin_lock_irqsave(&hw->irq_lock, flags);
++	/* An IRQ before configure or after stop must not touch gated MMIO. */
++	if (!hw->configured)
++		goto out;
++	pending = readl(hw->base + E_IRQ) & readl(hw->base + E_MASK);
++	if (!pending)
++		goto out;
++	handled = IRQ_HANDLED;
++	hw->interrupts++;
++	writel(pending, hw->base + E_IRQ_CLR);
++	if (!hw->running || (pending & (E_ERRORS | 0xfffe))) {
++		hw->fault = -EIO;
++		hw->result = -EIO;
++		goto finish;
++	}
++	hw->seen |= pending & (E_WB | E_LUT0);
++	/* Do not mistake an idle event before this LUT completed for its drain. */
++	if ((hw->seen & E_LUT0) && (pending & E_IDLE))
++		hw->seen |= E_IDLE;
++	if ((hw->seen & E_DONE) != E_DONE)
++		goto out;
++finish:
++	writel(0, hw->base + E_MASK);
++	complete(&hw->done);
++out:
++	spin_unlock_irqrestore(&hw->irq_lock, flags);
++	return handled;
++}
++
++void imx50_epdc_hw_power_fault(struct imx50_epdc_hw *hw)
++{
++	unsigned long flags;
++
++	spin_lock_irqsave(&hw->irq_lock, flags);
++	hw->supply_fault = true;
++	if (hw->configured && hw->running) {
++		writel(0, hw->base + E_MASK);
++		hw->fault = -EIO;
++		hw->result = -EIO;
++		complete(&hw->done);
++	}
++	spin_unlock_irqrestore(&hw->irq_lock, flags);
++}
++
++int imx50_epdc_hw_power_reset(struct imx50_epdc_hw *hw)
++{
++	unsigned long flags;
++	int ret = 0;
++
++	mutex_lock(&hw->lock);
++	spin_lock_irqsave(&hw->irq_lock, flags);
++	if (hw->fault || hw->configured || hw->running)
++		ret = hw->fault ? hw->fault : -EBUSY;
++	else
++		hw->supply_fault = false;
++	spin_unlock_irqrestore(&hw->irq_lock, flags);
++	mutex_unlock(&hw->lock);
++	return ret;
++}
++
++/* Called with irq_lock held after masking IRQs at the wait deadline. A missed
++ * final interrupt can leave its completion bit latched. Do not infer the order
++ * of an accumulated IDLE/LUT pair: only a previously witnessed LUT completion
++ * permits a new raw IDLE to establish final blanking. No extra wait or reset.
++ */
++static int epdc_hw_deadline(struct imx50_epdc_hw *hw)
++{
++	u32 pending = readl(hw->base + E_IRQ) & E_IRQS;
++
++	if (pending & (E_ERRORS | 0xfffe))
++		return -EIO;
++	if (hw->seen & E_LUT0)
++		hw->seen |= pending & E_DONE;
++	else
++		hw->seen |= pending & (E_WB | E_LUT0);
++	if ((hw->seen & E_DONE) != E_DONE)
++		return -ETIMEDOUT;
++	writel(pending, hw->base + E_IRQ_CLR);
++	return readl(hw->base + E_IRQ) & pending ? -EIO : 0;
++}
++
++int imx50_epdc_hw_submit(struct imx50_epdc_hw *hw, bool initialize, bool full,
++			 u32 mode, u32 temperature, unsigned int timeout_ms)
++{
++	struct imx50_epdc_command command;
++	unsigned long flags, waited;
++	int ret;
++
++	if (!timeout_ms)
++		return -EINVAL;
++	ret = mutex_lock_interruptible(&hw->lock);
++	if (ret)
++		return ret;
++	if (hw->fault || !hw->configured) {
++		ret = hw->fault ? hw->fault : -ENODEV;
++		goto out;
++	}
++	if (!hw->drained || !epdc_hw_quiet(hw) || readl(hw->base + E_MASK) ||
++	    (readl(hw->base + E_CTRL) & (E_RESET | E_GATE))) {
++		hw->fault = -EBUSY;
++		ret = hw->fault;
++		goto out;
++	}
++	ret = imx50_epdc_buffers_begin(hw->buffers, initialize, full, mode,
++				       temperature, &command);
++	if (ret)
++		goto out;
++	if (command.resolution != E_PANEL_RES) {
++		ret = -EINVAL;
++		goto abort;
++	}
++	reinit_completion(&hw->done);
++	spin_lock_irqsave(&hw->irq_lock, flags);
++	/* Serialize the supply fault with the actual command write. A fault
++	 * during begin() has not started DMA and must not quarantine its buffer.
++	 */
++	if (hw->supply_fault) {
++		spin_unlock_irqrestore(&hw->irq_lock, flags);
++		ret = imx50_epdc_buffers_abort_unsubmitted(hw->buffers);
++		if (!ret)
++			ret = -EIO;
++		goto out;
++	}
++	writel(E_ALL_IRQS, hw->base + E_IRQ_CLR);
++	hw->seen = 0;
++	hw->result = 0;
++	writel(command.waveform_addr, hw->base + E_WAVE);
++	writel(command.working_addr, hw->base + E_WORK);
++	writel(command.update_addr, hw->base + E_UPDATE);
++	writel(command.coordinates, hw->base + E_COORD);
++	writel(command.size, hw->base + E_SIZE);
++	writel(command.fixed, hw->base + E_FIXED);
++	writel(command.temperature, hw->base + E_TEMP);
++	writel(E_IRQS, hw->base + E_MASK);
++	if (readl(hw->base + E_WAVE) != command.waveform_addr ||
++	    readl(hw->base + E_WORK) != command.working_addr ||
++	    readl(hw->base + E_UPDATE) != command.update_addr ||
++	    readl(hw->base + E_COORD) != command.coordinates ||
++	    readl(hw->base + E_SIZE) != command.size ||
++	    readl(hw->base + E_FIXED) != command.fixed ||
++	    readl(hw->base + E_TEMP) != command.temperature ||
++	    readl(hw->base + E_MASK) != E_IRQS ||
++	    (readl(hw->base + E_IRQ) & E_ALL_IRQS)) {
++		writel(0, hw->base + E_MASK);
++		/* No command was written, but a stuck mask still forbids clock release. */
++		if (readl(hw->base + E_MASK))
++			hw->fault = -EIO;
++		spin_unlock_irqrestore(&hw->irq_lock, flags);
++		ret = -EIO;
++		goto abort;
++	}
++	/* Only UPD_CTRL can start this operation; register preparation is not DMA. */
++	hw->running = true;
++	hw->drained = false;
++	/* begin() did dma_wmb(); ordered writel of UPD_CTRL starts DMA last. */
++	k4_ram_trace_mark("EPDC submit >");
++	writel(command.control, hw->base + E_COMMAND);
++	k4_ram_trace_mark("EPDC submit <");
++	spin_unlock_irqrestore(&hw->irq_lock, flags);
++	waited = wait_for_completion_timeout(&hw->done, msecs_to_jiffies(timeout_ms));
++	spin_lock_irqsave(&hw->irq_lock, flags);
++	writel(0, hw->base + E_MASK);
++	ret = hw->result;
++	if (!waited && !ret)
++		ret = epdc_hw_deadline(hw);
++	if (!ret && ((hw->seen & E_DONE) != E_DONE || !epdc_hw_quiet(hw) ||
++		     readl(hw->base + E_MASK) ||
++		     (readl(hw->base + E_IRQ) & (E_ERRORS | 0xfffe))))
++		ret = -EIO;
++	hw->running = false;
++	spin_unlock_irqrestore(&hw->irq_lock, flags);
++	if (ret)
++		goto quarantine;
++	ret = imx50_epdc_buffers_complete(hw->buffers, 0);
++	if (ret)
++		goto quarantine;
++	hw->drained = true;
++	if (initialize)
++		hw->init_updates++;
++	else if (command.size == E_PANEL_RES)
++		hw->canvas_updates++;
++	else
++		hw->region_updates++;
++	hw->last_coordinates = command.coordinates;
++	hw->last_size = command.size;
++	hw->last_mode = mode;
++	hw->last_full = full;
++	if (!waited) {
++		hw->polled_completions++;
++		k4_ram_trace_mark("EPDC deadline drained");
++	}
++	k4_ram_trace_mark("EPDC update drained");
++	goto out;
++abort:
++	/* Withdraw only a command never written. An attempted command write, even
++	 * one without completion/readback, must keep the existing DMA quarantine.
++	 */
++	if (imx50_epdc_buffers_abort_unsubmitted(hw->buffers))
++		goto quarantine;
++	k4_ram_trace_mark("EPDC unsubmitted abort");
++	goto out;
++quarantine:
++	hw->fault = ret;
++	imx50_epdc_buffers_complete(hw->buffers, ret);
++	k4_ram_trace_mark("EPDC update fault");
++out:
++	mutex_unlock(&hw->lock);
++	return ret;
++}
++
++int imx50_epdc_hw_stop(struct imx50_epdc_hw *hw)
++{
++	unsigned long flags;
++	u32 value;
++	int ret = 0;
++
++	mutex_lock(&hw->lock);
++	if (hw->fault) {
++		ret = hw->fault;
++		goto out;
++	}
++	if (!hw->configured)
++		goto out;
++	if (!hw->drained || !epdc_hw_quiet(hw)) {
++		hw->fault = -EBUSY;
++		ret = hw->fault;
++		goto out;
++	}
++	ret = imx50_epdc_buffers_invalidate(hw->buffers);
++	if (ret) {
++		hw->fault = ret;
++		goto out;
++	}
++	spin_lock_irqsave(&hw->irq_lock, flags);
++	writel(0, hw->base + E_MASK);
++	if (readl(hw->base + E_MASK)) {
++		hw->fault = -EIO;
++		ret = hw->fault;
++		spin_unlock_irqrestore(&hw->irq_lock, flags);
++		goto out;
++	}
++	hw->configured = false;
++	spin_unlock_irqrestore(&hw->irq_lock, flags);
++	writel(E_GATE, hw->base + E_CTRL_SET);
++	ret = readl_poll_timeout(hw->base + E_CTRL, value, value & E_GATE, 10, 1000);
++	if (ret)
++		hw->fault = ret;
++	else
++		k4_ram_trace_mark("EPDC controller gated");
++out:
++	mutex_unlock(&hw->lock);
++	return ret;
++}
++
++MODULE_LICENSE("GPL");
+--- /dev/null
++++ b/drivers/video/fbdev/imx50-epdc-hw.h
+@@ -0,0 +1,63 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _IMX50_EPDC_HW_H
++#define _IMX50_EPDC_HW_H
++
++#include <linux/completion.h>
++#include <linux/interrupt.h>
++#include <linux/mutex.h>
++#include <linux/spinlock.h>
++#include <linux/types.h>
++
++struct imx50_epdc_buffers;
++
++/* Private backend for the forthcoming controller owner. No platform binding.
++ * The owner must keep APBH/AXI/pixel clocks and the MMIO mapping valid for
++ * every configure/submit/stop call and until stop succeeds. It owns
++ * the sole IRQ, buffer and MMIO mapping. No other caller may prepare/free the
++ * buffer during submit. Never release clocks, DMA or this object after fault.
++ * Submit additionally requires validated panel supplies, pins and waveform;
++ * the owner must handle emergency panel-power shutdown separately on fault.
++ * A successful reset/configure is NOT a panel INIT or permission to submit
++ * an unvalidated waveform. This backend currently programs K4 800x600 timing.
++ */
++struct imx50_epdc_hw {
++	void __iomem *base;
++	struct imx50_epdc_buffers *buffers;
++	struct mutex lock; /* Serializes reset/submit/stop and buffer ownership. */
++	spinlock_t irq_lock; /* Covers IRQ MMIO, running/configured and event state. */
++	struct completion done;
++	/* Read-only preflight snapshot, cached while access clocks are held. */
++	u32 preflight_version, preflight_ctrl, preflight_status;
++	u32 preflight_luts, preflight_irq, preflight_count;
++	int preflight_result;
++	u32 seen, interrupts, polled_completions;
++	u32 init_updates, canvas_updates, region_updates;
++	u32 last_coordinates, last_size, last_mode, last_full;
++	int fault, result;
++	bool configured, running, drained, supply_fault;
++};
++
++void imx50_epdc_hw_init(struct imx50_epdc_hw *hw, void __iomem *base);
++/* Only APBH/AXI access clocks needed; read-only before touching inherited pins. */
++int imx50_epdc_hw_inherited_idle(struct imx50_epdc_hw *hw);
++int imx50_epdc_hw_configure(struct imx50_epdc_hw *hw, struct imx50_epdc_buffers *buffers);
++/* Synchronous serial LUT0 submission; waits for WB + LUT0 + final TCE idle.
++ * timeout_ms is a nonzero finite waveform-aware deadline, not a cancel.
++ * At the deadline, a latched final IRQ may establish the same completion proof;
++ * otherwise timeout/error quarantines the active DMA until system reset.
++ */
++int imx50_epdc_hw_submit(struct imx50_epdc_hw *hw, bool initialize, bool full,
++			 u32 mode, u32 temperature, unsigned int timeout_ms);
++irqreturn_t imx50_epdc_hw_irq(int irq, void *data);
++/* Supplier fault notification: wake a running submit and quarantine its DMA.
++ * No MMIO while unconfigured; owner preserves clocks while configured.
++ */
++void imx50_epdc_hw_power_fault(struct imx50_epdc_hw *hw);
++/* Start a new supply epoch only while stopped, before enabling regulators.
++ * A later fault remains latched through preparation and the command write.
++ */
++int imx50_epdc_hw_power_reset(struct imx50_epdc_hw *hw);
++/* Only success permits the owner to gate clocks or release the IRQ/mapping. */
++int imx50_epdc_hw_stop(struct imx50_epdc_hw *hw);
++
++#endif
+--- /dev/null
++++ b/drivers/video/fbdev/imx50-epdc-image.c
+@@ -0,0 +1,173 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* EPDC update image preparation: snapshot, block padding, PxP, exact crop. */
++#include <linux/imx50-epdc-image.h>
++#include <linux/imx50-pxp.h>
++#include <linux/module.h>
++#include <linux/overflow.h>
++#include <linux/slab.h>
++
++struct imx50_epdc_layout {
++	struct imx50_epdc_rect update;
++	u32 bpp, padded_width, padded_height, output_stride;
++	u32 crop_x, crop_y;
++};
++
++static int imx50_epdc_layout(const struct imx50_epdc_source *s, size_t dst_size,
++			      u32 dst_stride, struct imx50_epdc_layout *l)
++{
++	const struct imx50_epdc_rect *r;
++	size_t need, row_bytes;
++
++	if (!s || !s->pixels || !s->width || !s->height ||
++	    s->rotation > 270 || s->rotation % 90)
++		return -EINVAL;
++	switch (s->format) {
++	case IMX50_EPDC_XRGB8888:
++		l->bpp = 4;
++		break;
++	case IMX50_EPDC_RGB565:
++		l->bpp = 2;
++		break;
++	case IMX50_EPDC_Y8:
++		l->bpp = 1;
++		break;
++	default:
++		return -EINVAL;
++	}
++	if (check_mul_overflow((size_t)s->width, (size_t)l->bpp, &row_bytes) ||
++	    s->stride < row_bytes ||
++	    check_mul_overflow((size_t)(s->height - 1), (size_t)s->stride, &need) ||
++	    check_add_overflow(need, row_bytes, &need) || need > s->size)
++		return -EINVAL;
++	r = &s->region;
++	if (!r->width || !r->height || r->width > s->width || r->height > s->height ||
++	    r->left > s->width - r->width || r->top > s->height - r->height)
++		return -EINVAL;
++	/* The canvas can be larger; only this submitted region enters PxP. */
++	if (r->width > IMX50_PXP_MAX_DIMENSION || r->height > IMX50_PXP_MAX_DIMENSION)
++		return -E2BIG;
++	l->padded_width = ALIGN(r->width, 8);
++	l->padded_height = ALIGN(r->height, 8);
++	l->update = *r;
++	l->crop_x = 0;
++	l->crop_y = 0;
++	switch (s->rotation) {
++	case 90:
++		l->update.left = s->height - r->top - r->height;
++		l->update.top = r->left;
++		l->crop_x = l->padded_height - r->height;
++		break;
++	case 180:
++		l->update.left = s->width - r->left - r->width;
++		l->update.top = s->height - r->top - r->height;
++		l->crop_x = l->padded_width - r->width;
++		l->crop_y = l->padded_height - r->height;
++		break;
++	case 270:
++		l->update.left = r->top;
++		l->update.top = s->width - r->left - r->width;
++		l->crop_y = l->padded_width - r->width;
++		break;
++	}
++	if (s->rotation % 180) {
++		l->update.width = r->height;
++		l->update.height = r->width;
++		l->output_stride = l->padded_height;
++	} else {
++		l->output_stride = l->padded_width;
++	}
++	if (dst_stride < l->update.width ||
++	    check_mul_overflow((size_t)(l->update.height - 1), (size_t)dst_stride, &need) ||
++	    check_add_overflow(need, (size_t)l->update.width, &need) || need > dst_size)
++		return -EINVAL;
++	return 0;
++}
++
++static void imx50_epdc_snapshot(const struct imx50_epdc_source *s,
++			       const struct imx50_epdc_layout *l, u8 *rgb)
++{
++	u32 x, y;
++
++	/* Only copy the requested region. Do not read neighbouring pixels to pad. */
++	for (y = 0; y < s->region.height; y++) {
++		const u8 *in = (const u8 *)s->pixels +
++			(size_t)(s->region.top + y) * s->stride + s->region.left * l->bpp;
++		u8 *out = rgb + y * l->padded_width * 4;
++
++		for (x = 0; x < s->region.width; x++, in += l->bpp, out += 4) {
++			u32 v;
++
++			switch (s->format) {
++			case IMX50_EPDC_XRGB8888:
++				out[0] = in[0];
++				out[1] = in[1];
++				out[2] = in[2];
++				break;
++			case IMX50_EPDC_RGB565:
++				v = in[0] | (in[1] << 8);
++				out[0] = ((v & 31) << 3) | ((v & 31) >> 2);
++				out[1] = (((v >> 5) & 63) << 2) | (((v >> 5) & 63) >> 4);
++				out[2] = ((v >> 11) << 3) | ((v >> 11) >> 2);
++				break;
++			case IMX50_EPDC_Y8:
++				out[0] = in[0];
++				out[1] = in[0];
++				out[2] = in[0];
++				break;
++			}
++			out[3] = 0;
++		}
++		cond_resched();
++	}
++}
++
++int imx50_epdc_prepare(struct imx50_pxp *pxp,
++		       const struct imx50_epdc_source *s,
++		       void *dst, size_t dst_size, u32 dst_stride,
++		       struct imx50_epdc_rect *update)
++{
++	struct imx50_epdc_layout l;
++	struct imx50_pxp_image image;
++	u8 *rgb, *grey;
++	size_t pixels;
++	u32 x, y;
++	int ret;
++
++	if (!pxp || !dst || !update)
++		return -EINVAL;
++	ret = imx50_epdc_layout(s, dst_size, dst_stride, &l);
++	if (ret)
++		return ret;
++	pixels = l.padded_width * l.padded_height;
++	rgb = kvmalloc(pixels * 4, GFP_KERNEL);
++	grey = kvmalloc(pixels, GFP_KERNEL);
++	if (!rgb || !grey) {
++		ret = -ENOMEM;
++		goto out;
++	}
++	memset(rgb, 0xff, pixels * 4);
++	imx50_epdc_snapshot(s, &l, rgb);
++	image = (struct imx50_pxp_image) {
++		.src = rgb, .dst = grey, .src_size = pixels * 4, .dst_size = pixels,
++		.width = l.padded_width, .height = l.padded_height,
++		.src_stride = l.padded_width * 4, .dst_stride = l.output_stride,
++		.rotation = s->rotation,
++	};
++	ret = imx50_pxp_convert(pxp, &image);
++	if (ret)
++		goto out;
++	for (y = 0; y < l.update.height; y++) {
++		const u8 *row = grey + (y + l.crop_y) * l.output_stride + l.crop_x;
++		u8 *out = (u8 *)dst + (size_t)y * dst_stride;
++
++		for (x = 0; x < l.update.width; x++)
++			out[x] = s->invert ? 255 - row[x] : row[x];
++		cond_resched();
++	}
++	*update = l.update;
++out:
++	kvfree(grey);
++	kvfree(rgb);
++	return ret;
++}
++MODULE_LICENSE("GPL");
+--- /dev/null
++++ b/drivers/video/fbdev/imx50-epdc-waveform.c
+@@ -0,0 +1,436 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* Decode format-1 WBF or load WRF; raw WBF never reaches controller DMA. */
++#include <linux/crc32.h>
++#include <linux/device.h>
++#include <linux/err.h>
++#include <linux/firmware.h>
++#include <linux/imx50-epdc-buffer.h>
++#include <linux/module.h>
++#include <linux/nvmem-consumer.h>
++#include <linux/property.h>
++#include <linux/slab.h>
++#include <asm/unaligned.h>
++
++#include "imx50-epdc-waveform.h"
++
++#define K4_WBF_NAME "amazon/k4/panel-stock.wbf"
++#define K4_WRF_NAME "amazon/k4/panel-stock.wrf"
++#define K4_WBF_LIMIT (256 * 1024)
++#define K4_WRF_LIMIT (2 * 1024 * 1024)
++#define K4_HEADER_SIZE 48
++
++/* Amazon eink_panel.c: mode versions 4/6 share a map; version 7 adds FAST. */
++static const u8 k4_modes_04[] = { 0, 1, 2, 2, 4, 5, 5 };
++static const u8 k4_modes_07[] = { 0, 1, 2, 3, 4, 5, 6 };
++
++struct imx50_epdc_waveform {
++	struct imx50_epdc_buffers *buffers;
++	const u8 *mode_map;
++	unsigned int temperature_count, mode_count;
++	u8 temperatures[256];
++};
++
++static int k4_waveform_check_wbf(const struct firmware *wbf,
++				 struct imx50_epdc_waveform *wave, size_t *offset)
++{
++	static const u8 zero_checksum[4];
++	const u8 *header;
++	unsigned int count, i;
++	u32 crc;
++
++	/* File bounds from Amazon's WBF/proxy allocation limits, not one sample. */
++	if (!wbf || !wbf->data ||
++	    wbf->size < K4_HEADER_SIZE || wbf->size > K4_WBF_LIMIT)
++		return -EINVAL;
++	header = wbf->data;
++	count = (unsigned int)header[38] + 1;
++	*offset = K4_HEADER_SIZE + count + 1;
++	if (*offset >= wbf->size)
++		return -EINVAL;
++	if (get_unaligned_le32(header + 4) != wbf->size)
++		return -EBADMSG;
++	/* This reader implements the CRC-bearing format, not legacy sum8 files. */
++	if (header[35] != 1)
++		return -EOPNOTSUPP;
++	switch (header[16]) {
++	case 4:
++	case 6:
++		wave->mode_map = k4_modes_04;
++		break;
++	case 7:
++		wave->mode_map = k4_modes_07;
++		break;
++	default:
++		return -EOPNOTSUPP;
++	}
++	/* The implemented lookup needs adjacent bounds, as in the stock loader. */
++	if (count < 2)
++		return -EOPNOTSUPP;
++	for (i = 1; i < count; i++)
++		if (header[K4_HEADER_SIZE + i] <= header[K4_HEADER_SIZE + i - 1])
++			return -EBADMSG;
++	/* WBF's checksum is calculated with its checksum word zeroed. The same
++	 * header in WRF is copied metadata and must NOT checksum the WRF bytes.
++	 */
++	crc = crc32_le(~0, zero_checksum, sizeof(zero_checksum));
++	crc = crc32_le(crc, header + 4, wbf->size - 4) ^ ~0;
++	if (crc != get_unaligned_le32(header))
++		return -EBADMSG;
++	wave->mode_count = (unsigned int)header[37] + 1;
++	wave->temperature_count = count;
++	memcpy(wave->temperatures, header + K4_HEADER_SIZE, count);
++	return 0;
++}
++
++static int k4_waveform_check_pair(const struct firmware *wbf, const struct firmware *wrf,
++				 struct imx50_epdc_waveform *wave, size_t *offset)
++{
++	int ret;
++
++	if (!wrf || !wrf->data || wrf->size < K4_HEADER_SIZE || wrf->size > K4_WRF_LIMIT)
++		return -EINVAL;
++	ret = k4_waveform_check_wbf(wbf, wave, offset);
++	if (ret)
++		return ret;
++	if (*offset >= wrf->size)
++		return -EINVAL;
++	if (memcmp(wbf->data, wrf->data, *offset) ||
++	    (wbf->size == wrf->size && !memcmp(wbf->data, wrf->data, wbf->size)))
++		return -EBADMSG;
++	return 0;
++}
++
++/* WBF pointers are absolute LE24 addresses followed by an unsigned sum8. */
++static int k4_wbf_pointer(const struct firmware *wbf, size_t entry, size_t floor,
++			  size_t bytes, size_t *target)
++{
++	const u8 *p;
++	u32 address;
++
++	if (entry > wbf->size || wbf->size - entry < 4)
++		return -EBADMSG;
++	p = wbf->data + entry;
++	address = (u32)p[0] | (u32)p[1] << 8 | (u32)p[2] << 16;
++	if ((u8)(p[0] + p[1] + p[2]) != p[3] || address < floor ||
++	    address > wbf->size || bytes > wbf->size - address)
++		return -EBADMSG;
++	*target = address;
++	return 0;
++}
++
++/* Format-1, LUTS=0 has 16x16 transitions, four 2-bit actions per source byte.
++ * The stream starts in RLE mode. SB toggles literal/RLE, EB ends the stream,
++ * and its following byte checksums all encoded bytes including SB/EB/counts.
++ */
++static int k4_wbf_expand(const struct firmware *wbf, size_t cursor, u8 *output,
++			 size_t room, size_t *expanded)
++{
++	bool rle = true;
++	size_t packed = 0;
++	u8 sum = 0;
++
++	while (cursor < wbf->size) {
++		u8 value = wbf->data[cursor++];
++		unsigned int repeat = 1, i, shift;
++
++		sum += value;
++		if (value == wbf->data[41]) {
++			rle = !rle;
++			continue;
++		}
++		if (value == wbf->data[40]) {
++			if (cursor >= wbf->size || wbf->data[cursor] != sum ||
++			    !packed || packed % 64)
++				return -EBADMSG;
++			*expanded = packed * 4;
++			return 0;
++		}
++		if (rle) {
++			if (cursor >= wbf->size)
++				return -EBADMSG;
++			repeat += wbf->data[cursor];
++			sum += wbf->data[cursor++];
++		}
++		if (packed > room / 4 || repeat > room / 4 - packed)
++			return -E2BIG;
++		if (output)
++			for (i = 0; i < repeat; i++)
++				for (shift = 0; shift < 8; shift += 2)
++					output[(packed + i) * 4 + shift / 2] =
++						(value >> shift) & 3;
++		packed += repeat;
++	}
++	return -EBADMSG;
++}
++
++/* A sizing pass checks all streams before allocation. A second bounded pass
++ * creates EPDC's LE64 mode/temp offsets and frame counts, then action bytes.
++ * Offsets in WRF are relative to its payload, unlike WBF's absolute pointers.
++ */
++static int k4_wbf_convert_pass(const struct firmware *wbf, size_t offset, u8 *proxy,
++			     size_t limit, size_t *length)
++{
++	unsigned int modes = (unsigned int)wbf->data[37] + 1;
++	unsigned int temperatures = (unsigned int)wbf->data[38] + 1;
++	size_t mode_table, used = offset + modes * 8;
++	unsigned int mode, temperature;
++	int ret;
++
++	mode_table = (u32)wbf->data[32] | (u32)wbf->data[33] << 8 |
++		     (u32)wbf->data[34] << 16;
++	if (mode_table < offset || mode_table > wbf->size ||
++	    modes * 4 > wbf->size - mode_table)
++		return -EBADMSG;
++	if (used > limit)
++		return -E2BIG;
++	for (mode = 0; mode < modes; mode++) {
++		size_t source_temps, target_temps = used;
++
++		ret = k4_wbf_pointer(wbf, mode_table + mode * 4, offset,
++				     temperatures * 4, &source_temps);
++		if (ret)
++			return ret;
++		if (temperatures * 8 > limit - used)
++			return -E2BIG;
++		if (proxy)
++			put_unaligned_le64(used - offset, proxy + offset + mode * 8);
++		used += temperatures * 8;
++		for (temperature = 0; temperature < temperatures; temperature++) {
++			size_t source, bytes;
++
++			ret = k4_wbf_pointer(wbf, source_temps + temperature * 4,
++					     offset, 1, &source);
++			if (ret)
++				return ret;
++			if (limit - used < 8)
++				return -E2BIG;
++			ret = k4_wbf_expand(wbf, source, proxy ? proxy + used + 8 : NULL,
++					    limit - used - 8, &bytes);
++			if (ret)
++				return ret;
++			if (proxy) {
++				put_unaligned_le64(used - offset,
++					proxy + target_temps + temperature * 8);
++				put_unaligned_le64(bytes / 256, proxy + used);
++			}
++			used += 8 + bytes;
++		}
++	}
++	*length = used;
++	return 0;
++}
++
++/* The caller has already checked WBF length, CRC, header and temperature table.
++ * This decoder implements the two-bit, 16-gray format; other LUT encodings need
++ * their own layout conversion and must not silently produce this payload.
++ */
++static int k4_waveform_decode(const struct firmware *wbf, size_t offset,
++			    struct firmware *wrf)
++{
++	size_t length, written;
++	u8 *proxy;
++	int ret;
++
++	if (wbf->data[36] || wbf->data[40] == wbf->data[41])
++		return -EOPNOTSUPP;
++	ret = k4_wbf_convert_pass(wbf, offset, NULL, K4_WRF_LIMIT, &length);
++	if (ret)
++		return ret;
++	proxy = kvzalloc(length, GFP_KERNEL);
++	if (!proxy)
++		return -ENOMEM;
++	memcpy(proxy, wbf->data, offset);
++	ret = k4_wbf_convert_pass(wbf, offset, proxy, length, &written);
++	if (ret || written != length) {
++		kvfree(proxy);
++		return ret ? ret : -EBADMSG;
++	}
++	wrf->data = proxy;
++	wrf->size = length;
++	return 0;
++}
++
++/* Read the allocated WBF length from the board's factory-data window. */
++static int k4_waveform_read_flash(struct device *dev, struct firmware *wbf)
++{
++	struct nvmem_device *nvmem;
++	u8 header[K4_HEADER_SIZE];
++	u8 *data = NULL;
++	u32 start, window, length;
++	size_t capacity;
++	int ret;
++
++	ret = device_property_read_u32(dev, "wbf-nvmem-offset", &start);
++	if (ret)
++		return ret;
++	ret = device_property_read_u32(dev, "wbf-nvmem-size", &window);
++	if (ret)
++		return ret;
++	nvmem = nvmem_device_get(dev, "wbf");
++	if (IS_ERR(nvmem))
++		return PTR_ERR(nvmem);
++	capacity = nvmem_dev_size(nvmem);
++	if (start > capacity || window > capacity - start || window < sizeof(header)) {
++		ret = -EINVAL;
++		goto put;
++	}
++	ret = nvmem_device_read(nvmem, start, sizeof(header), header);
++	if (ret != (int)sizeof(header)) {
++		if (ret >= 0)
++			ret = -EIO;
++		goto put;
++	}
++	length = get_unaligned_le32(header + 4);
++	if (length < sizeof(header) || length > window || length > K4_WBF_LIMIT) {
++		ret = -EINVAL;
++		goto put;
++	}
++	data = kzalloc(length, GFP_KERNEL);
++	if (!data) {
++		ret = -ENOMEM;
++		goto put;
++	}
++	ret = nvmem_device_read(nvmem, start, length, data);
++	if (ret != (int)length) {
++		if (ret >= 0)
++			ret = -EIO;
++		goto free;
++	}
++	if (memcmp(header, data, sizeof(header))) {
++		ret = -EBADMSG;
++		goto free;
++	}
++	wbf->data = data;
++	wbf->size = length;
++	ret = 0;
++	goto put;
++free:
++	kfree(data);
++put:
++	nvmem_device_put(nvmem);
++	return ret;
++}
++
++struct imx50_epdc_waveform *imx50_epdc_waveform_load(struct device *dev,
++	const char *wbf_name, const char *wrf_name, u32 width, u32 height)
++{
++	const struct firmware *wbf = NULL, *wrf = NULL;
++	struct firmware flash_wbf = { }, decoded_wrf = { };
++	bool from_nvmem, decode;
++	struct imx50_epdc_waveform *wave = NULL;
++	size_t offset;
++	int ret;
++
++	if (!dev || !width || !height)
++		return ERR_PTR(-EINVAL);
++	from_nvmem = device_property_match_string(dev, "nvmem-names", "wbf") >= 0;
++	decode = device_property_read_bool(dev, "wbf-decode");
++	if (from_nvmem) {
++		ret = k4_waveform_read_flash(dev, &flash_wbf);
++		wbf = &flash_wbf;
++	} else {
++		ret = request_firmware_direct(&wbf, wbf_name ? wbf_name : K4_WBF_NAME, dev);
++	}
++	if (ret)
++		return ERR_PTR(ret);
++	if (!decode) {
++		ret = request_firmware_direct(&wrf, wrf_name ? wrf_name : K4_WRF_NAME, dev);
++		if (ret)
++			goto release;
++	}
++	wave = kzalloc(sizeof(*wave), GFP_KERNEL);
++	if (!wave) {
++		ret = -ENOMEM;
++		goto release;
++	}
++	if (decode) {
++		ret = k4_waveform_check_wbf(wbf, wave, &offset);
++		if (ret)
++			goto free;
++		ret = k4_waveform_decode(wbf, offset, &decoded_wrf);
++		if (ret)
++			goto free;
++		wrf = &decoded_wrf;
++	} else {
++		ret = k4_waveform_check_pair(wbf, wrf, wave, &offset);
++		if (ret)
++			goto free;
++	}
++	wave->buffers = imx50_epdc_buffers_alloc(dev, width, height,
++						 wrf->data + offset, wrf->size - offset,
++						 wave->mode_count, wave->temperature_count);
++	if (IS_ERR(wave->buffers)) {
++		ret = PTR_ERR(wave->buffers);
++		goto free;
++	}
++	/* buffers_alloc copied the entire validated proxy payload into owned DMA. */
++	if (decode)
++		dev_info(dev, "WBF decoded: %zu bytes to %zu bytes, source %s\n",
++			 wbf->size, wrf->size, from_nvmem ? "NVMEM" : "firmware");
++	else if (from_nvmem)
++		dev_info(dev, "WBF metadata from NVMEM: %zu bytes, validated WRF proxy\n",
++			 wbf->size);
++	ret = 0;
++	goto release;
++free:
++	kfree(wave);
++release:
++	if (decode)
++		kvfree(decoded_wrf.data);
++	else
++		release_firmware(wrf);
++	if (from_nvmem)
++		kfree(wbf->data);
++	else
++		release_firmware(wbf);
++	return ret ? ERR_PTR(ret) : wave;
++}
++
++struct imx50_epdc_buffers *imx50_epdc_waveform_buffers(struct imx50_epdc_waveform *wave)
++{
++	return wave->buffers;
++}
++
++int imx50_epdc_waveform_mode(struct imx50_epdc_waveform *wave,
++			     enum imx50_epdc_waveform_mode mode)
++{
++	if (!wave || (unsigned int)mode >= ARRAY_SIZE(k4_modes_04))
++		return -EINVAL;
++	if (wave->mode_map[mode] >= wave->mode_count)
++		return -EOPNOTSUPP;
++	return wave->mode_map[mode];
++}
++
++int imx50_epdc_waveform_temperature(struct imx50_epdc_waveform *wave, int millicelsius)
++{
++	unsigned int i;
++
++	if (!wave)
++		return -EINVAL;
++	/* The old loader copies trc+1 boundaries but searches only adjacent
++	 * pairs. Do not guess semantics for the following byte or extrapolate
++	 * below/above that table using its default/clamped temperature index.
++	 */
++	for (i = 0; i + 1 < wave->temperature_count; i++)
++		if (millicelsius >= wave->temperatures[i] * 1000 &&
++		    millicelsius < wave->temperatures[i + 1] * 1000)
++			return i;
++	return -ERANGE;
++}
++
++int imx50_epdc_waveform_free(struct imx50_epdc_waveform *wave)
++{
++	int ret;
++
++	if (!wave)
++		return 0;
++	ret = imx50_epdc_buffers_free(wave->buffers);
++	if (ret)
++		return ret;
++	kfree(wave);
++	return 0;
++}
++
++MODULE_FIRMWARE(K4_WBF_NAME);
++MODULE_FIRMWARE(K4_WRF_NAME);
++MODULE_LICENSE("GPL");
+--- /dev/null
++++ b/drivers/video/fbdev/imx50-epdc-waveform.h
+@@ -0,0 +1,41 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _IMX50_EPDC_WAVEFORM_H
++#define _IMX50_EPDC_WAVEFORM_H
++
++#include <linux/types.h>
++
++struct device;
++struct imx50_epdc_buffers;
++struct imx50_epdc_waveform;
++
++/* Canonical modes, translated using the file's supported mode-version table. */
++enum imx50_epdc_waveform_mode {
++	IMX50_EPDC_INIT,
++	IMX50_EPDC_DU,
++	IMX50_EPDC_GC16,
++	IMX50_EPDC_GC16_FAST,
++	IMX50_EPDC_A2,
++	IMX50_EPDC_GL16,
++	IMX50_EPDC_GL16_FAST,
++};
++
++/* Uncompressed format-1 WBF/WRF; mode versions 4/6/7. Names may be NULL to
++ * use the K4 default paths. The caller selects firmware for its panel and
++ * supplies panel dimensions and a 32-bit DMA device. A named wbf NVMEM
++ * provider plus offset/size properties selects read-only factory metadata;
++ * provider errors are returned, with no firmware fallback. No EPDC/HV access.
++ */
++struct imx50_epdc_waveform *imx50_epdc_waveform_load(struct device *dev,
++	const char *wbf_name, const char *wrf_name, u32 width, u32 height);
++struct imx50_epdc_buffers *imx50_epdc_waveform_buffers(struct imx50_epdc_waveform *wave);
++int imx50_epdc_waveform_mode(struct imx50_epdc_waveform *wave,
++			     enum imx50_epdc_waveform_mode mode);
++/* Fresh panel temperature in millicelsius; no extrapolation or default 25C.
++ * Intervals come from the loaded file, not a fixed panel sample.
++ * The final payload temperature slot awaits independent format verification.
++ */
++int imx50_epdc_waveform_temperature(struct imx50_epdc_waveform *wave, int millicelsius);
++/* Fails without freeing anything if the DMA object is active/quarantined. */
++int imx50_epdc_waveform_free(struct imx50_epdc_waveform *wave);
++
++#endif
+--- /dev/null
++++ b/drivers/video/fbdev/imx50-epdc.c
+@@ -0,0 +1,572 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* K4 EPDC owner: clocks, panel supplies, firmware and serialized updates. */
++#include <linux/clk.h>
++#include <linux/dma-mapping.h>
++#include <linux/gpio/consumer.h>
++#include <linux/imx50-epdc.h>
++#include <linux/imx50-epdc-buffer.h>
++#include <linux/imx50-epdc-image.h>
++#include <linux/imx50-pxp.h>
++#include <linux/k4-papyrus.h>
++#include <linux/k4_ram_trace.h>
++#include <linux/module.h>
++#include <linux/k4-provider.h>
++#include <linux/of_platform.h>
++#include <linux/pinctrl/consumer.h>
++#include <linux/platform_device.h>
++#include <linux/regulator/consumer.h>
++#include <linux/slab.h>
++#include <linux/workqueue.h>
++
++#include "imx50-epdc-hw.h"
++#include "imx50-epdc-waveform.h"
++
++struct imx50_epdc {
++	struct device *dev, *papyrus;
++	struct mutex lock;
++	struct imx50_epdc_hw hw;
++	struct imx50_pxp *pxp;
++	struct imx50_epdc_waveform *wave;
++	struct imx50_epdc_buffers *buffers;
++	struct clk_bulk_data access[2];
++	struct clk *pixel, *pixel_parent;
++	struct regulator *display, *vcom;
++	struct pinctrl *pins;
++	struct pinctrl_state *active, *idle;
++	struct gpio_desc *gdsp, *sdce;
++	struct notifier_block power_nb;
++	struct work_struct power_work;
++	const char *wbf_name, *wrf_name;
++	u32 timeout_ms;
++	const char *startup_stage; /* Last attempted initialization step. */
++	int irq, fault, cleanup_error;
++	bool access_on, pixel_on, pixel_exclusive, axi_exclusive, irq_on;
++	bool pins_owned, display_held, vcom_held, initialized;
++	bool suspended, stopped, ready;
++};
++
++/* Same pad handoff as gpio_epdc_pins_enable(0) in the original K4 kernel.
++ * No PWRCOM/PWRCTRL pin belongs to this driver: Papyrus owns them.
++ */
++static int epdc_idle_pins(struct imx50_epdc *e)
++{
++	int ret;
++
++	ret = gpiod_direction_output(e->gdsp, 0);
++	if (ret)
++		return ret;
++	ret = gpiod_direction_output(e->sdce, 0);
++	if (ret)
++		return ret;
++	e->pins_owned = true; /* A failed mux operation may have applied partly. */
++	return pinctrl_select_state(e->pins, e->idle);
++}
++
++/* Caller holds the owner lock. Always try panel shutdown after a DMA fault,
++ * but retain its clocks, IRQ object, mapping and buffers until machine reset.
++ */
++static int epdc_off_locked(struct imx50_epdc *e)
++{
++	int ret = 0, err;
++
++	e->initialized = false;
++	if (e->pins_owned) {
++		err = epdc_idle_pins(e);
++		if (err)
++			ret = err;
++	}
++	if (e->vcom_held) {
++		err = regulator_disable(e->vcom);
++		if (!err)
++			e->vcom_held = false;
++		else if (!ret)
++			ret = err;
++	}
++	if (e->display_held && !e->vcom_held) {
++		err = regulator_disable(e->display);
++		if (!err)
++			e->display_held = false;
++		else if (!ret)
++			ret = err;
++	}
++	if (e->access_on && !e->fault) {
++		err = imx50_epdc_hw_stop(&e->hw);
++		if (err)
++			e->fault = err;
++	}
++	if (e->irq_on) {
++		disable_irq(e->irq); /* Synchronous before any clock release. */
++		e->irq_on = false;
++	}
++	if (!e->fault) {
++		if (e->pixel_on) {
++			clk_disable_unprepare(e->pixel);
++			e->pixel_on = false;
++		}
++		if (e->pixel_exclusive) {
++			clk_rate_exclusive_put(e->pixel);
++			e->pixel_exclusive = false;
++		}
++
++		if (e->access_on) {
++			clk_bulk_disable_unprepare(ARRAY_SIZE(e->access), e->access);
++			e->access_on = false;
++		}
++		if (e->axi_exclusive) {
++			clk_rate_exclusive_put(e->access[1].clk);
++			e->axi_exclusive = false;
++		}
++	}
++	e->cleanup_error = ret;
++	return e->fault ? e->fault : ret;
++}
++
++static void epdc_power_work(struct work_struct *work)
++{
++	struct imx50_epdc *e = container_of(work, struct imx50_epdc, power_work);
++
++	mutex_lock(&e->lock);
++	/* An old queued work item must not power off a successfully retried epoch. */
++	if (READ_ONCE(e->hw.supply_fault))
++		epdc_off_locked(e);
++	mutex_unlock(&e->lock);
++}
++
++static int epdc_power_notify(struct notifier_block *nb, unsigned long event, void *data)
++{
++	struct imx50_epdc *e = container_of(nb, struct imx50_epdc, power_nb);
++
++	if (!(event & REGULATOR_EVENT_FAIL))
++		return NOTIFY_DONE;
++	/* Temperature/enable can notify while this caller owns e->lock. */
++	imx50_epdc_hw_power_fault(&e->hw);
++	schedule_work(&e->power_work);
++	return NOTIFY_OK;
++}
++
++static int epdc_start_locked(struct imx50_epdc *e)
++{
++	int ret;
++
++	e->startup_stage = "supply-reset";
++	ret = imx50_epdc_hw_power_reset(&e->hw);
++	if (ret)
++		return ret;
++	e->startup_stage = "access-clocks";
++	ret = clk_bulk_prepare_enable(ARRAY_SIZE(e->access), e->access);
++	if (ret)
++		return ret;
++	e->access_on = true;
++	k4_ram_trace_mark("EPDC owner preflight");
++	e->startup_stage = "inherited-idle";
++	ret = imx50_epdc_hw_inherited_idle(&e->hw);
++	if (ret) {
++		/* Unknown inherited activity: no pin, reset or pixel-clock change. */
++		e->fault = ret;
++		return ret;
++	}
++	e->startup_stage = "idle-pins";
++	ret = epdc_idle_pins(e);
++	if (ret)
++		return ret;
++	/* Only after inherited-idle proof may the owner stop/switch AXI. */
++	clk_bulk_disable_unprepare(ARRAY_SIZE(e->access), e->access);
++	e->access_on = false;
++	e->startup_stage = "axi-exclusive";
++	ret = clk_rate_exclusive_get(e->access[1].clk);
++	if (ret)
++		return ret;
++	e->axi_exclusive = true;
++	e->startup_stage = "axi-parent";
++	ret = clk_set_parent(e->access[1].clk, e->pixel_parent);
++	if (ret)
++		return ret;
++	e->startup_stage = "axi-rate";
++	ret = clk_set_rate(e->access[1].clk, 200000000);
++	if (ret)
++		return ret;
++	if (clk_get_rate(e->access[1].clk) != 200000000)
++		return -ERANGE;
++	e->startup_stage = "axi-enable";
++	ret = clk_bulk_prepare_enable(ARRAY_SIZE(e->access), e->access);
++	if (ret)
++		return ret;
++	e->access_on = true;
++	e->startup_stage = "pixel-exclusive";
++	ret = clk_rate_exclusive_get(e->pixel);
++	if (ret)
++		return ret;
++	e->pixel_exclusive = true;
++	e->startup_stage = "pixel-parent";
++	ret = clk_set_parent(e->pixel, e->pixel_parent);
++	if (ret)
++		return ret;
++	e->startup_stage = "pixel-rate";
++	ret = clk_set_rate(e->pixel, 32000000);
++	if (ret)
++		return ret;
++	/* K4 timing table is expressed in this panel's 32MHz pixel clock. */
++	if (clk_get_rate(e->pixel) != 32000000)
++		return -ERANGE;
++	e->startup_stage = "pixel-enable";
++	ret = clk_prepare_enable(e->pixel);
++	if (ret)
++		return ret;
++	e->pixel_on = true;
++	e->startup_stage = "controller-configure";
++	ret = imx50_epdc_hw_configure(&e->hw, e->buffers);
++	if (ret)
++		return ret;
++	enable_irq(e->irq);
++	e->irq_on = true;
++	e->startup_stage = "display-enable";
++	ret = regulator_enable(e->display);
++	if (ret)
++		return ret;
++	e->display_held = true;
++	e->startup_stage = "active-pins";
++	ret = pinctrl_select_state(e->pins, e->active);
++	if (ret)
++		return ret;
++	e->startup_stage = "vcom-enable";
++	ret = regulator_enable(e->vcom);
++	if (ret)
++		return ret;
++	e->vcom_held = true;
++	return READ_ONCE(e->hw.supply_fault) ? -EIO : 0;
++}
++
++static int epdc_temperature(struct imx50_epdc *e)
++{
++	long millicelsius;
++	int ret;
++
++	ret = k4_papyrus_read_temperature(e->papyrus, &millicelsius);
++	if (ret)
++		return ret;
++	return imx50_epdc_waveform_temperature(e->wave, millicelsius);
++}
++
++int imx50_epdc_update(struct imx50_epdc *e, const struct imx50_epdc_source *source,
++		      enum imx50_epdc_mode mode, bool full)
++{
++	struct imx50_epdc_source restore;
++	int ret, temperature, file_mode;
++
++	if (!source || mode < IMX50_EPDC_MODE_DU || mode > IMX50_EPDC_MODE_GL16_FAST)
++		return -EINVAL;
++	ret = mutex_lock_interruptible(&e->lock);
++	if (ret)
++		return ret;
++	if (e->stopped || e->suspended || e->fault) {
++		ret = e->fault ? e->fault : -EBUSY;
++		goto out;
++	}
++	if (e->cleanup_error || READ_ONCE(e->hw.supply_fault)) {
++		ret = epdc_off_locked(e);
++		if (ret)
++			goto out;
++	}
++	if (!e->wave) {
++		e->wave = imx50_epdc_waveform_load(e->dev, e->wbf_name, e->wrf_name, 800, 600);
++		if (IS_ERR(e->wave)) {
++			ret = PTR_ERR(e->wave);
++			e->wave = NULL;
++			goto out;
++		}
++		e->buffers = imx50_epdc_waveform_buffers(e->wave);
++	}
++	file_mode = imx50_epdc_waveform_mode(e->wave, (enum imx50_epdc_waveform_mode)mode);
++	if (file_mode < 0) {
++		ret = file_mode;
++		goto fail;
++	}
++	/* Validate/convert before changing panel power; INIT overwrites this copy. */
++	ret = imx50_epdc_buffers_prepare(e->buffers, e->pxp, source);
++	if (ret)
++		goto fail;
++	temperature = epdc_temperature(e);
++	if (temperature < 0) {
++		ret = temperature;
++		goto fail;
++	}
++	if (!e->initialized) {
++		ret = epdc_start_locked(e);
++		if (ret)
++			goto fail;
++		ret = imx50_epdc_hw_submit(&e->hw, true, true, 0, temperature, e->timeout_ms);
++		if (ret)
++			goto fail;
++		e->initialized = true;
++		/* INIT erased the full panel, including pixels outside this request.
++		 * The input describes a complete canvas; restore all of it after any
++		 * power-loss epoch, including one the consumer did not observe.
++		 */
++		restore = *source;
++		restore.region = (struct imx50_epdc_rect){ 0, 0, source->width, source->height };
++		source = &restore;
++		full = true;
++		ret = imx50_epdc_buffers_prepare(e->buffers, e->pxp, source);
++		if (ret)
++			goto fail;
++		/* INIT can take seconds; select the image mode using a fresh sample. */
++		temperature = epdc_temperature(e);
++		if (temperature < 0) {
++			ret = temperature;
++			goto fail;
++		}
++	}
++	ret = imx50_epdc_hw_submit(&e->hw, false, full, file_mode, temperature, e->timeout_ms);
++	if (ret)
++		goto fail;
++	goto out;
++fail:
++	epdc_off_locked(e); /* Preserve primary errno and separate cleanup_error. */
++out:
++	mutex_unlock(&e->lock);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(imx50_epdc_update);
++
++int imx50_epdc_powerdown(struct imx50_epdc *e)
++{
++	int ret;
++
++	mutex_lock(&e->lock);
++	ret = epdc_off_locked(e);
++	mutex_unlock(&e->lock);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(imx50_epdc_powerdown);
++
++
++struct imx50_epdc *devm_imx50_epdc_get(struct device *consumer, const char *property)
++{
++	struct device_node *np;
++	struct platform_device *pdev;
++	struct imx50_epdc *e;
++	int ret;
++
++	np = of_parse_phandle(consumer->of_node, property, 0);
++	if (!np)
++		return ERR_PTR(-ENODEV);
++	if (!of_device_is_compatible(np, "amazon,k4-imx50-epdc")) {
++		of_node_put(np);
++		return ERR_PTR(-EINVAL);
++	}
++	pdev = of_find_device_by_node(np);
++	of_node_put(np);
++	if (!pdev)
++		return ERR_PTR(-EPROBE_DEFER);
++	ret = devm_k4_provider_hold(consumer, &pdev->dev);
++	if (ret)
++		return ERR_PTR(ret);
++	e = platform_get_drvdata(pdev);
++	if (!e || !READ_ONCE(e->ready))
++		return ERR_PTR(-EPROBE_DEFER);
++	return e;
++}
++EXPORT_SYMBOL_GPL(devm_imx50_epdc_get);
++
++static int epdc_suspend(struct device *dev)
++{
++	struct imx50_epdc *e = dev_get_drvdata(dev);
++	int ret;
++
++	mutex_lock(&e->lock);
++	ret = epdc_off_locked(e);
++	if (!ret)
++		e->suspended = true;
++	mutex_unlock(&e->lock);
++	return ret;
++}
++
++static int epdc_resume(struct device *dev)
++{
++	struct imx50_epdc *e = dev_get_drvdata(dev);
++
++	mutex_lock(&e->lock);
++	e->suspended = false; /* Lazy power/INIT on the next image. */
++	mutex_unlock(&e->lock);
++	return 0;
++}
++static DEFINE_SIMPLE_DEV_PM_OPS(epdc_pm, epdc_suspend, epdc_resume);
++
++static ssize_t state_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++	struct imx50_epdc *e = dev_get_drvdata(dev);
++	ssize_t n;
++
++	mutex_lock(&e->lock);
++	n = sysfs_emit(buf,
++		"initialized=%u suspended=%u display_held=%u vcom_held=%u access_on=%u pixel_on=%u fault=%d hw_fault=%d supply_fault=%u cleanup_error=%d polled_completions=%u\n",
++		e->initialized, e->suspended, e->display_held, e->vcom_held,
++		e->access_on, e->pixel_on, e->fault, READ_ONCE(e->hw.fault),
++		READ_ONCE(e->hw.supply_fault), e->cleanup_error, e->hw.polled_completions);
++	n += sysfs_emit_at(buf, n,
++		"init_updates=%u canvas_updates=%u region_updates=%u last_coordinates=%08x last_size=%08x last_mode=%u last_full=%u\n",
++		e->hw.init_updates, e->hw.canvas_updates, e->hw.region_updates,
++		e->hw.last_coordinates, e->hw.last_size, e->hw.last_mode, e->hw.last_full);
++	n += sysfs_emit_at(buf, n,
++		"preflight_count=%u preflight_result=%d preflight_version=%08x preflight_ctrl=%08x preflight_status=%08x preflight_luts=%08x preflight_irq=%08x\n",
++		e->hw.preflight_count, e->hw.preflight_result, e->hw.preflight_version,
++		e->hw.preflight_ctrl, e->hw.preflight_status,
++		e->hw.preflight_luts, e->hw.preflight_irq);
++	n += sysfs_emit_at(buf, n, "startup_stage=%s\n",
++			   e->startup_stage ? e->startup_stage : "none");
++	mutex_unlock(&e->lock);
++	return n;
++}
++static DEVICE_ATTR_RO(state);
++
++static struct attribute *epdc_attrs[] = {
++	&dev_attr_state.attr,
++	NULL,
++};
++ATTRIBUTE_GROUPS(epdc);
++
++static void epdc_cancel_work(void *data)
++{
++	struct imx50_epdc *e = data;
++
++	cancel_work_sync(&e->power_work);
++}
++
++static int epdc_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct imx50_epdc *e;
++	void __iomem *base;
++	int ret;
++
++	e = devm_kzalloc(dev, sizeof(*e), GFP_KERNEL);
++	if (!e)
++		return -ENOMEM;
++	e->dev = dev;
++	if (!of_find_property(dev->of_node, "display-supply", NULL) ||
++	    !of_find_property(dev->of_node, "vcom-supply", NULL))
++		return dev_err_probe(dev, -EINVAL, "panel supplies are required\n");
++	e->timeout_ms = 30000;
++	if (of_find_property(dev->of_node, "update-timeout-ms", NULL)) {
++		ret = of_property_read_u32(dev->of_node, "update-timeout-ms", &e->timeout_ms);
++		if (ret || !e->timeout_ms)
++			return -EINVAL;
++	}
++	mutex_init(&e->lock);
++	INIT_WORK(&e->power_work, epdc_power_work);
++	base = devm_platform_ioremap_resource(pdev, 0);
++	if (IS_ERR(base))
++		return PTR_ERR(base);
++	imx50_epdc_hw_init(&e->hw, base);
++	e->papyrus = devm_k4_papyrus_get(dev, "papyrus");
++	if (IS_ERR(e->papyrus))
++		return dev_err_probe(dev, PTR_ERR(e->papyrus), "Papyrus supplier\n");
++	e->pxp = devm_imx50_pxp_get(dev, "pxp");
++	if (IS_ERR(e->pxp))
++		return dev_err_probe(dev, PTR_ERR(e->pxp), "PxP supplier\n");
++	e->access[0].id = "apbh";
++	e->access[1].id = "epdc_axi";
++	ret = devm_clk_bulk_get(dev, ARRAY_SIZE(e->access), e->access);
++	if (ret)
++		return dev_err_probe(dev, ret, "access clocks\n");
++	e->pixel = devm_clk_get(dev, "epdc_pix");
++	if (IS_ERR(e->pixel))
++		return dev_err_probe(dev, PTR_ERR(e->pixel), "pixel clock\n");
++	e->pixel_parent = devm_clk_get(dev, "pixel_parent");
++	if (IS_ERR(e->pixel_parent))
++		return dev_err_probe(dev, PTR_ERR(e->pixel_parent), "pixel parent\n");
++	e->display = devm_regulator_get(dev, "display");
++	if (IS_ERR(e->display))
++		return dev_err_probe(dev, PTR_ERR(e->display), "DISPLAY\n");
++	e->vcom = devm_regulator_get(dev, "vcom");
++	if (IS_ERR(e->vcom))
++		return dev_err_probe(dev, PTR_ERR(e->vcom), "VCOM\n");
++	e->pins = devm_pinctrl_get(dev);
++	if (IS_ERR(e->pins))
++		return dev_err_probe(dev, PTR_ERR(e->pins), "panel pins\n");
++	e->active = pinctrl_lookup_state(e->pins, "active");
++	if (IS_ERR(e->active))
++		return PTR_ERR(e->active);
++	e->idle = pinctrl_lookup_state(e->pins, "idle");
++	if (IS_ERR(e->idle))
++		return PTR_ERR(e->idle);
++	e->gdsp = devm_gpiod_get(dev, "gdsp", GPIOD_ASIS);
++	if (IS_ERR(e->gdsp))
++		return dev_err_probe(dev, PTR_ERR(e->gdsp), "GDSP\n");
++	e->sdce = devm_gpiod_get(dev, "sdce", GPIOD_ASIS);
++	if (IS_ERR(e->sdce))
++		return dev_err_probe(dev, PTR_ERR(e->sdce), "SDCE0\n");
++	ret = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(32));
++	if (ret)
++		return ret;
++	e->irq = platform_get_irq(pdev, 0);
++	if (e->irq < 0)
++		return e->irq;
++	ret = devm_request_irq(dev, e->irq, imx50_epdc_hw_irq, IRQF_NO_AUTOEN,
++			       "imx50-epdc", &e->hw);
++	if (ret)
++		return ret;
++	if (of_find_property(dev->of_node, "wbf-firmware", NULL)) {
++		ret = of_property_read_string(dev->of_node, "wbf-firmware", &e->wbf_name);
++		if (ret)
++			return ret;
++	}
++	if (of_find_property(dev->of_node, "wrf-firmware", NULL)) {
++		ret = of_property_read_string(dev->of_node, "wrf-firmware", &e->wrf_name);
++		if (ret)
++			return ret;
++	}
++	/* LIFO devres: detach the notifier before draining its queued work. */
++	ret = devm_add_action_or_reset(dev, epdc_cancel_work, e);
++	if (ret)
++		return ret;
++	e->power_nb.notifier_call = epdc_power_notify;
++	ret = devm_regulator_register_notifier(e->display, &e->power_nb);
++	if (ret)
++		return ret;
++	platform_set_drvdata(pdev, e);
++	WRITE_ONCE(e->ready, true);
++	dev_info(dev, "K4 display service ready; refresh requires a consumer request\n");
++	return 0;
++}
++
++static void epdc_shutdown(struct platform_device *pdev)
++{
++	struct imx50_epdc *e = platform_get_drvdata(pdev);
++
++	mutex_lock(&e->lock);
++	WRITE_ONCE(e->ready, false);
++	e->stopped = true;
++	epdc_off_locked(e);
++	mutex_unlock(&e->lock);
++	cancel_work_sync(&e->power_work);
++}
++
++static const struct of_device_id epdc_match[] = {
++	{ .compatible = "amazon,k4-imx50-epdc" }, { }
++};
++
++/* Built in, with no userspace unbind. In-flight fault buffers are deliberately
++ * not devm allocations. Dynamic removal of this fixed SoC device is unsupported.
++ */
++static struct platform_driver epdc_driver = {
++	.probe = epdc_probe,
++	.shutdown = epdc_shutdown,
++	.driver = {
++		.name = "imx50-k4-epdc",
++		.of_match_table = epdc_match,
++		.dev_groups = epdc_groups,
++		.pm = pm_sleep_ptr(&epdc_pm),
++		.suppress_bind_attrs = true,
++	},
++};
++/* No module_exit: an inherited/faulted DMA arena or an open framebuffer
++ * must survive until reboot. Late loading is supported; unloading is not.
++ */
++static int __init k4_display_init(void)
++{
++	return platform_driver_register(&epdc_driver);
++}
++module_init(k4_display_init);
++MODULE_DEVICE_TABLE(of, epdc_match);
++MODULE_LICENSE("GPL");
+--- /dev/null
++++ b/include/linux/imx50-epdc-buffer.h
+@@ -0,0 +1,50 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _LINUX_IMX50_EPDC_BUFFER_H
++#define _LINUX_IMX50_EPDC_BUFFER_H
++
++#include <linux/types.h>
++
++struct device;
++struct imx50_pxp;
++struct imx50_epdc_source;
++struct imx50_epdc_buffers;
++
++/* Controller submission values. Write UPD_CTRL last; it starts the update.
++ * Only LUT0 is used: the controller owner must establish ALL LUTs/WB idle.
++ * This descriptor is not permission to refresh without clocks/power/waveform
++ * validation. Buffers remain owned by the object until completion.
++ */
++struct imx50_epdc_command {
++	u32 waveform_addr, working_addr, update_addr;
++	u32 resolution, coordinates, size, fixed, control, temperature;
++};
++
++/* One controller owner serializes these calls. dev must have a 32-bit DMA
++ * coherent mask. The payload is already-validated panel-specific WRF data,
++ * without its header/temperature table; this layer does not validate WRF.
++ * Returned object is not devm: an uncertain transfer MUST retain it.
++ */
++struct imx50_epdc_buffers *imx50_epdc_buffers_alloc(struct device *dev,
++	u32 width, u32 height, const void *waveform, size_t waveform_size,
++	u32 modes, u32 temperatures);
++int imx50_epdc_buffers_prepare(struct imx50_epdc_buffers *b, struct imx50_pxp *pxp,
++			       const struct imx50_epdc_source *src);
++int imx50_epdc_buffers_begin(struct imx50_epdc_buffers *b, bool initialize,
++			     bool full, u32 mode, u32 temperature,
++			     struct imx50_epdc_command *command);
++/* Zero requires IRQ/status proof that WB, every LUT and AXI are quiescent.
++ * A nonzero error may be reported with DMA still in flight and quarantines
++ * all DMA until system reset; it never claims to cancel. Success of INIT
++ * establishes the working buffer's panel state; zero-filled RAM alone does not.
++ */
++int imx50_epdc_buffers_complete(struct imx50_epdc_buffers *b, int error);
++/* Roll back begin ONLY before the first controller/DMA command write.
++ * No cancellation of an issued command is possible through this function.
++ */
++int imx50_epdc_buffers_abort_unsubmitted(struct imx50_epdc_buffers *b);
++/* Invalidate panel history after power loss, only when hardware is quiescent. */
++int imx50_epdc_buffers_invalidate(struct imx50_epdc_buffers *b);
++/* Refuses active/faulted objects; caller must not discard them on error. */
++int imx50_epdc_buffers_free(struct imx50_epdc_buffers *b);
++
++#endif
+--- /dev/null
++++ b/include/linux/imx50-epdc-image.h
+@@ -0,0 +1,43 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _LINUX_IMX50_EPDC_IMAGE_H
++#define _LINUX_IMX50_EPDC_IMAGE_H
++
++#include <linux/types.h>
++
++struct imx50_pxp;
++
++enum imx50_epdc_format {
++	IMX50_EPDC_XRGB8888,
++	IMX50_EPDC_RGB565,
++	IMX50_EPDC_Y8,
++};
++
++struct imx50_epdc_rect {
++	u32 left, top, width, height;
++};
++
++/* CPU source image, little-endian pixels, immutable during prepare(). */
++struct imx50_epdc_source {
++	const void *pixels;
++	size_t size;
++	u32 width, height, stride;
++	enum imx50_epdc_format format;
++	struct imx50_epdc_rect region;
++	u32 rotation; /* clockwise degrees: 0, 90, 180, 270 */
++	bool invert;
++};
++
++/* Prepare one update for EPDC submission, without accessing EPDC or power.
++ * dst is caller-owned CPU memory containing Y8 rows after success. Its width
++ * and height equal region.width/height, swapped for 90/270 degrees; stride
++ * is in bytes. Padding is untouched. update receives the rotated rectangle
++ * in panel coordinates (whole source image rotated by the same angle).
++ * Source pixels must remain valid/unchanged throughout this sleepable call.
++ * On error, neither dst nor update is changed. No DMA address is exported.
++ */
++int imx50_epdc_prepare(struct imx50_pxp *pxp,
++		       const struct imx50_epdc_source *src,
++		       void *dst, size_t dst_size, u32 dst_stride,
++		       struct imx50_epdc_rect *update);
++
++#endif
+--- /dev/null
++++ b/include/linux/imx50-epdc.h
+@@ -0,0 +1,35 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _LINUX_IMX50_EPDC_H
++#define _LINUX_IMX50_EPDC_H
++
++#include <linux/types.h>
++
++struct device;
++struct imx50_epdc;
++struct imx50_epdc_source;
++
++/* Canonical modes; the waveform loader translates these to file mode indices. */
++enum imx50_epdc_mode {
++	IMX50_EPDC_MODE_DU = 1,
++	IMX50_EPDC_MODE_GC16,
++	IMX50_EPDC_MODE_GC16_FAST,
++	IMX50_EPDC_MODE_A2,
++	IMX50_EPDC_MODE_GL16,
++	IMX50_EPDC_MODE_GL16_FAST,
++};
++
++struct imx50_epdc *devm_imx50_epdc_get(struct device *consumer, const char *property);
++/* Sleepable and serialized. Source stays immutable until return. First update
++ * powers/configures the display and runs its full INIT before the image update.
++ * No fixed test image, refresh count or automatic action is implied by probe.
++ * Supplies stay enabled until powerdown or suspend. Consumers should powerdown
++ * when their update queue is idle; they must not retain an unused powered panel.
++ * Input must describe the desired complete canvas: after lost panel history,
++ * INIT is followed by a full-canvas restore even for a partial request.
++ */
++int imx50_epdc_update(struct imx50_epdc *epdc, const struct imx50_epdc_source *source,
++		      enum imx50_epdc_mode mode, bool full);
++/* Quiescent power/clock shutdown. The next update requires a new panel INIT. */
++int imx50_epdc_powerdown(struct imx50_epdc *epdc);
++
++#endif
+--- /dev/null
++++ b/include/linux/imx50-pxp.h
+@@ -0,0 +1,44 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _LINUX_IMX50_PXP_H
++#define _LINUX_IMX50_PXP_H
++
++#include <linux/types.h>
++
++struct device;
++struct imx50_pxp;
++
++/* RM 43.4.9: eight-bit S0 block counts, with the current 8x8 block mode. */
++#define IMX50_PXP_MAX_DIMENSION (255U * 8)
++
++/* Packed rows of little-endian XRGB8888 (B,G,R,X bytes) to 8-bit luma.
++ * Width/height must be multiples of eight, up to IMX50_PXP_MAX_DIMENSION.
++ * Strides are bytes. Larger regions need tiling, not truncated block counts.
++ * Caller owns both CPU buffers and keeps them valid until convert returns.
++ * Output is copied only after successful completion (and enabled diagnostics).
++ * Rotation is clockwise, in degrees: 0, 90, 180 or 270. Width/height describe
++ * the source; destination dimensions swap for 90/270. Destination stride and
++ * size describe that rotated layout. Zero keeps the original orientation.
++ */
++struct imx50_pxp_image {
++	const void *src;
++	void *dst;
++	size_t src_size, dst_size;
++	u32 width, height, src_stride, dst_stride;
++	u32 rotation;
++};
++
++struct imx50_pxp_stats {
++	u64 completed, irqs, allocations, releases;
++	size_t retained_bytes;
++	int fault, park_error;
++	bool clocks_retained;
++};
++
++struct imx50_pxp *devm_imx50_pxp_get(struct device *consumer, const char *property);
++/* Sleepable synchronous API; serialized across consumers, no FIFO guarantee. */
++int imx50_pxp_convert(struct imx50_pxp *pxp, const struct imx50_pxp_image *image);
++/* Release an idle healthy pool. A faulted pool cannot be freed until reboot. */
++int imx50_pxp_trim(struct imx50_pxp *pxp);
++void imx50_pxp_get_stats(struct imx50_pxp *pxp, struct imx50_pxp_stats *stats);
++
++#endif
