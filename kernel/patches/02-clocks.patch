@@ -1,0 +1,1267 @@
+--- a/drivers/clk/imx/Kconfig
++++ b/drivers/clk/imx/Kconfig
+@@ -30,6 +30,14 @@
+ config CLK_IMX5
+ 	def_bool SOC_IMX5
+ 	select MXC_CLK
++
++config CLK_IMX50_ANATOP
++	bool "i.MX50 analog display clock support"
++	depends on SOC_IMX50 && CLK_IMX5
++	help
++	  Register display PFD5 and the 480 MHz APLL. The analog bandgap must
++	  already be powered. System suspend and bandgap startup are not yet
++	  supported by this initial display clock implementation.
+ 
+ config CLK_IMX6Q
+ 	def_bool SOC_IMX6Q
+--- a/drivers/clk/imx/Makefile
++++ b/drivers/clk/imx/Makefile
+@@ -46,7 +46,8 @@
+ obj-$(CONFIG_CLK_IMX27)  += clk-imx27.o
+ obj-$(CONFIG_CLK_IMX31)  += clk-imx31.o
+ obj-$(CONFIG_CLK_IMX35)  += clk-imx35.o
+-obj-$(CONFIG_CLK_IMX5)   += clk-imx5.o
++obj-$(CONFIG_CLK_IMX5)   += clk-imx5.o clk-imx50-pixel.o
++obj-$(CONFIG_CLK_IMX50_ANATOP) += clk-imx50-anatop.o
+ obj-$(CONFIG_CLK_IMX6Q)  += clk-imx6q.o
+ obj-$(CONFIG_CLK_IMX6SL) += clk-imx6sl.o
+ obj-$(CONFIG_CLK_IMX6SLL) += clk-imx6sll.o
+--- a/drivers/clk/imx/clk-imx5.c
++++ b/drivers/clk/imx/clk-imx5.c
+@@ -6,6 +6,7 @@
+ #include <linux/delay.h>
+ #include <linux/clk.h>
+ #include <linux/io.h>
++#include <linux/iopoll.h>
+ #include <linux/clkdev.h>
+ #include <linux/clk-provider.h>
+ #include <linux/err.h>
+@@ -128,7 +129,8 @@
+ static struct clk *clk[IMX5_CLK_END];
+ static struct clk_onecell_data clk_data;
+ 
+-static void __init mx5_clocks_common_init(void __iomem *ccm_base)
++static void __init mx5_clocks_common_init(void __iomem *ccm_base,
++					struct device_node *np)
+ {
+ 	clk[IMX5_CLK_DUMMY]		= imx_clk_fixed("dummy", 0);
+ 	clk[IMX5_CLK_CKIL]		= imx_obtain_fixed_clock("ckil", 0);
+@@ -182,7 +184,10 @@
+ 						usb_phy_sel_str, ARRAY_SIZE(usb_phy_sel_str));
+ 	clk[IMX5_CLK_STEP_SEL]		= imx_clk_mux("step_sel", MXC_CCM_CCSR, 7, 2, step_sels, ARRAY_SIZE(step_sels));
+ 	clk[IMX5_CLK_CPU_PODF_SEL]	= imx_clk_mux("cpu_podf_sel", MXC_CCM_CCSR, 2, 1, cpu_podf_sels, ARRAY_SIZE(cpu_podf_sels));
+-	clk[IMX5_CLK_CPU_PODF]		= imx_clk_divider("cpu_podf", "cpu_podf_sel", MXC_CCM_CACRR, 0, 3);
++	/* i.MX50 changes CPU frequency by dividing its shared PLL1 source. */
++	clk[IMX5_CLK_CPU_PODF] = imx_clk_divider_flags("cpu_podf",
++		"cpu_podf_sel", MXC_CCM_CACRR, 0, 3,
++		of_device_is_compatible(np, "fsl,imx50-ccm") ? 0 : CLK_SET_RATE_PARENT);
+ 	clk[IMX5_CLK_DI_PRED]		= imx_clk_divider("di_pred", "pll3_sw", MXC_CCM_CDCDR, 6, 3);
+ 	clk[IMX5_CLK_IIM_GATE]		= imx_clk_gate2("iim_gate", "ipg", MXC_CCM_CCGR0, 30);
+ 	clk[IMX5_CLK_UART1_IPG_GATE]	= imx_clk_gate2("uart1_ipg_gate", "ipg", MXC_CCM_CCGR1, 6);
+@@ -220,8 +225,11 @@
+ 	clk[IMX5_CLK_IPU_SEL]		= imx_clk_mux("ipu_sel", MXC_CCM_CBCMR, 6, 2, ipu_sel, ARRAY_SIZE(ipu_sel));
+ 	clk[IMX5_CLK_IPU_GATE]		= imx_clk_gate2("ipu_gate", "ipu_sel", MXC_CCM_CCGR5, 10);
+ 	clk[IMX5_CLK_NFC_GATE]		= imx_clk_gate2("nfc_gate", "nfc_podf", MXC_CCM_CCGR5, 20);
+-	clk[IMX5_CLK_IPU_DI0_GATE]	= imx_clk_gate2("ipu_di0_gate", "ipu_di0_sel", MXC_CCM_CCGR6, 10);
+-	clk[IMX5_CLK_IPU_DI1_GATE]	= imx_clk_gate2("ipu_di1_gate", "ipu_di1_sel", MXC_CCM_CCGR6, 12);
++	/* i.MX50 has EPDC/ELCDIF pixel gates at these offsets, not IPU DIs. */
++	if (!of_device_is_compatible(np, "fsl,imx50-ccm")) {
++		clk[IMX5_CLK_IPU_DI0_GATE] = imx_clk_gate2("ipu_di0_gate", "ipu_di0_sel", MXC_CCM_CCGR6, 10);
++		clk[IMX5_CLK_IPU_DI1_GATE] = imx_clk_gate2("ipu_di1_gate", "ipu_di1_sel", MXC_CCM_CCGR6, 12);
++	}
+ 	clk[IMX5_CLK_GPU3D_SEL]		= imx_clk_mux("gpu3d_sel", MXC_CCM_CBCMR, 4, 2, gpu3d_sel, ARRAY_SIZE(gpu3d_sel));
+ 	clk[IMX5_CLK_GPU2D_SEL]		= imx_clk_mux("gpu2d_sel", MXC_CCM_CBCMR, 16, 2, gpu2d_sel, ARRAY_SIZE(gpu2d_sel));
+ 	clk[IMX5_CLK_GPU3D_GATE]	= imx_clk_gate2("gpu3d_gate", "gpu3d_sel", MXC_CCM_CCGR5, 2);
+@@ -277,6 +285,353 @@
+ 	clk_set_parent(clk[IMX5_CLK_USB_PHY_SEL], clk[IMX5_CLK_OSC]);
+ }
+ 
++/*
++ * Initial i.MX50 display clock support: preserve the inherited source and
++ * divider, and control only the two gates. PFD sources are intentionally
++ * unresolved until the i.MX50 ANATOP clock driver exists. No rate request may
++ * propagate to PLL1, which is shared with the CPU.
++ */
++struct imx50_display_gate {
++	struct clk_hw hw;
++	void __iomem *base;
++	u32 reg, asm_mask;
++	u8 mux_shift, gate_shift, busy_shift;
++	bool faulted, stock_configured;
++};
++
++#define to_imx50_display_gate(hw) container_of(hw, struct imx50_display_gate, hw)
++
++static u8 imx50_display_parent(struct clk_hw *hw)
++{
++	struct imx50_display_gate *g = to_imx50_display_gate(hw);
++
++	return (readl(g->base + 0x90) >> g->mux_shift) & 3;
++}
++
++static unsigned long imx50_display_rate(struct clk_hw *hw, unsigned long rate)
++{
++	struct imx50_display_gate *g = to_imx50_display_gate(hw);
++	u32 div = readl(g->base + g->reg) & 0x3f;
++
++	/* Unlike the usual i.MX divider, zero means gated, not divide-by-one. */
++	return div ? rate / div : 0;
++}
++
++static int imx50_display_enable(struct clk_hw *hw)
++{
++	struct imx50_display_gate *g = to_imx50_display_gate(hw);
++	unsigned long flags;
++	u32 val;
++	int ret = 0;
++
++	if (!clk_hw_get_rate(hw))
++		return -EINVAL;
++	spin_lock_irqsave(&imx_ccm_lock, flags);
++	val = readl(g->base + g->reg);
++	/* Auto-slow and divider transitions need a later, complete rate driver. */
++	if ((val & g->asm_mask) ||
++	    (readl(g->base + 0x8c) & BIT(g->busy_shift))) {
++		ret = -EBUSY;
++		goto out;
++	}
++	writel(readl(g->base + 0x80) | (3U << g->gate_shift), g->base + 0x80);
++	writel(val | GENMASK(31, 30), g->base + g->reg);
++	readl(g->base + g->reg);
++out:
++	spin_unlock_irqrestore(&imx_ccm_lock, flags);
++	return ret;
++}
++
++static void imx50_display_disable(struct clk_hw *hw)
++{
++	struct imx50_display_gate *g = to_imx50_display_gate(hw);
++	unsigned long flags;
++
++	spin_lock_irqsave(&imx_ccm_lock, flags);
++	writel(readl(g->base + g->reg) & ~GENMASK(31, 30), g->base + g->reg);
++	writel(readl(g->base + 0x80) & ~(3U << g->gate_shift), g->base + 0x80);
++	readl(g->base + 0x80);
++	spin_unlock_irqrestore(&imx_ccm_lock, flags);
++}
++
++static int imx50_display_is_enabled(struct clk_hw *hw)
++{
++	struct imx50_display_gate *g = to_imx50_display_gate(hw);
++
++	return !!(readl(g->base + g->reg) & GENMASK(31, 30)) &&
++	       !!(readl(g->base + 0x80) & (3U << g->gate_shift));
++}
++
++static const struct clk_ops imx50_display_ops = {
++	.get_parent = imx50_display_parent,
++	.recalc_rate = imx50_display_rate,
++	.enable = imx50_display_enable,
++	.disable = imx50_display_disable,
++	.is_enabled = imx50_display_is_enabled,
++};
++
++/* EPDC/PxP AXI factory route: explicit parent, direct divisor, auto-slow /32.
++ * Changes require the terminal clock stopped;
++ * only the source gate is opened to complete divider handshakes.
++ */
++static int imx50_epdc_axi_wait(struct imx50_display_gate *g)
++{
++	u32 val;
++
++	return readl_poll_timeout_atomic(g->base + 0x8c, val,
++			!(val & BIT(g->busy_shift)), 1, 1000);
++}
++
++static int imx50_epdc_axi_stop(struct imx50_display_gate *g)
++{
++	u32 src = readl(g->base + g->reg);
++	u32 end = readl(g->base + 0x80);
++	u32 gate = 3U << g->gate_shift;
++	int ret;
++
++	if (g->faulted)
++		return -EIO;
++	/* DISPLAY_AXI is shared with LCDIF; never retime its live consumer. */
++	if (g->reg == 0xa4 && (end & (3U << 20))) {
++		pr_warn("imx50 DISPLAY_AXI LCDIF busy: src=%08x ccgr6=%08x bypass=%08x csr2=%08x\n",
++			src, end, readl(g->base + 0x90), readl(g->base + 0x8c));
++		return -EBUSY;
++	}
++	if ((src & GENMASK(31, 30)) && (end & gate))
++		return -EBUSY;
++	ret = imx50_epdc_axi_wait(g);
++	if (ret)
++		return ret;
++	writel(end & ~gate, g->base + 0x80);
++	writel(src & ~(GENMASK(31, 30) | g->asm_mask), g->base + g->reg);
++	if ((readl(g->base + 0x80) & gate) ||
++	    (readl(g->base + g->reg) & (GENMASK(31, 30) | g->asm_mask))) {
++		g->faulted = true;
++		return -EIO;
++	}
++	return 0;
++}
++
++static int imx50_epdc_axi_set_parent(struct clk_hw *hw, u8 index)
++{
++	struct imx50_display_gate *g = to_imx50_display_gate(hw);
++	unsigned long flags;
++	u32 val;
++	int ret;
++
++	if (index > 2)
++		return -EINVAL;
++	spin_lock_irqsave(&imx_ccm_lock, flags);
++	ret = imx50_epdc_axi_stop(g);
++	if (ret)
++		goto out;
++	val = readl(g->base + 0x90);
++	writel((val & ~(3U << g->mux_shift)) | (index << g->mux_shift),
++	       g->base + 0x90);
++	ret = imx50_epdc_axi_wait(g);
++	if (!ret && imx50_display_parent(hw) != index)
++		ret = -EIO;
++	if (ret)
++		g->faulted = true;
++out:
++	spin_unlock_irqrestore(&imx_ccm_lock, flags);
++	return ret;
++}
++
++static int imx50_epdc_axi_divisor(unsigned long parent, unsigned long target,
++		unsigned long lo, unsigned long hi, unsigned int *div,
++		unsigned long *rate)
++{
++	unsigned long best = ~0UL;
++	unsigned int d;
++	bool found = false;
++
++	if (!parent || !target || lo > hi)
++		return -EINVAL;
++	for (d = 1; d <= 63; d++) {
++		unsigned long value = parent / d;
++		unsigned long err = value > target ? value - target : target - value;
++
++		if (value < lo || value > hi)
++			continue;
++		if (!found || err < best) {
++			found = true;
++			best = err;
++			*div = d;
++			*rate = value;
++		}
++	}
++	return found ? 0 : -EINVAL;
++}
++
++static int imx50_epdc_axi_determine(struct clk_hw *hw, struct clk_rate_request *req)
++{
++	struct clk_hw *parent = clk_hw_get_parent(hw);
++	unsigned int div;
++	unsigned long rate;
++	int ret;
++
++	if (!parent)
++		return -EINVAL;
++	ret = imx50_epdc_axi_divisor(clk_hw_get_rate(parent), req->rate,
++				req->min_rate, req->max_rate, &div, &rate);
++	if (ret)
++		return ret;
++	req->rate = rate;
++	req->best_parent_hw = parent;
++	req->best_parent_rate = clk_hw_get_rate(parent);
++	return 0;
++}
++
++static int imx50_epdc_axi_set_rate(struct clk_hw *hw, unsigned long rate,
++				 unsigned long parent)
++{
++	struct imx50_display_gate *g = to_imx50_display_gate(hw);
++	unsigned long flags, rounded;
++	unsigned int div;
++	u32 val;
++	int ret;
++
++	ret = imx50_epdc_axi_divisor(parent, rate, 0, ~0UL, &div, &rounded);
++	if (ret)
++		return ret;
++	spin_lock_irqsave(&imx_ccm_lock, flags);
++	ret = imx50_epdc_axi_stop(g);
++	if (ret)
++		goto out;
++	val = readl(g->base + g->reg);
++	writel(val | GENMASK(31, 30), g->base + g->reg);
++	if ((readl(g->base + g->reg) & GENMASK(31, 30)) != GENMASK(31, 30)) {
++		ret = -EIO;
++		goto close;
++	}
++	writel((val & ~0x3f) | GENMASK(31, 30) | div, g->base + g->reg);
++	ret = imx50_epdc_axi_wait(g);
++	if (!ret && (readl(g->base + g->reg) & 0x3f) != div)
++		ret = -EIO;
++close:
++	writel(readl(g->base + g->reg) & ~GENMASK(31, 30), g->base + g->reg);
++	if (readl(g->base + g->reg) & GENMASK(31, 30))
++		ret = -EIO;
++	if (ret)
++		g->faulted = true;
++	else
++		g->stock_configured = true;
++out:
++	spin_unlock_irqrestore(&imx_ccm_lock, flags);
++	return ret;
++}
++
++static int imx50_epdc_axi_enable(struct clk_hw *hw)
++{
++	struct imx50_display_gate *g = to_imx50_display_gate(hw);
++	unsigned long flags;
++	u32 val, gate = 3U << g->gate_shift;
++	int ret;
++
++	spin_lock_irqsave(&imx_ccm_lock, flags);
++	ret = -EIO;
++	if (g->faulted)
++		goto out;
++	val = readl(g->base + g->reg);
++	ret = -EINVAL;
++	if (!(val & 0x3f))
++		goto out;
++	ret = imx50_epdc_axi_wait(g);
++	if (ret)
++		goto out;
++	writel(readl(g->base + 0x80) | gate, g->base + 0x80);
++	writel(val | GENMASK(31, 30), g->base + g->reg);
++	/* Original Yoshi enable: ASM enabled with SLOW_DIV=5 (/32). */
++	val |= GENMASK(31, 30);
++	/* EPDC first access precedes idle proof. PxP's factory enable always
++	 * enables its hardware idle auto-slow, including an unchanged CCF rate.
++	 */
++	if (g->stock_configured || g->reg == 0xa4)
++		val = (val & ~(7U << (g->reg == 0xa4 ? 10 : 6))) | g->asm_mask | (5U << (g->reg == 0xa4 ? 10 : 6));
++	writel(val, g->base + g->reg);
++	if (readl(g->base + g->reg) != val ||
++	    (readl(g->base + 0x80) & gate) != gate) {
++		writel(val & ~(GENMASK(31, 30) | g->asm_mask), g->base + g->reg);
++		writel(readl(g->base + 0x80) & ~gate, g->base + 0x80);
++		g->faulted = true;
++		ret = -EIO;
++	}
++out:
++	spin_unlock_irqrestore(&imx_ccm_lock, flags);
++	return ret;
++}
++
++static void imx50_epdc_axi_disable(struct clk_hw *hw)
++{
++	struct imx50_display_gate *g = to_imx50_display_gate(hw);
++	unsigned long flags;
++	u32 val;
++
++	spin_lock_irqsave(&imx_ccm_lock, flags);
++	val = readl(g->base + g->reg);
++	writel(val & ~g->asm_mask, g->base + g->reg);
++	writel(val & ~(GENMASK(31, 30) | g->asm_mask), g->base + g->reg);
++	writel(readl(g->base + 0x80) & ~(3U << g->gate_shift), g->base + 0x80);
++	if ((readl(g->base + g->reg) & (GENMASK(31, 30) | g->asm_mask)) ||
++	    (readl(g->base + 0x80) & (3U << g->gate_shift)))
++		g->faulted = true;
++	spin_unlock_irqrestore(&imx_ccm_lock, flags);
++}
++
++static const struct clk_ops imx50_epdc_axi_ops = {
++	.get_parent = imx50_display_parent,
++	.set_parent = imx50_epdc_axi_set_parent,
++	.recalc_rate = imx50_display_rate,
++	.determine_rate = imx50_epdc_axi_determine,
++	.set_rate = imx50_epdc_axi_set_rate,
++	.enable = imx50_epdc_axi_enable,
++	.disable = imx50_epdc_axi_disable,
++	.is_enabled = imx50_display_is_enabled,
++};
++
++static struct clk *__init imx50_display_gate(const char *name,
++		const char * const *parents, void __iomem *base, u32 reg,
++		u32 asm_mask, u8 mux_shift, u8 gate_shift, u8 busy_shift)
++{
++	struct clk_init_data init = {
++		.name = name,
++		.ops = &imx50_display_ops,
++		.parent_names = parents,
++		.num_parents = 4,
++		.flags = CLK_GET_RATE_NOCACHE | CLK_IGNORE_UNUSED,
++	};
++	struct imx50_display_gate *g;
++	struct clk *ret;
++
++	g = kzalloc(sizeof(*g), GFP_KERNEL);
++	if (!g)
++		return ERR_PTR(-ENOMEM);
++	if (reg == 0xa8 || reg == 0xa4) {
++		init.ops = &imx50_epdc_axi_ops;
++		init.flags |= CLK_SET_RATE_GATE | CLK_SET_PARENT_GATE |
++			      CLK_OPS_PARENT_ENABLE;
++	}
++	g->hw.init = &init;
++	g->base = base;
++	g->reg = reg;
++	g->asm_mask = asm_mask;
++	g->mux_shift = mux_shift;
++	g->gate_shift = gate_shift;
++	g->busy_shift = busy_shift;
++	ret = clk_register(NULL, &g->hw);
++	if (IS_ERR(ret))
++		kfree(g);
++	return ret;
++}
++
++static const char * const mx50_epdc_axi_parents[] = {
++	"osc", "imx50_pfd3", "pll1_sw", "imx50_reserved",
++};
++static const char * const mx50_pxp_axi_parents[] = {
++	"osc", "imx50_pfd2", "pll1_sw", "imx50_reserved",
++};
++
+ static void __init mx50_clocks_init(struct device_node *np)
+ {
+ 	void __iomem *ccm_base;
+@@ -298,7 +653,7 @@
+ 	ccm_base = of_iomap(np, 0);
+ 	WARN_ON(!ccm_base);
+ 
+-	mx5_clocks_common_init(ccm_base);
++	mx5_clocks_common_init(ccm_base, np);
+ 
+ 	/*
+ 	 * This clock is called periph_clk in the i.MX50 Reference Manual, but
+@@ -336,6 +691,30 @@
+ 						mx53_cko2_sel, ARRAY_SIZE(mx53_cko2_sel));
+ 	clk[IMX5_CLK_CKO2_PODF]		= imx_clk_divider("cko2_podf", "cko2_sel", MXC_CCM_CCOSR, 21, 3);
+ 	clk[IMX5_CLK_CKO2]		= imx_clk_gate2("cko2", "cko2_podf", MXC_CCM_CCOSR, 24);
++	/* Keep PLL1 unchanged: it also supplies display and other consumers. */
++	clk[IMX5_CLK_ARM] = clk_register_fixed_factor(NULL, "arm", "cpu_podf",
++				CLK_SET_RATE_PARENT | CLK_IS_CRITICAL, 1, 1);
++	clk[IMX5_CLK_EPDC_AXI] = imx50_display_gate("epdc_axi",
++		mx50_epdc_axi_parents, ccm_base, 0xa8, BIT(9), 4, 16, 4);
++	clk[IMX5_CLK_PXP_AXI] = imx50_display_gate("pxp_axi",
++		mx50_pxp_axi_parents, ccm_base, 0xa4, BIT(13), 2, 18, 3);
++	/* Model the otherwise unclaimed LCDIF terminal gate so CCF's normal
++	 * disable_unused drops bootloader residue before PxP retimes DISPLAY_AXI.
++	 * This is a terminal-only orphan (no fabricated source/rate). A future
++	 * LCDIF driver must supply the full shared tree and claim this gate.
++	 * Keep the live LCDIF check in the rate callbacks intact.
++	 */
++	WARN_ON(IS_ERR(imx_clk_gate2("lcdif_axi_terminal", NULL,
++		MXC_CCM_CCGR6, 20)));
++
++	/*
++	 * ANATOP clock callbacks need APBH register access even when no display
++	 * consumer is enabled. Keep this bridge on until all APBH users and its
++	 * runtime PM dependencies are represented in the clock tree.
++	 */
++	clk[IMX5_CLK_APBH_DMA] = imx_clk_gate2_flags("apbh_dma", "ahb",
++		MXC_CCM_CCGR7, 20, CLK_IS_CRITICAL);
++	clk[IMX5_CLK_EPDC_PIX] = imx50_clk_epdc_pixel(ccm_base);
+ 
+ 	imx_check_clocks(clk, ARRAY_SIZE(clk));
+ 
+@@ -383,7 +762,7 @@
+ 	ccm_base = of_iomap(np, 0);
+ 	WARN_ON(!ccm_base);
+ 
+-	mx5_clocks_common_init(ccm_base);
++	mx5_clocks_common_init(ccm_base, np);
+ 
+ 	clk[IMX5_CLK_PERIPH_APM]	= imx_clk_mux("periph_apm", MXC_CCM_CBCMR, 12, 2,
+ 						periph_apm_sel, ARRAY_SIZE(periph_apm_sel));
+@@ -493,7 +872,7 @@
+ 	ccm_base = of_iomap(np, 0);
+ 	WARN_ON(!ccm_base);
+ 
+-	mx5_clocks_common_init(ccm_base);
++	mx5_clocks_common_init(ccm_base, np);
+ 
+ 	clk[IMX5_CLK_PERIPH_APM]	= imx_clk_mux("periph_apm", MXC_CCM_CBCMR, 12, 2,
+ 						periph_apm_sel, ARRAY_SIZE(periph_apm_sel));
+--- /dev/null
++++ b/drivers/clk/imx/clk-imx50-anatop.c
+@@ -0,0 +1,279 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* i.MX50 display PFD5 and its 480 MHz analog PLL. */
++#include <linux/clk.h>
++#include <linux/clk-provider.h>
++#include <linux/delay.h>
++#include <linux/io.h>
++#include <linux/iopoll.h>
++#include <linux/math64.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++
++#define FRAC1		0x20
++#define MISC		0x60
++#define PLLCTRL		0x70
++#define SET		4
++#define CLR		8
++#define PFD5_FRAC	GENMASK(13, 8)
++#define PFD5_GATE	BIT(15)
++
++struct imx50_pfd5 {
++	struct clk_hw hw;
++	void __iomem *base;
++};
++#define to_pfd5(hw) container_of(hw, struct imx50_pfd5, hw)
++
++struct imx50_apll {
++	struct clk_hw hw;
++	void __iomem *base;
++	u32 saved;
++	bool started;
++};
++#define to_apll(hw) container_of(hw, struct imx50_apll, hw)
++
++static bool imx50_apll_ready(void __iomem *base)
++{
++	u32 misc = readl(base + MISC);
++
++	/* POWERUP=1, HOLD_RING_OFF=0, bandgap REF_PWD=0, LOCK=1. */
++	return (misc & (BIT(0) | BIT(7) | BIT(18))) == BIT(0) &&
++	       (readl(base + PLLCTRL) & BIT(31));
++}
++
++static void imx50_apll_restore(struct imx50_apll *pll)
++{
++	/* Only bits owned by the startup sequence; preserve charger/bandgap. */
++	writel(BIT(0), pll->base + MISC + CLR);
++	if (pll->saved & BIT(7))
++		writel(BIT(7), pll->base + MISC + SET);
++	else
++		writel(BIT(7), pll->base + MISC + CLR);
++	readl(pll->base + MISC);
++	pll->started = false;
++}
++
++static int imx50_apll_prepare(struct clk_hw *hw)
++{
++	struct imx50_apll *pll = to_apll(hw);
++	u32 misc = readl(pll->base + MISC), val;
++	int ret;
++
++	if (misc & BIT(0))
++		return imx50_apll_ready(pll->base) ? 0 : -EIO;
++	/* Bandgap startup is a separate shared analog-power dependency. */
++	if (misc & BIT(18))
++		return -EOPNOTSUPP;
++	pll->saved = misc;
++	writel(BIT(7), pll->base + MISC + SET);
++	writel(BIT(0), pll->base + MISC + SET);
++	readl(pll->base + MISC);
++	usleep_range(15, 30);
++	writel(BIT(7), pll->base + MISC + CLR);
++	readl(pll->base + MISC);
++	usleep_range(15, 30);
++	ret = readl_poll_timeout(pll->base + PLLCTRL, val, val & BIT(31), 5, 1000);
++	if (ret) {
++		imx50_apll_restore(pll);
++		return ret;
++	}
++	pll->started = true;
++	return 0;
++}
++
++static void imx50_apll_unprepare(struct clk_hw *hw)
++{
++	struct imx50_apll *pll = to_apll(hw);
++
++	/* A PLL inherited on may supply consumers not yet represented in CCF. */
++	if (pll->started)
++		imx50_apll_restore(pll);
++}
++
++static int imx50_apll_prepared(struct clk_hw *hw)
++{
++	return imx50_apll_ready(to_apll(hw)->base);
++}
++
++static unsigned long imx50_apll_rate(struct clk_hw *hw, unsigned long parent)
++{
++	return 480000000;
++}
++
++static const struct clk_ops imx50_apll_ops = {
++	.prepare = imx50_apll_prepare,
++	.unprepare = imx50_apll_unprepare,
++	.is_prepared = imx50_apll_prepared,
++	.recalc_rate = imx50_apll_rate,
++};
++
++static unsigned long imx50_pfd5_rate(struct clk_hw *hw, unsigned long parent)
++{
++	u32 frac = (readl(to_pfd5(hw)->base + FRAC1) >> 8) & 0x3f;
++
++	return frac >= 18 && frac <= 35 ? div_u64((u64)parent * 18, frac) : 0;
++}
++
++static u32 imx50_pfd5_frac(unsigned long rate, unsigned long parent)
++{
++	u64 frac;
++
++	if (!rate)
++		return 35;
++	frac = div_u64((u64)parent * 18 + rate / 2, rate);
++	return clamp_t(u64, frac, 18, 35);
++}
++
++static long imx50_pfd5_round(struct clk_hw *hw, unsigned long rate,
++			   unsigned long *parent)
++{
++	return div_u64((u64)*parent * 18, imx50_pfd5_frac(rate, *parent));
++}
++
++static int imx50_pfd5_set(struct clk_hw *hw, unsigned long rate,
++			unsigned long parent)
++{
++	void __iomem *base = to_pfd5(hw)->base;
++	u32 frac = imx50_pfd5_frac(rate, parent);
++
++	/* Never alter a running fractional divider or any sibling PFD. */
++	if (!(readl(base + FRAC1) & PFD5_GATE))
++		return -EBUSY;
++	writel(PFD5_FRAC, base + FRAC1 + CLR);
++	writel(frac << 8, base + FRAC1 + SET);
++	if (((readl(base + FRAC1) & PFD5_FRAC) >> 8) != frac)
++		return -EIO;
++	/* RM says STABLE toggles on reprogramming; it is not a ready-high bit. */
++	udelay(1);
++	return 0;
++}
++
++static int imx50_pfd5_enable(struct clk_hw *hw)
++{
++	void __iomem *base = to_pfd5(hw)->base;
++	u32 frac = (readl(base + FRAC1) >> 8) & 0x3f;
++
++	if (!imx50_apll_ready(base) || frac < 18 || frac > 35)
++		return -EINVAL;
++	writel(PFD5_GATE, base + FRAC1 + CLR);
++	udelay(1);
++	return readl(base + FRAC1) & PFD5_GATE ? -EIO : 0;
++}
++
++static void imx50_pfd5_disable(struct clk_hw *hw)
++{
++	void __iomem *base = to_pfd5(hw)->base;
++
++	writel(PFD5_GATE, base + FRAC1 + SET);
++	readl(base + FRAC1);
++}
++
++static int imx50_pfd5_enabled(struct clk_hw *hw)
++{
++	return !(readl(to_pfd5(hw)->base + FRAC1) & PFD5_GATE);
++}
++
++static const struct clk_ops imx50_pfd5_ops = {
++	.recalc_rate = imx50_pfd5_rate,
++	.round_rate = imx50_pfd5_round,
++	.set_rate = imx50_pfd5_set,
++	.enable = imx50_pfd5_enable,
++	.disable = imx50_pfd5_disable,
++	.is_enabled = imx50_pfd5_enabled,
++};
++
++static ssize_t registers_show(struct device *dev,
++			      struct device_attribute *attr, char *buf)
++{
++	struct imx50_pfd5 *pfd = dev_get_drvdata(dev);
++
++	return sysfs_emit(buf, "frac0=%08x frac1=%08x misc=%08x pllctrl=%08x\n",
++		readl(pfd->base + 0x10), readl(pfd->base + FRAC1),
++		readl(pfd->base + MISC), readl(pfd->base + PLLCTRL));
++}
++static DEVICE_ATTR_RO(registers);
++static struct attribute *imx50_anatop_attrs[] = {
++	&dev_attr_registers.attr, NULL,
++};
++ATTRIBUTE_GROUPS(imx50_anatop);
++
++static int imx50_anatop_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	const char *parent = "imx50_apll";
++	struct clk_init_data init = {
++		.name = "imx50_pfd5",
++		.ops = &imx50_pfd5_ops,
++		.flags = CLK_IGNORE_UNUSED | CLK_SET_RATE_GATE,
++		.parent_names = &parent,
++		.num_parents = 1,
++	};
++	struct clk_hw_onecell_data *data;
++	struct imx50_pfd5 *pfd;
++	struct imx50_apll *pll;
++	struct clk_init_data pll_init = {
++		.name = "imx50_apll",
++		.ops = &imx50_apll_ops,
++		.flags = CLK_IGNORE_UNUSED,
++	};
++	struct clk *apbh;
++	int ret;
++
++	apbh = devm_clk_get_enabled(dev, "apbh");
++	if (IS_ERR(apbh))
++		return dev_err_probe(dev, PTR_ERR(apbh), "APBH access clock\n");
++	pfd = devm_kzalloc(dev, sizeof(*pfd), GFP_KERNEL);
++	pll = devm_kzalloc(dev, sizeof(*pll), GFP_KERNEL);
++	data = devm_kzalloc(dev, struct_size(data, hws, 2), GFP_KERNEL);
++	if (!pfd || !pll || !data)
++		return -ENOMEM;
++	pfd->base = devm_platform_ioremap_resource(pdev, 0);
++	if (IS_ERR(pfd->base))
++		return PTR_ERR(pfd->base);
++	dev_info(dev, "baseline FRAC0=%08x FRAC1=%08x MISC=%08x PLLCTRL=%08x\n",
++		readl(pfd->base + 0x10), readl(pfd->base + FRAC1),
++		readl(pfd->base + MISC), readl(pfd->base + PLLCTRL));
++	/* Yoshi stock clock init disables ANADIG charger detection. The board
++	 * uses MAX14656 and the PMIC instead; preserve PLL/bandgap bits.
++	 */
++	if (of_machine_is_compatible("amazon,kindle-4")) {
++		u32 before = readl(pfd->base + MISC);
++
++		writel(BIT(16), pfd->base + MISC + SET);
++		if (!(readl(pfd->base + MISC) & BIT(16)))
++			return -EIO;
++		dev_info(dev, "stock charger detection disabled: MISC=%08x->%08x\n",
++			 before, readl(pfd->base + MISC));
++	}
++	data->num = 2;
++	pll->base = pfd->base;
++	pll->hw.init = &pll_init;
++	ret = devm_clk_hw_register(dev, &pll->hw);
++	if (ret)
++		return ret;
++	data->hws[0] = &pll->hw;
++	pfd->hw.init = &init;
++	platform_set_drvdata(pdev, pfd);
++	ret = devm_clk_hw_register(dev, &pfd->hw);
++	if (ret)
++		return ret;
++	data->hws[1] = &pfd->hw;
++	return devm_of_clk_add_hw_provider(dev, of_clk_hw_onecell_get, data);
++}
++
++static const struct of_device_id imx50_anatop_match[] = {
++	{ .compatible = "fsl,imx50-anatop-clocks" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, imx50_anatop_match);
++static struct platform_driver imx50_anatop_driver = {
++	.probe = imx50_anatop_probe,
++	.driver = {
++		.name = "imx50-anatop-clocks",
++		.of_match_table = imx50_anatop_match,
++		.suppress_bind_attrs = true,
++		.dev_groups = imx50_anatop_groups,
++	},
++};
++builtin_platform_driver(imx50_anatop_driver);
++MODULE_LICENSE("GPL");
+--- /dev/null
++++ b/drivers/clk/imx/clk-imx50-pixel-rate.h
+@@ -0,0 +1,71 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef __CLK_IMX50_PIXEL_RATE_H
++#define __CLK_IMX50_PIXEL_RATE_H
++
++#include <linux/errno.h>
++
++/* Direct divisor encoding: pre=1..3, post=1..4095; zero gates a stage. */
++static inline int imx50_pixel_dividers_policy(unsigned long parent, unsigned long target,
++		unsigned long min_rate, unsigned long max_rate, bool stock_pre1,
++		unsigned int *best_pre, unsigned int *best_post,
++		unsigned long *rounded)
++{
++	unsigned long best_error = ~0UL;
++	unsigned int pre;
++	int found = 0;
++
++	if (!parent || !target || min_rate > max_rate)
++		return -EINVAL;
++	for (pre = 1; pre <= (stock_pre1 ? 1 : 3); pre++) {
++		unsigned long input = parent / pre;
++		unsigned long post = input / target;
++		unsigned long first = 1, last = 4095;
++		unsigned int i;
++
++		if (!stock_pre1 && parent > 480000000UL * pre)
++			continue;
++		/* Bound floor(input / post), avoiding max_rate + 1 overflow. */
++		if (max_rate < input)
++			first = input / (max_rate + 1) + 1;
++		if (min_rate && input / min_rate < last)
++			last = input / min_rate;
++		if (first > last)
++			continue;
++		/* Test both neighbors of the ideal divisor, clamped to the field. */
++		if (post < first)
++			post = first;
++		if (post > last)
++			post = last;
++		for (i = 0; i < 2 && post + i <= last; i++) {
++			unsigned long rate = input / (post + i);
++			unsigned long error = rate > target ? rate - target : target - rate;
++
++			if (!found || error < best_error) {
++				*best_pre = pre;
++				*best_post = post + i;
++				*rounded = rate;
++				best_error = error;
++				found = 1;
++			}
++		}
++	}
++	return found ? 0 : -EINVAL;
++}
++
++static inline int imx50_pixel_dividers_range(unsigned long parent, unsigned long target,
++        unsigned long min_rate, unsigned long max_rate,
++        unsigned int *pre, unsigned int *post, unsigned long *rounded)
++{
++    return imx50_pixel_dividers_policy(parent, target, min_rate, max_rate,
++                                      false, pre, post, rounded);
++}
++
++static inline int imx50_pixel_dividers(unsigned long parent, unsigned long target,
++		unsigned int *best_pre, unsigned int *best_post,
++		unsigned long *rounded)
++{
++	return imx50_pixel_dividers_range(parent, target, 0, ~0UL,
++					best_pre, best_post, rounded);
++}
++
++#endif
+--- /dev/null
++++ b/drivers/clk/imx/clk-imx50-pixel.c
+@@ -0,0 +1,322 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* i.MX50 EPDC pixel clock: source, serial divisors, and both clock gates. */
++#include <linux/clk-provider.h>
++#include <linux/io.h>
++#include <linux/iopoll.h>
++#include <linux/slab.h>
++#include <linux/printk.h>
++#include <linux/of.h>
++#include "clk.h"
++#include "clk-imx50-pixel-rate.h"
++
++#define CCGR6	0x80
++#define CSR2	0x8c
++#define CLKSEQ	0x90
++#define EPDCPIX	0xa0
++#define PIX_GATE	GENMASK(31, 30)
++#define CCGR_GATE GENMASK(11, 10)
++#define PIX_PRE	GENMASK(13, 12)
++#define PIX_POST	GENMASK(11, 0)
++#define PIX_BUSY	BIT(8)
++#define PIX_MUX	GENMASK(13, 12)
++
++struct imx50_pixel {
++	struct clk_hw hw;
++	void __iomem *base;
++	bool faulted;
++	bool stock_pll1;
++};
++#define to_pixel(hw) container_of(hw, struct imx50_pixel, hw)
++
++static bool pixel_gated(struct imx50_pixel *p)
++{
++	u32 source = readl(p->base + EPDCPIX);
++	u32 terminal = readl(p->base + CCGR6);
++	bool gated = !(source & PIX_GATE) && !(terminal & CCGR_GATE);
++
++	if (!gated)
++		pr_warn_ratelimited("imx50 EPDC pixel clock busy: EPDCPIX=%08x CCGR6=%08x\n",
++				    source, terminal);
++	return gated;
++}
++
++static int pixel_wait(struct imx50_pixel *p)
++{
++	u32 val;
++
++	return readl_poll_timeout_atomic(p->base + CSR2, val,
++					!(val & PIX_BUSY), 1, 1000);
++}
++
++/* Boot firmware may stop only one of the two serial clock gates. The
++ * terminal is already stopped if either gate is wholly closed. Normalize
++ * that inactive state before touching mux/divisors, preserving sibling bits.
++ * Both gates open remains an active-clock rejection, never a forced stop.
++ */
++static int pixel_stop_for_change(struct imx50_pixel *p)
++{
++	u32 source = readl(p->base + EPDCPIX);
++	u32 terminal = readl(p->base + CCGR6);
++	int ret;
++
++	if ((source & PIX_GATE) && (terminal & CCGR_GATE)) {
++		pixel_gated(p); /* Rate-limited rejected-state diagnostic. */
++		return -EBUSY;
++	}
++	if (!(source & PIX_GATE) && !(terminal & CCGR_GATE))
++		return 0;
++	ret = pixel_wait(p);
++	if (ret)
++		return ret;
++	if (terminal & CCGR_GATE)
++		writel(terminal & ~CCGR_GATE, p->base + CCGR6);
++	if (source & PIX_GATE)
++		writel(source & ~PIX_GATE, p->base + EPDCPIX);
++	if (!pixel_gated(p)) {
++		p->faulted = true;
++		return -EIO;
++	}
++	return 0;
++}
++
++static u8 pixel_parent(struct clk_hw *hw)
++{
++	return (readl(to_pixel(hw)->base + CLKSEQ) & PIX_MUX) >> 12;
++}
++
++/* Yoshi factory code uses PLL1_SW with pre=1, including 800MHz input.
++ * This board exception conflicts with RM 5.4.41's 480MHz PODF input limit;
++ * see porting/EPDC-STOCK-CLOCKS.md. Never retune the shared PLL here.
++ */
++static bool pixel_stock_pll1(struct clk_hw *hw)
++{
++    return to_pixel(hw)->stock_pll1 && pixel_parent(hw) == 2;
++}
++
++static int pixel_set_parent(struct clk_hw *hw, u8 index)
++{
++	struct imx50_pixel *p = to_pixel(hw);
++	unsigned long flags;
++	u32 val;
++	int ret;
++
++	if (index > 3)
++		return -EINVAL;
++	spin_lock_irqsave(&imx_ccm_lock, flags);
++	ret = -EIO;
++	if (p->faulted)
++		goto out;
++	ret = pixel_stop_for_change(p);
++	if (ret)
++		goto out;
++	ret = pixel_wait(p);
++	if (ret)
++		goto out;
++	val = readl(p->base + CLKSEQ);
++	writel((val & ~PIX_MUX) | (index << 12), p->base + CLKSEQ);
++	ret = pixel_wait(p);
++	if (!ret && pixel_parent(hw) != index)
++		ret = -EIO;
++	if (ret)
++		p->faulted = true;
++out:
++	spin_unlock_irqrestore(&imx_ccm_lock, flags);
++	return ret;
++}
++
++static unsigned long pixel_rate(struct clk_hw *hw, unsigned long parent)
++{
++	u32 val = readl(to_pixel(hw)->base + EPDCPIX);
++	u32 pre = (val & PIX_PRE) >> 12, post = val & PIX_POST;
++
++	return pre && post ? parent / pre / post : 0;
++}
++
++static int pixel_determine_rate(struct clk_hw *hw, struct clk_rate_request *req)
++{
++	struct clk_hw *parent_hw = clk_hw_get_parent(hw);
++	unsigned int pre, post;
++	unsigned long rounded, parent_rate;
++	int ret;
++
++	/* Parent changes are explicit; never retune a shared PLL or PFD here. */
++	if (!parent_hw)
++		return -EINVAL;
++	parent_rate = clk_hw_get_rate(parent_hw);
++	ret = imx50_pixel_dividers_policy(parent_rate, req->rate,
++					req->min_rate, req->max_rate, pixel_stock_pll1(hw),
++					&pre, &post, &rounded);
++	if (ret)
++		return ret;
++	req->best_parent_hw = parent_hw;
++	req->best_parent_rate = parent_rate;
++	req->rate = rounded;
++	return 0;
++}
++
++static int pixel_set_rate(struct clk_hw *hw, unsigned long rate, unsigned long parent)
++{
++	struct imx50_pixel *p = to_pixel(hw);
++	unsigned long flags, rounded;
++	unsigned int pre, post, current_pre;
++	u32 val;
++	bool source_on = false;
++	int ret;
++
++	ret = imx50_pixel_dividers_policy(parent, rate, 0, ~0UL,
++					 pixel_stock_pll1(hw), &pre, &post, &rounded);
++	if (ret)
++		return ret;
++	spin_lock_irqsave(&imx_ccm_lock, flags);
++	ret = -EIO;
++	if (p->faulted)
++		goto out;
++	ret = pixel_stop_for_change(p);
++	if (ret)
++		goto out;
++	ret = pixel_wait(p);
++	if (ret)
++		goto out;
++	/* EPDCPIX gates before the serial dividers. A stopped source cannot
++	 * complete their busy handshake. CCF keeps the parent running; open
++	 * only the source gate, leaving the terminal CCGR gate closed.
++	 */
++	val = readl(p->base + EPDCPIX);
++	current_pre = (val & PIX_PRE) >> 12;
++	if (!current_pre || (!pixel_stock_pll1(hw) &&
++		parent > 480000000UL * current_pre)) {
++		ret = -ERANGE;
++		goto out;
++	}
++	writel(val | PIX_GATE, p->base + EPDCPIX);
++	source_on = true;
++	if ((readl(p->base + EPDCPIX) & PIX_GATE) != PIX_GATE) {
++		ret = -EIO;
++		goto fault;
++	}
++	/* RM: post takes effect first on a combined write. Program separately. */
++	val = readl(p->base + EPDCPIX);
++	writel((val & ~PIX_POST) | PIX_POST, p->base + EPDCPIX);
++	ret = pixel_wait(p);
++	if (ret)
++		goto fault;
++	val = readl(p->base + EPDCPIX);
++	writel((val & ~PIX_PRE) | (pre << 12), p->base + EPDCPIX);
++	ret = pixel_wait(p);
++	if (ret)
++		goto fault;
++	val = readl(p->base + EPDCPIX);
++	writel((val & ~PIX_POST) | post, p->base + EPDCPIX);
++	ret = pixel_wait(p);
++	val = readl(p->base + EPDCPIX);
++	if (!ret && (val & (PIX_PRE | PIX_POST)) != ((pre << 12) | post))
++		ret = -EIO;
++fault:
++	if (ret)
++		p->faulted = true;
++out:
++	if (source_on) {
++		val = readl(p->base + EPDCPIX);
++		writel(val & ~PIX_GATE, p->base + EPDCPIX);
++		readl(p->base + EPDCPIX);
++	}
++	/* On timeout, leave both gates closed; never continue unboundedly. */
++	spin_unlock_irqrestore(&imx_ccm_lock, flags);
++	return ret;
++}
++
++static int pixel_enable(struct clk_hw *hw)
++{
++	struct imx50_pixel *p = to_pixel(hw);
++	struct clk_hw *parent_hw = clk_hw_get_parent(hw);
++	unsigned long parent;
++	unsigned long flags;
++	u32 val, pre;
++	int ret;
++
++	if (!parent_hw)
++		return -EINVAL;
++	parent = clk_hw_get_rate(parent_hw);
++	spin_lock_irqsave(&imx_ccm_lock, flags);
++	ret = -EIO;
++	if (p->faulted)
++		goto out;
++	val = readl(p->base + EPDCPIX);
++	pre = (val & PIX_PRE) >> 12;
++	ret = -EINVAL;
++	if (!pre || !(val & PIX_POST) || !parent ||
++	    (!pixel_stock_pll1(hw) && parent > 480000000UL * pre))
++		goto out;
++	ret = pixel_wait(p);
++	if (ret)
++		goto out;
++	writel(readl(p->base + CCGR6) | CCGR_GATE, p->base + CCGR6);
++	writel(val | PIX_GATE, p->base + EPDCPIX);
++	if ((readl(p->base + EPDCPIX) & PIX_GATE) != PIX_GATE ||
++	    (readl(p->base + CCGR6) & CCGR_GATE) != CCGR_GATE) {
++		writel(val & ~PIX_GATE, p->base + EPDCPIX);
++		writel(readl(p->base + CCGR6) & ~CCGR_GATE, p->base + CCGR6);
++		ret = -EIO;
++		p->faulted = true;
++	}
++out:
++	spin_unlock_irqrestore(&imx_ccm_lock, flags);
++	return ret;
++}
++
++static void pixel_disable(struct clk_hw *hw)
++{
++	struct imx50_pixel *p = to_pixel(hw);
++	unsigned long flags;
++
++	spin_lock_irqsave(&imx_ccm_lock, flags);
++	writel(readl(p->base + EPDCPIX) & ~PIX_GATE, p->base + EPDCPIX);
++	writel(readl(p->base + CCGR6) & ~CCGR_GATE, p->base + CCGR6);
++	readl(p->base + CCGR6);
++	spin_unlock_irqrestore(&imx_ccm_lock, flags);
++}
++
++static int pixel_enabled(struct clk_hw *hw)
++{
++	struct imx50_pixel *p = to_pixel(hw);
++
++	return !!(readl(p->base + EPDCPIX) & PIX_GATE) &&
++	       !!(readl(p->base + CCGR6) & CCGR_GATE);
++}
++
++static const struct clk_ops pixel_ops = {
++	.get_parent = pixel_parent,
++	.set_parent = pixel_set_parent,
++	.recalc_rate = pixel_rate,
++	.determine_rate = pixel_determine_rate,
++	.set_rate = pixel_set_rate,
++	.enable = pixel_enable,
++	.disable = pixel_disable,
++	.is_enabled = pixel_enabled,
++};
++
++struct clk * __init imx50_clk_epdc_pixel(void __iomem *base)
++{
++	static const char * const parents[] = { "osc", "imx50_pfd5", "pll1_sw", "ckih1" };
++	struct clk_init_data init = {
++		.name = "epdc_pix",
++		.ops = &pixel_ops,
++		.parent_names = parents,
++		.num_parents = ARRAY_SIZE(parents),
++		.flags = CLK_IGNORE_UNUSED | CLK_GET_RATE_NOCACHE |
++			 CLK_SET_RATE_GATE | CLK_SET_PARENT_GATE | CLK_OPS_PARENT_ENABLE,
++	};
++	struct imx50_pixel *p;
++	struct clk *ret;
++
++	p = kzalloc(sizeof(*p), GFP_KERNEL);
++	if (!p)
++		return ERR_PTR(-ENOMEM);
++	p->hw.init = &init;
++	p->base = base;
++	p->stock_pll1 = of_machine_is_compatible("amazon,kindle-4");
++	ret = clk_register(NULL, &p->hw);
++	if (IS_ERR(ret))
++		kfree(p);
++	return ret;
++}
+--- a/drivers/clk/imx/clk.h
++++ b/drivers/clk/imx/clk.h
+@@ -22,6 +22,8 @@
+ void imx_unregister_hw_clocks(struct clk_hw *hws[], unsigned int count);
+ 
+ extern void imx_cscmr1_fixup(u32 *val);
++
++struct clk *imx50_clk_epdc_pixel(void __iomem *base);
+ 
+ enum imx_pllv1_type {
+ 	IMX_PLLV1_IMX1,
+--- a/drivers/pinctrl/freescale/pinctrl-imx.c
++++ b/drivers/pinctrl/freescale/pinctrl-imx.c
+@@ -797,6 +797,11 @@
+ 	ipctl->info = info;
+ 	ipctl->dev = &pdev->dev;
+ 	platform_set_drvdata(pdev, ipctl);
++	if (info->init_groups) {
++		ret = info->init_groups(ipctl);
++		if (ret)
++			return ret;
++	}
+ 	ret = devm_pinctrl_register_and_init(&pdev->dev,
+ 					     imx_pinctrl_desc, ipctl,
+ 					     &ipctl->pctl);
+--- a/drivers/pinctrl/freescale/pinctrl-imx.h
++++ b/drivers/pinctrl/freescale/pinctrl-imx.h
+@@ -86,6 +86,7 @@
+ 	unsigned int npins;
+ 	unsigned int flags;
+ 	const char *gpr_compatible;
++	int (*init_groups)(struct imx_pinctrl *ipctl);
+ 
+ 	/* MUX_MODE shift and mask in case SHARE_MUX_CONF_REG */
+ 	unsigned int mux_mask;
+--- a/drivers/pinctrl/freescale/pinctrl-imx50.c
++++ b/drivers/pinctrl/freescale/pinctrl-imx50.c
+@@ -11,6 +11,7 @@
+ #include <linux/io.h>
+ #include <linux/mod_devicetable.h>
+ #include <linux/platform_device.h>
++#include <linux/of.h>
+ #include <linux/pinctrl/pinctrl.h>
+ 
+ #include "pinctrl-imx.h"
+@@ -380,10 +381,39 @@
+ 	IMX_PINCTRL_PIN(MX50_PAD_EIM_CRE),
+ };
+ 
++/* HVE selects the pad output-buffer voltage range, not a regulator voltage.
++ * i.MX50 RM 35.4.422/431: bit 13 selects 1.65--1.95 V; zero 2.7--3.3 V.
++ * Yoshi mx50_yoshi_io_init sets both groups before registering MMC hosts.
++ */
++static int imx50_init_groups(struct imx_pinctrl *ipctl)
++{
++	static const struct { const char *property; u16 offset; } groups[] = {
++		{ "fsl,sd2-low-voltage", 0x69c },
++		{ "fsl,nandf-low-voltage", 0x6c0 },
++	};
++	unsigned int i;
++
++	for (i = 0; i < ARRAY_SIZE(groups); i++) {
++		u32 before, after;
++
++		if (!of_property_read_bool(ipctl->dev->of_node, groups[i].property))
++			continue;
++		before = readl(ipctl->base + groups[i].offset);
++		writel(before | BIT(13), ipctl->base + groups[i].offset);
++		after = readl(ipctl->base + groups[i].offset);
++		dev_info(ipctl->dev, "pad group %03x: %08x -> %08x (HVE low voltage)\n",
++			 groups[i].offset, before, after);
++		if (!(after & BIT(13)))
++			return -EIO;
++	}
++	return 0;
++}
++
+ static const struct imx_pinctrl_soc_info imx50_pinctrl_info = {
+ 	.pins = imx50_pinctrl_pads,
+ 	.npins = ARRAY_SIZE(imx50_pinctrl_pads),
+ 	.gpr_compatible = "fsl,imx50-iomuxc-gpr",
++	.init_groups = imx50_init_groups,
+ };
+ 
+ static const struct of_device_id imx50_pinctrl_of_match[] = {
+--- a/include/dt-bindings/clock/imx5-clock.h
++++ b/include/dt-bindings/clock/imx5-clock.h
+@@ -211,6 +211,10 @@
+ #define IMX5_CLK_IEEE1588_PODF		203
+ #define IMX5_CLK_IEEE1588_GATE		204
+ #define IMX5_CLK_SCC2_IPG_GATE		205
+-#define IMX5_CLK_END			206
++#define IMX5_CLK_EPDC_AXI			206
++#define IMX5_CLK_PXP_AXI			207
++#define IMX5_CLK_APBH_DMA			208
++#define IMX5_CLK_EPDC_PIX			209
++#define IMX5_CLK_END			210
+ 
+ #endif /* __DT_BINDINGS_CLOCK_IMX5_H */
