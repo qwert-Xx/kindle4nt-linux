@@ -1,0 +1,56 @@
+--- a/wpa_supplicant/events.c
++++ b/wpa_supplicant/events.c
+@@ -2493,6 +2493,31 @@
+ }
+ 
+ 
++static void wpas_retry_aborted_connection_scan(struct wpa_supplicant *wpa_s,
++					      int own_request)
++{
++	unsigned int delay;
++
++	/* A canceled manual/background scan must not start an association. */
++	if (!own_request || wpa_s->conf->ap_scan != 1 ||
++	    wpa_s->last_scan_req == MANUAL_SCAN_REQ || wpa_s->disconnected ||
++	    wpa_s->wpa_state != WPA_SCANNING ||
++	    !wpa_supplicant_enabled_networks(wpa_s))
++		return;
++
++	/* Discard partial results, but keep the automatic connection alive.
++	 * Repeated aborts back off rather than forming a busy scan loop. */
++	delay = 1U << (wpa_s->aborted_scan_retries < 5 ?
++		       wpa_s->aborted_scan_retries : 5);
++	if (delay > 30)
++		delay = 30;
++	if (wpa_s->aborted_scan_retries < 5)
++		wpa_s->aborted_scan_retries++;
++	wpa_dbg(wpa_s, MSG_INFO, "K4_AUTO_SCAN_ABORT_RETRY delay=%u", delay);
++	wpa_supplicant_req_new_scan(wpa_s, delay, 0);
++}
++
++
+ /*
+  * Return a negative value if no scan results could be fetched or if scan
+  * results should not be shared with other virtual interfaces.
+@@ -2649,8 +2674,11 @@
+ 	if (data && data->scan_info.aborted) {
+ 		wpa_dbg(wpa_s, MSG_DEBUG,
+ 			"Scan was aborted - do not use the incomplete scan results to trigger new operations");
++		wpas_retry_aborted_connection_scan(wpa_s, own_request);
+ 		goto scan_work_done;
+ 	}
++	if (own_request)
++		wpa_s->aborted_scan_retries = 0;
+ 
+ 	if (sme_proc_obss_scan(wpa_s) > 0)
+ 		goto scan_work_done;
+--- a/wpa_supplicant/wpa_supplicant_i.h
++++ b/wpa_supplicant/wpa_supplicant_i.h
+@@ -956,6 +956,7 @@
+ 	/* Minimum freshness requirement for connection purposes */
+ 	struct os_reltime scan_min_time;
+ 	int scan_runs; /* number of scan runs since WPS was started */
++	unsigned int aborted_scan_retries; /* automatic connection backoff */
+ 	int *next_scan_freqs;
+ 	int *select_network_scan_freqs;
+ 	int *manual_scan_freqs;

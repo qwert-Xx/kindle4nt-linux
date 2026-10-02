@@ -1,0 +1,27 @@
+{
+  "scope": "Kindle 4 NT D01100 only",
+  "status": "local draft; stage4 and stage5 cold gates pending",
+  "source_commit": "187f9a9173cc1f890d737f568876f592749677fe",
+  "upstream": "79643295eba17affbd16ca97f3ef04c90266b28c",
+  "compiler": "arm-linux-gnueabihf-gcc 13.3.0",
+  "binutils": "2.42",
+  "patches": {
+    "kernel/debug-patches/01-k4-diagnostics.patch": "043045d2866fdeadf82d0a6fdc048a3b15a600bf93647a398762772643b9fc61",
+    "kernel/patches/01-platform.patch": "0e910d3a56b05cb2051fbaca20e3df909c74ddc15b8a0d73c8888696e4ea8949",
+    "kernel/patches/02-clocks.patch": "376fa8178816f7af80da17abb9fae8fd980f6d8581212fa922a1d827329fc420",
+    "kernel/patches/03-power.patch": "642704622964111ef18143cc65a9c03100d9a77d229eb329061db4e8ac88e212",
+    "kernel/patches/04-usb.patch": "e022d526a5e5e74e2a4d008f67c738e21198d28f0b56072eb4a0a7fdd70f187a",
+    "kernel/patches/05-wifi-mmc.patch": "b95824b80b218531852dad9f93dee6101a5ba40d2aad10c2e347e7239bc88782",
+    "kernel/patches/06-display-input.patch": "b3918d3cade16b6300bc4e7118f589869b82db0de179063efe0740752b1ff22b",
+    "kernel/patches/07-device-tree.patch": "2c3730b24b21ece9429a5add12ebe9e27aa09710f9ceabadd37cbea6cf481749"
+  },
+  "private_inputs_included": false,
+  "device_operations_performed": false,
+  "offline_clean_build": {
+    "production_zimage_sha256": "e554228c647a22b9e7b79afb1d6fbe2f827e735e32938ced23e9e4381e052e3d",
+    "formal_dtb_sha256": "c8bd73fea78e70d2e807385b3208c4c2cd19c1305835a3863254e73cd523e88a",
+    "modules": 234,
+    "two_unseeded_builds_exact": true,
+    "device_acceptance": "stage4 then stage5 pending; not cold accepted release"
+  }
+}

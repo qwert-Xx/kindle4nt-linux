@@ -1,0 +1,23 @@
+#!/bin/busybox sh
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Generic kernel modalias coldplug. No device writes or watchdog handling.
+bb=${K4_COLDPLUG_BB:-/bin/busybox}
+case "$#" in
+  0) sys=/sys/devices; modprobe=/sbin/modprobe ;;
+  2) sys=$1; modprobe=$2 ;;
+  *) echo K4_COLDPLUG_ARGUMENT_ERROR; exit 2 ;;
+esac
+[ -d "$sys" ] && [ -x "$modprobe" ] || { echo K4_COLDPLUG_PREREQUISITE_MISSING; exit 1; }
+"$bb" find "$sys" -type f -name modalias | while IFS= read -r file; do
+  node=${file%/modalias}
+  [ ! -e "$node/driver" ] || continue
+  alias=$("$bb" cat "$file") || { echo K4_COLDPLUG_ALIAS_READ_FAILED; continue; }
+  [ -n "$alias" ] || continue
+  if "$bb" timeout 10 "$modprobe" -- "$alias"; then
+    echo "K4_COLDPLUG_REQUEST_OK $alias"
+  else
+    echo "K4_COLDPLUG_REQUEST_FAILED $alias"
+  fi
+done
+# No-match, defer and individual failures never block recovery.
+exit 0

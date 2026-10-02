@@ -1,0 +1,13 @@
+#!/bin/busybox sh
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Original startup establishes storage protection, guard and recovery USB first.
+bb=${K4_COLDPLUG_BB:-/bin/busybox}
+base=${K4_COLDPLUG_BASE_STARTUP:-/etc/init.d/rcS.k4-base}
+helper=${K4_COLDPLUG_HELPER:-/bin/k4-modalias-coldplug}
+log=${K4_COLDPLUG_LOG:-/run/k4-modalias-coldplug.log}
+"$bb" sh "$base" "$@"
+ret=$?
+[ "$ret" -eq 0 ] || exit "$ret"
+# A missing optional keyboard never changes the recovery startup result.
+(umask 077; "$bb" timeout 60 "$bb" sh "$helper" > "$log" 2>&1) || :
+exit 0

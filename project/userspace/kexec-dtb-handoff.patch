@@ -1,0 +1,43 @@
+--- a/kexec/arch/arm/kexec-zImage-arm.c
++++ b/kexec/arch/arm/kexec-zImage-arm.c
+@@ -495,6 +495,8 @@
+ 	off_t dtb_length;
+ 	char *dtb_file;
+ 	off_t dtb_offset;
++	unsigned long handoff_offset;
++	uint32_t *dtb_handoff;
+ 	char *end;
+ 
+ 	/* See options.h -- add any more there, too. */
+@@ -909,6 +911,31 @@
+ 	add_segment(info, buf, kernel_buf_size, kernel_base, kernel_mem_size);
+ 
+ 	info->entry = (void*)kernel_base;
++	if (!use_atags && !(info->kexec_flags & KEXEC_ON_CRASH)) {
++		/*
++		 * The Kindle K4 2.6.31 kexec path enters with r2 == 0 even when
++		 * the DTB is loaded as a segment. Set r2 explicitly before
++		 * branching to the zImage, without touching r0 or r1.
++		 */
++		handoff_offset = locate_hole(info, 4 * sizeof(uint32_t),
++					     page_size,
++					     dtb_offset + dtb_length + page_size,
++					     ULONG_MAX, INT_MAX);
++		if (handoff_offset == ULONG_MAX)
++			return -1;
++
++		dtb_handoff = xmalloc(4 * sizeof(uint32_t));
++		dtb_handoff[0] = cpu_to_le32(0xe59f2000); /* ldr r2, [pc] */
++		dtb_handoff[1] = cpu_to_le32(0xe59ff000); /* ldr pc, [pc] */
++		dtb_handoff[2] = cpu_to_le32(dtb_offset);
++		dtb_handoff[3] = cpu_to_le32(kernel_base);
++		add_segment(info, dtb_handoff, 4 * sizeof(uint32_t),
++			    handoff_offset, 4 * sizeof(uint32_t));
++		info->entry = (void *)handoff_offset;
++		dbgprintf("DTB handoff: r2=0x%08lx, trampoline=0x%08lx, "
++			  "zImage=0x%08lx\n", (unsigned long)dtb_offset,
++			  handoff_offset, kernel_base);
++	}
+ 
+ 	return 0;
+ }

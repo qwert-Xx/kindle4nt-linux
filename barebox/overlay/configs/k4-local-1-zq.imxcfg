@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Device label: k4-local-1 (D01100 LPDDR1); not a universal K4 default.
+# Measured: ROM records 1+16, PU=8 PD=4; ZQCAL.md, 2026-10-01.
+# Uses shipped SPL plus-one encoding. No automatic calibration.
+wm 32 0x1400012c 0x00000408
+wm 32 0x14000128 0x05090000
+wm 32 0x14000124 0x00310000
+wm 32 0x14000124 0x00200000
+wm 32 0x14000128 0x05090010
+wm 32 0x14000124 0x00310000
+wm 32 0x14000124 0x00200000

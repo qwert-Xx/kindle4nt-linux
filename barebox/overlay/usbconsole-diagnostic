@@ -1,0 +1,4 @@
+#!/bin/sh
+usbserial
+global.autoboot_timeout=300
+global.boot.default=zqcal-no-autoboot

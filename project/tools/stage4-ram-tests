@@ -1,0 +1,100 @@
+#!/bin/busybox sh
+# SPDX-License-Identifier: GPL-2.0-or-later
+# DEVICE SCRIPT, never run offline. RAM only; explicit approved session required.
+set -eu
+[ "${K4_STAGE4_SESSION:-}" = approved ] || { echo 'Explicit supervised device session required'; exit 2; }
+bb=/bin/busybox
+ro_check() {
+  found=0
+  for n in /sys/class/block/mmcblk*; do
+    [ -e "$n/ro" ] || continue
+    found=1; [ "$("$bb" cat "$n/ro")" = 1 ] || exit 1
+  done
+  [ "$found" = 1 ]
+  ! "$bb" grep -q /dev/mmcblk /proc/mounts
+  "$bb" grep -q ' /tmp tmpfs ' /proc/mounts
+  kill -0 "$("$bb" cat /tmp/watchdog-guard.pid)"
+  [ "$("$bb" cat /proc/sys/kernel/tainted)" = 0 ]
+}
+flash_sample() {
+  set -- /sys/bus/nvmem/devices/k4-panel-flash*/nvmem
+  [ "$#" = 1 ] && [ -f "$1" ]
+  "$bb" dd if="$1" bs=4096 count=1 2>/dev/null | "$bb" sha256sum
+}
+load_selected() {
+  if [ "${K4_STAGE4_DELAYED_MODULES:-0}" = 1 ]; then
+    case "${K4_STAGE4_TOOLS:-}" in /tmp/*) ;; *) exit 2 ;; esac
+    (cd "$K4_STAGE4_TOOLS"; "$bb" sha256sum -c SHA256SUMS)
+    case "$1" in gpio_keys) f=gpio_keys.ko ;; k4_panel_flash) f=k4-panel-flash.ko ;; *) exit 2 ;; esac
+    /sbin/insmod "$K4_STAGE4_TOOLS/$f"
+  else /sbin/modprobe "$1"; fi
+}
+ro_check
+case "${1:-}" in
+ preflight)
+  [ "$("$bb" uname -r)" = 6.6.157-k4-production ]
+  "$bb" cat /proc/cmdline /proc/modules /tmp/watchdog-guard.log
+  "$bb" cat /run/k4-input-coldplug.log 2>/dev/null || "$bb" cat /run/k4-modalias-coldplug.log
+  ! "$bb" grep -Eq 'dmatest|usbtest|k4_stock_audit|k4_pm_trace|k4_mc13892_monitor' /proc/modules
+  "$bb" grep -q '^gpio_keys ' /proc/modules
+  "$bb" grep -q '^k4_panel_flash ' /proc/modules
+  "$bb" cat /proc/bus/input/devices
+  flash_sample > /tmp/stage4-flash.sha
+  echo STAGE4_PREFLIGHT_PASS ;;
+ fiveway-cycle)
+  # Operator must close all input readers and release keys first.
+  /sbin/rmmod gpio_keys
+  ! "$bb" grep -q '^gpio_keys ' /proc/modules
+  load_selected gpio_keys
+  "$bb" grep -q '^gpio_keys ' /proc/modules
+  "$bb" cat /proc/bus/input/devices
+  echo STAGE4_FIVEWAY_RELOAD_READY_FOR_PHYSICAL_EVENTS ;;
+ panel-held)
+  if /sbin/rmmod k4_panel_flash; then echo UNEXPECTED_PANEL_UNLOAD; exit 1; fi
+  "$bb" grep -q '^k4_panel_flash ' /proc/modules
+  flash_sample > /tmp/stage4-flash-held.sha
+  "$bb" cmp /tmp/stage4-flash.sha /tmp/stage4-flash-held.sha
+  echo STAGE4_PANEL_CONSUMER_PIN_PASS ;;
+ delayed-load)
+  [ "${K4_STAGE4_DELAYED_MODULES:-0}" = 1 ]
+  ! "$bb" grep -Eq '^(gpio_keys|k4_panel_flash) ' /proc/modules
+  [ ! -d /sys/bus/i2c/drivers/k4-papyrus ]
+  load_selected gpio_keys
+  load_selected k4_panel_flash
+  echo STAGE4_MISSING_AT_RAM_START_DELAYED_LOAD_PASS ;;
+ panel-free)
+  # Dedicated lifecycle profile only, never attempt forced consumer removal.
+  [ ! -d /sys/bus/i2c/drivers/k4-papyrus ]
+  [ ! -d /sys/bus/platform/drivers/imx50-k4-epdc ]
+  flash_sample > /tmp/stage4-flash-free.sha
+  for cycle in 1 2; do
+    [ "$("$bb" cat /sys/module/k4_panel_flash/refcnt)" = 0 ]
+    /sbin/rmmod k4_panel_flash
+    ! "$bb" grep -q '^k4_panel_flash ' /proc/modules
+    load_selected k4_panel_flash
+    flash_sample > /tmp/stage4-flash-new.sha
+    "$bb" cmp /tmp/stage4-flash-free.sha /tmp/stage4-flash-new.sha
+  done
+  echo STAGE4_PANEL_FREE_RELOAD_PASS ;;
+ handoff)
+  [ "${K4_STAGE4_FUNCTIONAL_APPROVED:-}" = yes ]
+  dir=${2:?lifecycle package must be staged in /tmp};kexec=${3:?staged kexec path}
+  case "$dir" in /tmp/*) ;; *) exit 2 ;; esac
+  case "$kexec" in /tmp/*) ;; *) exit 2 ;; esac
+  (cd "$dir"; "$bb" sha256sum -c SHA256SUMS)
+  tools=${K4_STAGE4_TOOLS:?sealed tools staged in /tmp}
+  case "$tools" in /tmp/*) ;; *) exit 2 ;; esac
+  (cd "$tools"; "$bb" sha256sum -c SHA256SUMS)
+  [ "$kexec" = "$tools/kexec-arm-static" ]
+  root=${K4_STAGE4_TEST_ROOT:-$dir/k4-full-ram.cpio.gz}
+  [ "$root" = "$dir/k4-full-ram.cpio.gz" ] || [ "$root" = "$tools/lifecycle-missing-ram.cpio.gz" ]
+  /bin/k4-fb-probe blank
+  "$kexec" -l "$dir/k4-kernel.zImage" --dtb="$dir/k4-board.dtb" --initrd="$root" --command-line="$("$bb" cat /proc/cmdline)"
+  # After this message the controller must monitor the 120 s recovery window.
+  echo STAGE4_RAM_KEXEC_REQUEST
+  "$kexec" -e ;;
+ return)
+  [ "$("$bb" cat /sys/module/k4_mc13892_restart/parameters/ram_shutdown_timeout_ms)" = 1000 ]
+  "$bb" reboot -f ;;
+ *) echo 'preflight | fiveway-cycle | panel-held | panel-free | handoff PACKAGE KEXEC | return'; exit 2 ;;
+esac
