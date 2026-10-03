@@ -3001,22 +3001,6 @@
  	k4_restart_rollback(k);
  	return ret;
  }
-@@ -232,6 +238,7 @@
- 
- 	/* SPI/RTC preparation completed in process context. No sleeping here. */
- 	if (k->armed && ktime_get_boottime_ns() < k->deadline_ns) {
-+		k4_ram_trace_mark("K4 shutdown timeout");
- 		pr_emerg("K4 prepared shutdown timed out; emergency restart\n");
- 		emergency_restart(); /* ARM restart chain, bypasses device_shutdown(). */
- 	}
-@@ -259,6 +266,7 @@
- 			dev_info(k->dev, "RAM shutdown recovery deadline %u ms\n", ms);
- 			if (READ_ONCE(ram_shutdown_stall_ms) &&
- 			    READ_ONCE(ram_shutdown_stall_ms) <= 5000) {
-+				k4_ram_trace_mark("K4 shutdown stall test");
- 				msleep(READ_ONCE(ram_shutdown_stall_ms));
- 			}
- 		}
 @@ -271,11 +279,13 @@
  	struct k4_restart *k = container_of(nb, struct k4_restart, restart_nb);
  

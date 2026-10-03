@@ -1,0 +1,5 @@
+clock="UTC"
+clock_hctosys="YES"
+clock_systohc="YES"
+clock_adjfile="NO"
+clock_args="--rtc=/dev/rtc0"

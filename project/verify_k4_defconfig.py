@@ -3,7 +3,7 @@
 """Read-only config/recovery/clean-artifact gates for three K4 profiles."""
 import argparse,hashlib,json,pathlib,re,subprocess
 ROOT=pathlib.Path(__file__).resolve().parents[1]
-RECOVERY=('IMX50_PM','IMX50_OCRAM','K4_MC13892_STANDBY','K4_PM_HEALTH_CLOCK',
+RECOVERY=('IMX50_PM','IMX50_OCRAM','K4_MC13892_STANDBY',
           'POWER_RESET_K4_MC13892','CHARGER_K4_MC13892','USB_K4_PHY','IMX2_WDT',
           'KEXEC','BLK_DEV_INITRD','BLK_DEV_RAM','BLK_DEV_LOOP','EXT3_FS','MMC_BLOCK',
           'MMC_SDHCI_ESDHC_IMX','USB_CONFIGFS','USB_CONFIGFS_ACM','USB_CONFIGFS_RNDIS',

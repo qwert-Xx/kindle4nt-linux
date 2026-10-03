@@ -1,0 +1,49 @@
+#!/bin/busybox sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Maintenance RAM bootstrap: validate the embedded ext3 root read-only before switch_root.
+set -eu
+bb=/bin/busybox
+root_backend=maintenance-ram
+$bb mount -t proc proc /proc
+$bb mount -t sysfs sysfs /sys
+$bb mount -t devtmpfs devtmpfs /dev
+mark() { /bin/k4-bootmark "$1"; echo "$1" > /dev/kmsg; }
+failed() {
+    mark K4_MAINTENANCE_ROOT_FAILED || true
+    echo 'K4 maintenance RAM bootstrap failed; no userspace watchdog feeding' >&2
+    while :; do $bb sleep 1; done
+}
+trap failed EXIT
+mark K4_MAINTENANCE_ROOT_BOOTSTRAP
+$bb grep -q '^rootfs / rootfs ' /proc/mounts
+! $bb grep -q '/dev/mmcblk' /proc/mounts
+. /bin/k4-root-select
+[ -f /rootfs.ext3 ] && [ ! -L /rootfs.ext3 ]
+loop=$($bb losetup -f)
+$bb losetup "$loop" /rootfs.ext3
+cmdline="$($bb cat /proc/cmdline) root=UUID=8a25ce4d-0367-4a11-b617-d3846be75b46 ro rootfstype=ext3"
+k4_parse_root "$cmdline"
+k4_select_root
+$bb mount -t ext3 -o ro,noload,noatime "$root_device" /newroot
+[ "$($bb cat /newroot/etc/k4-root-profile)" = busybox-maintenance ]
+[ -x /newroot/sbin/init ] && [ -d "/newroot/lib/modules/$($bb uname -r)" ]
+mark K4_MAINTENANCE_ROOT_CHECKED_RO
+if [ "$root_access" = rw ]; then
+    $bb umount /newroot
+    if [ "$root_backend" = direct ]; then
+        name=${root_device##*/}; parent=${name%p*}
+        [ -b "/dev/$parent" ]
+        [ "$($bb cat "/sys/class/block/$parent/ro")" = 0 ]
+    fi
+    [ "$($bb cat "/sys/class/block/${root_device##*/}/ro")" = 0 ]
+    # Reopen normally: journal recovery is enabled for the writable root.
+    $bb mount -t ext3 -o rw,noatime "$root_device" /newroot
+    mark K4_MAINTENANCE_ROOT_MOUNTED_RW
+fi
+$bb mount -t tmpfs -o mode=0755 tmpfs /run
+printf '%s\n' "$root_device" > /run/k4-root-device
+printf '%s\n' "$root_backend" > /run/k4-root-backend
+printf '%s\n' "$root_access" > /run/k4-root-access
+mark K4_MAINTENANCE_ROOT_MOUNTED
+for name in dev proc sys run; do $bb mount --move "/$name" "/newroot/$name"; done
+exec $bb switch_root /newroot /sbin/init

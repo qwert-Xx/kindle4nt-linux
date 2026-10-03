@@ -1,0 +1,10 @@
+#!/bin/busybox sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Flush the root before shutdown.
+set -eu
+bb=/bin/busybox
+$bb sync
+$bb mount -o remount,ro /
+$bb awk '$2=="/" {if ($4!~/^ro(,|$)/) exit 1;found=1} END {if (!found) exit 1}' /proc/mounts
+/bin/k4-bootmark K4_SERVICE_ROOT_SHUTDOWN_RO
+echo K4_SERVICE_ROOT_SHUTDOWN_RO > /dev/kmsg

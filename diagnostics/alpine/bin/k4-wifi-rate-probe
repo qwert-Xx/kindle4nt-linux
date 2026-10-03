@@ -1,0 +1,126 @@
+#!/bin/sh
+# Explicit RAM-only rate observations around eight serial, checked TCP streams.
+set -eu
+bb=/bin/busybox
+ath=/sys/kernel/debug/ieee80211/phy0/ath6kl
+healthy() {
+    test "$($bb cat /sys/block/mmcblk2/ro)" = 1
+    ! $bb grep -q /dev/mmcblk /proc/mounts
+    test "$($bb cat /proc/sys/kernel/tainted)" = 0
+    test "$($bb cat /sys/class/udc/ci_hdrc.0/state)" = configured
+    /sbin/wpa_cli -i wlan0 status | $bb grep -q '^wpa_state=COMPLETED$'
+}
+snapshot() {
+    echo "RATE_SNAPSHOT phase=$1"
+    $bb cat /proc/uptime
+    $bb cat /sys/devices/system/cpu/cpufreq/policy0/scaling_cur_freq
+    /bin/iw dev wlan0 get power_save
+    /bin/iw dev wlan0 link | $bb grep -e signal -e bitrate -e freq
+    for dev in usb0 wlan0; do
+        for field in rx_bytes tx_bytes rx_errors tx_errors rx_dropped tx_dropped; do
+            echo "$dev $field $($bb cat /sys/class/net/$dev/statistics/$field)"
+        done
+    done
+    for file in tgt_stats credit_dist_stats endpoint_stats; do
+        echo "ATH6KL_STATS file=$file"
+        $bb timeout 5 $bb cat "$ath/$file"
+    done
+    $bb cat /proc/net/snmp /proc/net/netstat
+    echo MMC_SDIO_IOS
+    $bb cat /sys/kernel/debug/mmc1/ios
+}
+case "${1:-}" in
+start)
+    healthy
+    test ! -e /tmp/wifi-rate-server.pid
+    if ! $bb grep -q ' /sys/kernel/debug debugfs ' /proc/mounts; then
+        $bb mount -t debugfs debugfs /sys/kernel/debug
+    fi
+    test -r "$ath/tgt_stats"
+    /bin/sh /bin/k4-watchdog-probe 600 expire
+    snapshot before > /tmp/wifi-rate-before.log
+    for dev in usb0 wlan0; do
+        for field in rx_bytes tx_bytes; do
+            $bb cat /sys/class/net/$dev/statistics/$field > /tmp/wifi-rate-$dev-$field.before
+        done
+    done
+    $bb cat /var/run/k4-wpa.pid /var/run/k4-udhcpc.pid > /tmp/wifi-rate-service-pids
+    $bb nohup /bin/sh "$0" sample > /tmp/wifi-rate-samples.log 2>&1 </dev/null &
+    echo $! > /tmp/wifi-rate-sampler.pid
+    $bb nohup /bin/k4-network-stream 0.0.0.0 16667 8 500 0 > /tmp/wifi-rate-stream.log 2>&1 </dev/null &
+    echo $! > /tmp/wifi-rate-server.pid
+    $bb sleep 1
+    $bb grep '^STREAM_READY ' /tmp/wifi-rate-stream.log
+    ;;
+sample)
+    exec 9>/tmp/wifi-rate-credit.lock
+    i=0
+    while test "$i" -lt 500; do
+        echo "RATE_SAMPLE n=$i uptime=$($bb cut -d ' ' -f 1 /proc/uptime) cpu_khz=$($bb cat /sys/devices/system/cpu/cpufreq/policy0/scaling_cur_freq) rx=$($bb cat /sys/class/net/wlan0/statistics/rx_bytes) tx=$($bb cat /sys/class/net/wlan0/statistics/tx_bytes)"
+        if test "${K4_WIFI_RATE_CREDITS:-0}" = 1; then
+            # PM rebuilds the endpoint list; do not read it during that window.
+            if $bb flock -n 9; then
+                echo "RATE_CREDIT n=$i"
+                $bb cat "$ath/credit_dist_stats"
+                if test "$((i%10))" = 0; then
+                    echo "RATE_IRQ n=$i"
+                    $bb cat /proc/interrupts
+                fi
+                $bb flock -u 9
+            else
+                echo "RATE_CREDIT_SKIPPED n=$i reason=pm"
+            fi
+        fi
+        i=$((i+1))
+        $bb sleep 1
+    done
+    ;;
+pre_stop)
+    test "$($bb grep -c '^STREAM_PASS ' /tmp/wifi-rate-stream.log)" = 4
+    snapshot pre_stop > /tmp/wifi-rate-pre-stop.log
+    ;;
+pm)
+    test "$($bb grep -c '^STREAM_PASS ' /tmp/wifi-rate-stream.log)" = 4
+    exec 9>/tmp/wifi-rate-credit.lock
+    $bb flock 9
+    echo RATE_CREDIT_PM_LOCK
+    /bin/k4-dual-rtc --mem
+    # Firmware restart precedes reassociation; wait for the network phase.
+    i=0
+    until healthy; do
+        i=$((i+1)); test "$i" -lt 30; $bb sleep 1
+    done
+    snapshot post_stop > /tmp/wifi-rate-post-stop.log
+    echo K4_WIFI_RATE_PM_READY
+    ;;
+finish)
+    healthy
+    $bb grep -q '^NETWORK_STREAM_PASS sessions=8$' /tmp/wifi-rate-stream.log
+    snapshot final > /tmp/wifi-rate-final.log
+    $bb cat /var/run/k4-wpa.pid /var/run/k4-udhcpc.pid > /tmp/wifi-rate-service-pids-after
+    $bb cmp /tmp/wifi-rate-service-pids /tmp/wifi-rate-service-pids-after
+    test "$($bb cat /sys/power/suspend_stats/success)" = 1
+    test "$($bb cat /sys/power/suspend_stats/fail)" = 0
+    mib=${2:-64}
+    test "$mib" -ge 1 && test "$mib" -le 64
+    minimum=$((mib*2*1048576))
+    for dev in usb0 wlan0; do
+        for field in rx_bytes tx_bytes; do
+            now=$($bb cat /sys/class/net/$dev/statistics/$field)
+            old=$($bb cat /tmp/wifi-rate-$dev-$field.before)
+            delta=$((now-old))
+            echo "RATE_PATH_BYTES device=$dev field=$field delta=$delta minimum=$minimum"
+            test "$delta" -ge "$minimum"
+        done
+    done
+    $bb ping -c 2 -W 2 192.168.210.1
+    h0=$($bb dd if=/dev/mmcblk2 bs=1048576 count=1 2>/dev/null | $bb sha256sum)
+    h16=$($bb dd if=/dev/mmcblk2 bs=1048576 skip=16 count=1 2>/dev/null | $bb sha256sum)
+    echo "$h0"
+    echo "$h16"
+    test "${h0%% *}" = c6f7f713bb57aad2203df61ffc348103848e41dea9451ae4b86c98ddd6862265
+    test "${h16%% *}" = 4613632586282e084c1e148d63be1ee6d800f14d6691e9dc1d5628d3921e5a18
+    echo K4_WIFI_RATE_STOP_PASS
+    ;;
+*) exit 2 ;;
+esac

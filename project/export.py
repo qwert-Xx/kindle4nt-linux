@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Export production/debug patch series without research history or private inputs."""
-import argparse,difflib,pathlib,re,shutil,subprocess
+import argparse,difflib,json,pathlib,re,shutil,subprocess
 ROOT=pathlib.Path(__file__).resolve().parents[1]
-GROUPS={'01-platform':['arch/arm/mach-imx','arch/arm/include','arch/arm/kernel','arch/arm/boot/compressed','init'],
+GROUPS={'01-platform':['arch/arm/configs/k4_defconfig','arch/arm/mach-imx','arch/arm/include','arch/arm/kernel','arch/arm/boot/compressed','init'],
 '02-clocks':['drivers/clk','drivers/pinctrl','include/dt-bindings/clock'],
 '03-power':['drivers/i2c','drivers/nvmem','drivers/mfd','drivers/regulator','drivers/power','drivers/rtc','drivers/watchdog','drivers/soc','include/linux/mfd','include/linux/k4'],
 '04-usb':['drivers/usb'],'05-wifi-mmc':['drivers/mmc','drivers/net/wireless/ath/ath6kl'],
@@ -67,15 +67,54 @@ def main():
     (out/'kernel/debug-patches/01-k4-diagnostics.patch').write_text(''.join(debug))
     shutil.copyfile(ROOT/'project/debug-patches/02-k4-trace-hooks.patch',out/'kernel/debug-patches/02-k4-trace-hooks.patch')
     (out/'kernel/debug-patches/series').write_text('01-k4-diagnostics.patch\n02-k4-trace-hooks.patch\n')
-    shutil.copytree(ROOT/'project',out/'project',ignore=shutil.ignore_patterns('__pycache__'))
-    (out/'README.md').write_text('<!-- SPDX-License-Identifier: CC-BY-4.0 -->\n# Kindle 4 NT\n\nApply kernel/patches/series to a separate Linux v6.6.157 worktree. Debug additionally requires kernel/debug-patches/series. Build with make -C project images SOURCE=/path/to/linux INPUTS=/path/to/inputs.json OUT=/path/to/out. Read project/README.md. No device deployment is performed.\n')
-    # A selected source overlay, not the frozen loader image or stock binaries.
-    overlay=ROOT/'porting/barebox-zqcal'
-    shutil.copytree(overlay,out/'barebox/overlay',ignore=shutil.ignore_patterns('__pycache__'))
+    # Copy tracked inputs only, preserving target-side symlinks and modes.
+    selections = ['project', 'rootfs', 'diagnostics', 'sources']
+    barebox = ['build.py', 'board.patch', 'v9_defconfig', 'defaultenv-v9',
+               'build-plugin.py', 'plugin_common.py', 'ocram-stock-entry.S',
+               'boot-trace.c', 'maintenance.its', 'inspect_image.py']
+    selections += ['porting/barebox-emmc/' + name for name in barebox]
+    selections += ['porting/inspect-waveform.py', 'porting/RELEASE-DEPLOY-PUBLIC-20261003.md']
+    for name in git('ls-files', '--', *selections).decode().splitlines():
+        source = ROOT/name
+        target = out/name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_symlink():
+            target.symlink_to(source.readlink())
+        else:
+            shutil.copy2(source, target)
+    (out/'.gitignore').write_text('__pycache__/\n*.pyc\nout/\n')
+    (out/'README.md').write_text(
+        '<!-- SPDX-License-Identifier: CC-BY-4.0 -->\n# Kindle 4 Non-Touch Linux\n\n'
+        '从 [项目入口](project/README.md)开始：构建、RAM 维护、boot1 与 Alpine 安装。\n\n'
+        '公开树提供源码补丁与配方，不分发固件、校准、波形、凭据或设备备份。'
+        '上游版本与 SHA256 见 sources/manifest.json 及 project 的锁文件；不使用子模块。\n\n'
+        '先取得 Linux v6.6.157，在独立源码目录按 kernel/patches/series 顺序应用补丁；'
+        'debug 另按 kernel/debug-patches/series 应用。按构建指南执行 '
+        '`make -C project images SOURCE=/path/to/linux INPUTS="$PRIVATE/inputs.json" OUT="$OUT/images"`。\n')
     (out/'LICENSES').mkdir()
-    for name,location in [('GPL-2.0','preferred'),('LGPL-2.1','preferred'),('BSD-2-Clause','preferred'),('BSD-3-Clause','preferred'),('MIT','preferred'),('CC-BY-4.0','dual')]:
-        shutil.copyfile(ROOT/'LICENSES'/location/name,out/'LICENSES'/name)
-    (out/'README.md').write_text('<!-- SPDX-License-Identifier: CC-BY-4.0 -->\n# Kindle 4 NT D01100\n\nLocal public-history draft, not a hardware-accepted release. Read [scope and status](project/docs/README.md), [build](project/docs/BUILD.md), [RAM recovery](project/docs/RAM-BOOT.md), [ZQ](project/docs/ZQCAL.md) and [known issues](project/docs/KNOWN-ISSUES.md). Apply kernel/patches/series to separate Linux v6.6.157 sources; debug additionally applies kernel/debug-patches/series. No device operation or deployment is automatic. Firmware/waveforms/credentials and raw evidence are excluded.\n')
+    for identifier in ('GPL-2.0-only', 'GPL-2.0-or-later', 'CC-BY-4.0'):
+        source = ROOT/'LICENSES'/('dual/CC-BY-4.0' if identifier == 'CC-BY-4.0' else 'preferred/GPL-2.0')
+        shutil.copyfile(source, out/'LICENSES'/(identifier+'.txt'))
     shutil.copyfile(ROOT/'project/THIRD-PARTY.md',out/'THIRD-PARTY.md')
+    shutil.copyfile(ROOT/'project/public/LICENSE-POLICY.md',out/'LICENSE-POLICY.md')
+    notices = json.loads((ROOT/'project/public/copyrights.json').read_text())
+    provenance = []
+    (out/'REUSE.toml').write_text('version = 1\n\n[[annotations]]\npath = ["porting/barebox-emmc/defaultenv-v9/**"]\nprecedence = "aggregate"\nSPDX-FileCopyrightText = "2026 qwert-Xx"\nSPDX-License-Identifier = "GPL-2.0-or-later"\n')
+    for target in sorted(out.rglob('*')):
+        if not target.is_file() or target.is_symlink() or target.suffix == '.license' or target.is_relative_to(out/'LICENSES'):
+            continue
+        name = target.relative_to(out).as_posix()
+        if name.startswith('porting/barebox-emmc/defaultenv-v9/'):
+            continue  # REUSE annotations keep packed environment bytes unchanged.
+        identifier = 'CC-BY-4.0' if target.suffix == '.md' else 'GPL-2.0-or-later'
+        if target.suffix == '.patch': identifier = 'GPL-2.0-only'
+        authors = ['2026 qwert-Xx'] + notices.get(name, [])
+        pathlib.Path(str(target)+'.license').write_text(''.join('SPDX-FileCopyrightText: '+x+'\n' for x in authors)+'SPDX-License-Identifier: '+identifier+'\n')
+        if len(authors) > 1:
+            provenance.append(dict(file=name, copyright_lines=authors[1:], basis='Retained public attribution and current source headers', status='retained; current export awaits owner review'))
+    (out/'COPYRIGHT-PROVENANCE.json').write_text(json.dumps(provenance,ensure_ascii=False,indent=2)+'\n')
+    (out/'COPYRIGHT-PROVENANCE.json.license').write_text('SPDX-FileCopyrightText: 2026 qwert-Xx\nSPDX-License-Identifier: CC-BY-4.0\n')
+    (out/'COPYRIGHT-PROVENANCE.md').write_text('<!-- SPDX-License-Identifier: CC-BY-4.0 -->\n# Copyright provenance\n\nOriginal authors are retained in source headers and REUSE sidecars. Per-file notices are listed in COPYRIGHT-PROVENANCE.json and maintained in project/public/copyrights.json. Kernel and barebox patches retain upstream and stock-derived attribution. The boot1 plugin refers to the stock ROM interface; no stock image is distributed. Earlier owner-approved classifications remain retained where their files are exported. New source-header attribution and the current export await the owner review before pushing.\n')
+    (out/'COPYRIGHT-PROVENANCE.md.license').write_text('SPDX-FileCopyrightText: 2026 qwert-Xx\nSPDX-License-Identifier: CC-BY-4.0\n')
     print('EXPORTED_WITHOUT_RESEARCH_HISTORY')
 if __name__=='__main__':main()

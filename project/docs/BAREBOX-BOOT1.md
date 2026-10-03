@@ -1,82 +1,110 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
-# D01100 boot1 barebox
+# boot1 引导程序
 
-这是独立 boot1 主题：上游 barebox v2026.09.0 + Kindle 板级修改。通用 MCI、MMC 与 watchdog 驱动不修改。v8 默认探测 non-removable eMMC，以 ext4 读取 p1 的 /boot/zImage 与 /boot/imx50-kindle-k4.dtb，无 initrd；不读 idme、不加载持久环境。USB串口 Ctrl-C 中断 sleep 5，进入 shell/YMODEM RAM 上传；不要复位前按上。保留 MCI 写入能力，但没有默认存储写入动作。只覆盖 D01100/LPDDR1；不要套用于其它板型。
+barebox v9 从 eMMC boot1 启动，默认启用 USB 串口。上游 autoboot 倒计时 5 秒，Ctrl-C 进入 shell；否则读取用户区第一分区的 `/boot/zImage` 与 `/boot/imx50-kindle-k4.dtb`，直接启动 Alpine。
 
-## 构建配方
+## 构建
 
-使用既有 ARM GCC/binutils、make、Python 3，不装新依赖。上游 Git 必须包含 v2026.09.0。外部 USB 基准镜像须来自已验证的23/8配置；stock-boot0-reference 是用户自己导出的原厂 boot0 二进制，仅用于复制44字节ROM头，不随公共仓库发布。配置见 barebox/boot1/barebox.config。输出为新目录。
+在仓库根：
 
 ```sh
-sh barebox/boot1/build.sh /absolute/barebox-git barebox/boot1/barebox.config /absolute/verified-usb.img /absolute/new-boot1-build /absolute/stock-boot0-reference.img
-sha256sum /absolute/new-boot1-build/plugin/barebox-boot1-plugin-candidate.img
+python3 porting/barebox-emmc/build.py --cache "$PRIVATE/barebox-cache" --output "$OUT/barebox-v9"
+sha256sum "$OUT/barebox-v9/plugin/barebox-boot1-plugin-candidate.img"
 ```
 
-脚本仅解包上游、修改板级源码、交叉编译和包装镜像，不连接设备。记录外部输入SHA、编译器版本和输出 audit.json/SHA256SUMS。可设 KBUILD_BUILD_TIMESTAMP/KBUILD_BUILD_VERSION 固定版本元数据。公共源码保留WDT半字诊断地址修正；v8 环境使用标准 emmc/host-ram boot 顺序，sleep 5 等待 Ctrl-C。挂载、缺文件或 bootm 返回错误时回落主机加载；跳转后崩溃不保证回落。固定元数据可用 KBUILD_BUILD_TIMESTAMP="Fri Oct 2 20:48:05 CST 2026" 与 KBUILD_BUILD_VERSION=1。已部署的本机v8验证不自动覆盖任意外部输入重建候选。
+上游为锁定的 2026.09.0 tarball，板级改动在 `board.patch`，默认配置和环境在 `v9_defconfig`、`defaultenv-v9/`。已有缓存可追加 `--offline`。输出需为新目录；`--config` 选择其它 barebox 配置。当前设备记录的源码构建 v9 为 266240 字节，SHA256 `fbcd7c01a1b4c213a50b4389f35f9c6c0143e976940d5295fd4bc3ee24fe0e40`；自己的构建以实际输出 SHA 为准。
 
-## plugin/OCRAM 初始化
+## 备份和写入
 
-ROM MMC首读2KiB：第一IVT@0x400，加载基址0xf8006000、入口0xf8006004、长度0x800、plugin=1；原厂push/pop与ROM栈保留。135条DCD操作压缩为8字节软件记录，35条在第一IVT之前，100条在0x480..0x79f，地址低两位编码类型；实际访问清低两位，132次32位WRITE和3次CHECK同值同序同宽度，ZQ23/8不变。序列表完全来自外部USB基准。
+先准备[RAM 维护与 ROM 恢复](RAM-BOOT.md)。以下命令在设备上已有 Alpine 或 RAM 维护 shell 中运行。设备号示例为当前 6.6 的 `mmcblk2`，先用 `ls /sys/class/block` 确认。原厂内核可能使用不同编号。
 
-SI_REV=0x11调用ROM helper 0x2aad，否则0x2a19；恢复ROM寄存器并返回1。ROM搬运完整镜像至0x70020000，第二IVT@0x42c、非plugin入口0x70021000；barebox主体位于文件0x1000。两个DCD指针为0，首段可完整落入ROM窗口。
-
-plugin阶段记录@0xf8008080；barebox记录@0xf8008000，记录SRC及DDR状态。WCR/WSR/WRSR用16位读取0x53f98000/02/04，旧错误GPIO5数据不作WDT证据。主体设置watchdog120秒/autoping，不更改DDR、PLL或充电参数。
-
-## 写入、激活与回退（操作说明，非自动脚本）
-
-先建立可用的“下键+复位→ROM→普通USB barebox→Linux RAM”人工恢复路径，并准备足电、维护工具与主机备份。本主题不承诺自动退回boot0。以下设备名仅是此Linux枚举示例，必须用容量/身份确认；操作不要写用户区或boot0，不挂载eMMC。使用标准 mmc-utils `mmc` 和已有 blockdev/dd/cmp/sync。先保存EXT_CSD文本及完整boot1，复制到主机核验：
+完整备份用户区、boot0、boot1 与 EXT_CSD，并复制到主机保存。先在主机上传构建镜像和[维护工具](../userspace/MAINTENANCE.md)：
 
 ```sh
-mmc extcsd read /dev/mmcblk2 > /ram/extcsd-before.txt
-dd if=/dev/mmcblk2boot1 of=/ram/boot1-before.bin bs=512 count=2048
-sha256sum /ram/boot1-before.bin /ram/candidate.img
+ssh -p 2222 root@169.254.212.2 'mkdir -p /tmp/boot1'
+ssh -p 2222 root@169.254.212.2 'cat > /tmp/boot1/barebox.img' < "$OUT/barebox-v9/plugin/barebox-boot1-plugin-candidate.img"
+ssh -p 2222 root@169.254.212.2 'cat > /tmp/boot1/mmc-tools.tar.gz' < "$OUT/mmc-tools/maintenance.tar.gz"
 ```
 
-本机boot区1MiB；别的容量按实际调整完整备份长度。确认PARTITION_CONFIG=0x48、BOOT_BUS_WIDTH=0x00、boot1硬件未锁写；ACK bit6保留。备份不得省略。构造预期完整读回，保持镜像之外旧尾部；只解除boot1的force_ro与块设备RO：
+下列命令在设备维护 shell 执行，备份 boot1 和 EXT_CSD：
 
 ```sh
-cp /ram/boot1-before.bin /ram/expected.bin
-dd if=/ram/candidate.img of=/ram/expected.bin bs=512 conv=notrunc
-restore_ro() { echo 1 > /sys/class/block/mmcblk2boot1/force_ro; blockdev --setro /dev/mmcblk2boot1; }
-trap restore_ro EXIT
-trap 'exit 1' HUP INT TERM
-set -e
+mkdir -p /tmp/boot1
+cd /tmp/boot1
+tar -xzpf mmc-tools.tar.gz
+export PATH="$PWD/maintenance:$PATH"
+extcsd-read /dev/mmcblk2 > extcsd.before.bin
+dd if=/dev/mmcblk2boot1 of=boot1.before.bin bs=512
+sha256sum boot1.before.bin barebox.img
+```
+
+通过主机复制这两个备份，例如维护系统：
+
+```sh
+ssh -p 2222 root@169.254.212.2 'cat /tmp/boot1/boot1.before.bin' > "$PRIVATE/boot1.before.bin"
+ssh -p 2222 root@169.254.212.2 'cat /tmp/boot1/extcsd.before.bin' > "$PRIVATE/extcsd.before.bin"
+```
+
+继续在设备 shell 写入，并比较完整分区（镜像后的尾部保持原内容）：
+
+```sh
+cd /tmp/boot1
+cp boot1.before.bin expected.bin
+dd if=barebox.img of=expected.bin bs=512 conv=notrunc
+trap 'echo 1 > /sys/class/block/mmcblk2boot1/force_ro; blockdev --setro /dev/mmcblk2boot1' EXIT
 echo 0 > /sys/class/block/mmcblk2boot1/force_ro
 blockdev --setrw /dev/mmcblk2boot1
-dd if=/ram/candidate.img of=/dev/mmcblk2boot1 bs=512 conv=notrunc
+dd if=barebox.img of=/dev/mmcblk2boot1 bs=512 conv=notrunc
 sync
-dd if=/dev/mmcblk2boot1 of=/ram/boot1-after.bin bs=512 count=2048
-cmp /ram/expected.bin /ram/boot1-after.bin
-restore_ro
-trap - EXIT HUP INT TERM
-mmc extcsd read /dev/mmcblk2
-```
-
-读回全部相同且179仍0x48后再独立激活。179命令发送到主设备，标准mmc-utils只写该字节；成功或失败都恢复主设备RO：
-
-```sh
-trap 'blockdev --setro /dev/mmcblk2' EXIT
-blockdev --setrw /dev/mmcblk2
-mmc extcsd write 179 0x50 /dev/mmcblk2
-mmc extcsd read /dev/mmcblk2
-blockdev --setro /dev/mmcblk2
+dd if=/dev/mmcblk2boot1 of=readback.bin bs=512
+cmp expected.bin readback.bin
+sha256sum readback.bin
+echo 1 > /sys/class/block/mmcblk2boot1/force_ro
+blockdev --setro /dev/mmcblk2boot1
 trap - EXIT
 ```
 
-必须人工核对PARTITION_CONFIG=0x50，再冷复位观察串口、plugin/SRC/DDR诊断，核验自动加载eMMC根与正式功能及恢复。普通USB镜像启动不能证明MMC plugin/ROM helper运行。
+这会替换 boot1；断电或错误镜像可能导致引导失败，需要 ROM 下载恢复。boot0 是原厂启动内容；覆盖 boot0 会失去原厂引导路径。这里的 boot 分区 force_ro 与 blockdev 操作是写入时的局部操作，不是系统启动的全盘只读策略。
 
-回退：下键+复位进ROM、普通USB恢复到Linux RAM，执行上述179命令组，把0x50改为0x48，确认读回后复位。只改变启动选择，不擦boot1，不改boot0、不改BOOT_BUS_WIDTH，不写永久硬件保护。
+## 选择启动分区
 
-低电3400/3600mV软件放行策略按用户决定不实现：MC13892硬件可在CPU不运行时充电；这不等于已验证完全耗尽电池的实际行为。
+读取当前 EXT_CSD[179]：
 
-离线配方已实际完成ARM构建；首段结构、序列表、ROM ABI/执行分支及头/表破坏检查7项通过。公共内容仅含源码/配置/说明，未包含stock镜像、设备身份、原始日志、固件、波形或凭据。构建成功不代替新候选冷验。
+```sh
+extcsd-read /dev/mmcblk2 > /tmp/extcsd.bin
+od -An -tx1 -j179 -N1 /tmp/extcsd.bin
+```
 
-## 当前状态（2026-10-03，既有实机记录）
+当前部署值为 `0x50`（BOOT_ACK 与 boot1）。已经为 0x50 时更新镜像无需更改它。首次由原厂 `0x48`（boot0）切换时，使用维护工具 mmc-utils：
 
-boot1 barebox v8，EXT_CSD[179]=0x50，默认 eMMC p1 Alpine 3.24.2；BusyBox 根作为维护/备选。
-USB 串口发送 Ctrl-C（0x03）中断 boot/emmc 的 sleep 5 进入 shell，再 YMODEM 加载方案 A RAM 维护包（k4-maint-ram-20261003，900/30 expire-health）；不要复位前按上。5秒从脚本运行计起，Windows枚举可能缩短实际主机窗口，窗口末尾和电池独立冷启动待验。
-WDI 原厂方案 A 为 ALT2/0x0c，正常态由 restart pinctrl 持有。Alpine 正常根持续 watchdog 喂狗，无有限 RAM guard；Wi-Fi使用官方 main 的 wpa_supplicant 2.11-r4。
-Alpine 首次启动与3轮正常 reboot、两档 RTC STOP/内存保持/醒后刷新、NTP/SRTC正常关机读写和 HTTPS apk update 已有实机记录；长期运行、upgrade、第二台 K4 与物理电源轨仍未验。详 [Alpine 配方](ALPINE-ROOT.md) 与 [guard 对照](RAM-GUARD-COMPARISON.md)。发布前需用户许可审阅。
-本次只离线编辑、构建和扫描，未访问设备、未 push。默认根更新不意味着覆盖所有冷启动/耐久验收。
+```sh
+mmc extcsd write 179 0x50 /dev/mmcblk2
+mmc extcsd read /dev/mmcblk2
+```
 
-公开 v8 输出须与已部署镜像逐字节一致，SHA256 `b283f374a5fda6e7ba2c5c3b83ba9f67a569c1e63493d9ab4ea3b79febda0606`。emmc-v8/usbconsole-v8/host-ram-v7 使用 .license 旁注，不向编译环境脚本插入许可注释。plugin/132写+3检查及前4096字节保持v7。
+更改 179 会改变下次启动来源；错误值可能使设备无法正常引导。它不是熔丝，可在可用维护系统中恢复备份中的值。恢复原厂 boot0 启动时，先确认自己的 boot0 备份和内容可用，再恢复原来 179 的值；不能靠选择 boot0 恢复已被覆盖的用户区。
+
+## shell、bootargs 和 USB
+
+默认环境不保存到 eMMC。当前 bootargs 为 `linux.bootargs.k4` 与 `nv/linux.bootargs.console` 等命名空间的组合。`nv/linux.bootargs.console` 默认含 `fbcon=map:1 logo.nologo`。在 shell 可查看和改变变量，例如：
+
+```sh
+printenv global.linux.bootargs.k4
+nv linux.bootargs.console="fbcon=map:1 logo.nologo"
+```
+
+这里的更改只影响当前会话；要改变镜像默认值，修改 `defaultenv-v9/nv/linux.bootargs.console` 后重建。
+
+统一分区表：
+
+```sh
+global.system.partitions="/dev/mmc2.boot0(boot0)r,/dev/mmc2.boot1(boot1)r,/dev/mmc2(user)r"
+```
+
+`r` 为 DFU Readback 标志，表中三块区域可被 USB 存储功能访问，写入会改变设备数据。按需一次启用一种功能：
+
+```sh
+usbgadget -a -A
+```
+
+上例为 fastboot；DFU 使用 `usbgadget -a -D`，UMS 使用 `usbgadget -a -S`。组合 DFU/fastboot 存在[枚举问题](KNOWN-ISSUES.md)。维护 FIT 与恢复 boot1 备份的流程见[恢复指南](RAM-BOOT.md)。

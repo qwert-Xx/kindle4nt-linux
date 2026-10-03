@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Source after setting bb and root_backend. Helpers never mount or unlock storage.
+k4_root_error() { echo "K4_ROOT_SELECTION_ERROR $*" >&2; return 1; }
+k4_parse_root() {
+    root_request=; root_access=ro; root_type=ext3; root_wait=30; root_delay=0
+    set -f
+    for word in $1; do
+        case "$word" in
+            root=*) root_request=${word#root=} ;;
+            ro|rw) root_access=$word ;;
+            rootfstype=*) root_type=${word#rootfstype=} ;;
+            rootwait=*) root_wait=${word#rootwait=} ;;
+            rootwait) root_wait=30 ;;
+            rootdelay=*) root_delay=${word#rootdelay=} ;;
+            rootflags=*) [ -z "${word#rootflags=}" ] || k4_root_error 'rootflags unsupported in maintenance RAM' || return 1 ;;
+        esac
+    done
+    case "$root_access" in ro|rw) ;; *) k4_root_error 'invalid root access';return 1 ;; esac
+    [ "$root_type" = ext3 ] || k4_root_error 'maintenance RAM filesystem must be ext3' || return 1
+    case "$root_wait:$root_delay" in *[!0-9:]*|:*|*:) k4_root_error 'invalid wait/delay'; return 1 ;; esac
+    [ "$root_wait" -le 60 ] && [ "$root_delay" -le 30 ] || k4_root_error 'wait/delay exceeds finite bootstrap budget' || return 1
+    case "$root_request" in
+        /dev/*) ;;
+        UUID=?*|LABEL=?*) case "$root_request" in *[!A-Za-z0-9_=.-]*) k4_root_error 'invalid filesystem identity';return 1 ;; esac ;;
+        *) k4_root_error 'root must be a device, UUID or LABEL'; return 1 ;;
+    esac
+}
+k4_check_root_device() {
+    root_device=$($bb readlink -f "$1") || return 1
+    [ -b "$root_device" ] || return 1
+    case "$root_backend" in
+        direct)
+            [ "${root_device%/*}" = "${k4_dev_dir:-/dev}" ] || return 1
+            name=${root_device##*/}
+            echo "$name" | $bb grep -Eq '^mmcblk[0-9]+p[0-9]+$' || return 1
+            [ -s "${k4_sys_dir:-/sys}/class/block/$name/partition" ] || return 1
+            ;;
+        maintenance-ram)
+            name=${root_device##*/}
+            echo "$name" | $bb grep -Eq '^loop[0-9]+$' || return 1
+            [ "$($bb cat "${k4_sys_dir:-/sys}/class/block/$name/dev" | $bb cut -d: -f1)" = 7 ] || return 1
+            [ "$($bb cat "${k4_sys_dir:-/sys}/class/block/$name/loop/backing_file")" = /rootfs.ext3 ] || return 1
+            ;;
+        *) return 1 ;;
+    esac
+}
+k4_select_root() {
+    [ "$root_delay" = 0 ] || $bb sleep "$root_delay"
+    attempt=0
+    while :; do
+        case "$root_request" in
+            /dev/*) candidate=$root_request ;;
+            *) candidate=$($bb findfs "$root_request" 2>/dev/null) || candidate= ;;
+        esac
+        if [ -n "$candidate" ] && k4_check_root_device "$candidate"; then return 0; fi
+        [ "$attempt" -lt "$root_wait" ] || k4_root_error 'root device not available or unsupported' || return 1
+        attempt=$((attempt+1)); $bb sleep 1
+    done
+}

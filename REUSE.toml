@@ -1,0 +1,7 @@
+version = 1
+
+[[annotations]]
+path = ["porting/barebox-emmc/defaultenv-v9/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 qwert-Xx"
+SPDX-License-Identifier = "GPL-2.0-or-later"

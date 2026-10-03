@@ -1,0 +1,7 @@
+::sysinit:/bin/sh /etc/k4/mount-early
+::sysinit:/sbin/openrc sysinit
+::sysinit:/sbin/openrc boot
+::wait:/sbin/openrc default
+ttyGS0::respawn:/bin/sh
+::ctrlaltdel:/bin/busybox reboot
+::shutdown:/sbin/openrc shutdown

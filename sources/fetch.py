@@ -8,9 +8,14 @@ def checked(cache,item,offline=False):
  p=pathlib.Path(cache)/item['file']
  if not p.exists():
   if offline:raise FileNotFoundError(p)
-  with urllib.request.urlopen(item['url']) as source,p.open('wb') as dest:
+  temporary=p.with_suffix(p.suffix+'.part')
+  with urllib.request.urlopen(item['url']) as source,temporary.open('wb') as dest:
    import shutil
    shutil.copyfileobj(source,dest)
+  if hashlib.sha256(temporary.read_bytes()).hexdigest()!=item['sha256']:
+   temporary.unlink()
+   raise ValueError('SHA256 mismatch: '+item['file'])
+  temporary.replace(p)
  if hashlib.sha256(p.read_bytes()).hexdigest()!=item['sha256']:raise ValueError('SHA256 mismatch: '+item['file'])
  return p
 def extract(cache,name,out,offline=False):

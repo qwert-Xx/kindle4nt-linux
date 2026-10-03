@@ -1,44 +1,72 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
-# K4 离线构建入口
+# Kindle 4 Non-Touch Linux
 
-`make -C project images INPUTS=/absolute/external/inputs.json OUT=/absolute/external/build`
+本项目将 Linux 6.6.157 与 Alpine Linux 移植到 **Kindle 4 Non-Touch D01100**（Yoshi/Tequila，i.MX50）。提供 barebox boot1 引导、Alpine eMMC 系统、Alpine RAM 系统和 BusyBox RAM 维护系统。其它 Kindle 型号与面板尚不在支持范围内。
 
-仅执行主机构建，不连接设备、不加载镜像、不执行诊断、不调用 SSH/ROM/响铃或远端发布。OUT 必须在源码树之外。Linux v6.6.157、ARM GCC 13.3/binutils 2.42 是当前内核验证组合；barebox 基线仍使用原 GCC 11.4/上游 ZQ 23/8，不由此入口重建或升级。
+这是新用户的起点。先完成[构建](docs/BUILD.md)，准备[RAM 维护与恢复](docs/RAM-BOOT.md)，然后安装 [boot1](docs/BAREBOX-BOOT1.md) 和 [Alpine](docs/EMMC-ROOT.md)。使用前阅读[已知问题](docs/KNOWN-ISSUES.md)。
 
-## 输入与配方
+## 目录
 
-外部 JSON 包含 `inputs.config`（`path/sha256`）、`dtb`（如 `nxp/imx/imx50-kindle-k4-stock-pxp.dtb`）、`release`、`metadata`（KBUILD_BUILD_*），以及可选 `cross_compile`。相对路径相对于 JSON；哈希错误立即停止。
+| 目录 | 内容 |
+|---|---|
+| `project/` | 构建入口、用户态配方和使用文档 |
+| `rootfs/` | 按目标安装路径组织的启动脚本、服务与配置 |
+| `porting/barebox-emmc/` | barebox v9 源码构建配方、板级补丁和 FIT 模板 |
+| `diagnostics/` | 可选诊断工具，不进入默认镜像 |
+| `arch/`、`drivers/`、`include/` | Linux 源码及 K4 移植实现 |
+| `sources/` | 上游归档下载、用户态缓存校验工具 |
+| `porting/` | 硬件参考与历史研究记录；带日期的报告记录当时结果 |
 
-`inputs.ram_recipe` 是外部 JSON 文件（同样有 path/sha256），内含 `entries`：每项 `name/kind/mode`，file 另有 `source/sha256`，link 有 target，char/block 有 major/minor。源码文本、固定用户态二进制、固件、波形、私有配置均显式列出，不从个人目录自动搜集。
+## 准备自己的输入
 
-有内层 ext3 时，外层配方写 `filesystem_recipe/filesystem_recipe_sha256` 指向第二份外部 JSON；其 entries 是逐文件根目录清单，另有 image_bytes/uuid。构建用 mke2fs/debugfs 创建**主机普通文件**，从不挂载或打开板上设备。内层模块从本次 modules_install 结果重新加入，排除主机 build/source symlink，保留基线权限。cpio 固定时间生成；ext3 以条目类型/权限/链接/文件哈希作语义比较（文件系统内部元数据可能不同）。
+构建主机使用 Linux。Windows 用户可在 WSL 中构建；本地既有环境使用 `wsl.exe -d KindlePort`。依赖、工具链及输入 JSON 的完整说明在[构建指南](docs/BUILD.md)。
 
-诊断默认关闭：配方 automatic_diagnostics 默认 false，bootmark 替换为成功返回的空 stub；watchdog/health/板级返回和只读检查脚本不替换。正式构建拒绝声明自动诊断的配方，也拒绝未列出内层逐文件配方的不透明 ext3。compatibility 的 `profile: private-replay` 可显式保留已验收的诊断环境；这是本地等价验证专用。
+固件和设备数据不随仓库分发。将以下文件放在仓库外，并从自己的设备备份中取得与硬件匹配的内容：
 
-Wi-Fi 配置、SSH key、ath6kl 固件/校准、WBF/WRF 波形和所有含这些输入的运行包均留在仓库外。配方用 private_inputs=true 标注，产物不可直接公开重分发。固件/波形从本人合法持有的原厂只读备份取得，不打包发布。外部用户态二进制须记录来源/版本/许可；第三方用户态源码核验配方见 userspace/README.md；该步骤不替换固定运行输入。
+- ath6kl AR6003 固件和板级校准数据；保持 `/lib/firmware/ath6k/AR6003/hw2.1.1/` 的目标布局。
+- EPDC 默认从面板 flash 获取 WBF 并在内核解码，无需外部波形。备份与获取步骤见[显示波形](docs/WAVEFORMS.md)。没有可用波形仍可启动、维护和联网，显示不可用。
+- Wi-Fi 的 `wpa_supplicant.conf`，以及 root 的 `authorized_keys`。
+- 可选 SSH 主机密钥：Alpine 使用 OpenSSH ECDSA 格式，维护系统使用 Dropbear 格式。Alpine 省略主机密钥时由运行中的服务生成；RAM Alpine 每次启动可能产生新身份。维护根需预装 Dropbear 主机密钥，因为内嵌根以只读方式挂载。
 
-`inputs.ram_root/barebox` 仅 private-replay 接受，逐字节保留明确 SHA 的旧验收输入；它们不代替逐文件 RAM 根配方。基线的旧临时 weak UTS 和空 cpio mtime 可在 baseline_metadata 中指定：temporary_uts、empty_cpio_epoch。从同一源码重建，未复制旧 kernel 对象或 zImage。
+SSH 登录使用你自己的私钥；镜像只需要授权公钥。Wi-Fi 配置和主机私钥属于私有输入，生成的运行包也可能含私有数据。
 
-`build-report.json` 保存产物 SHA、modules.order、config SHA 和 RAM 配方报告。新入口已验证 zImage/DTB/235模块精确一致，外层25项与内层412项语义一致；构建和物理验收严格分开。
+## 构建与安装
 
-## 导出与测试
+在仓库根运行，`PRIVATE` 指向准备好的输入目录，`OUT` 指向构建输出：
 
-`python3 project/export.py --out <new-directory>` 只导出主题 patch 与 project 白名单，不复制 Git 历史、porting 原始日志或外部输入。导出是本地预览，发布前仍须许可/隐私审查，不自动 push。
+```sh
+PRIVATE="$HOME/k4-inputs"
+OUT="$HOME/k4-output"
+make -C project images INPUTS="$PRIVATE/inputs.json" OUT="$OUT/images"
+```
 
-`python3 project/test_build.py`、`python3 project/test_rootfs.py` 使用现有 Python/C 工具，不装包、不新建 venv。
+这一入口依次生成：
 
-## 阶段2双 profile 与外部源码
+| 产物 | 用途 |
+|---|---|
+| `alpine/rootfs.tar.gz` | 在目标分区格式化后解包的 eMMC 系统，含 `/boot` |
+| `alpine-ram/alpine-ram.cpio.gz` | 完全在 RAM 中运行的 Alpine |
+| `maintenance/ram.cpio.gz` | BusyBox RAM 维护系统，部署与修复时使用 |
 
-干净公共项目不包含 Linux 历史。先在独立 Linux v6.6.157 工作树应用 kernel/patches/series；debug 再显式应用 kernel/debug-patches/series。可用 make -C project images SOURCE=/path/to/linux INPUTS=/path/to/inputs.json OUT=/path/to/out；或 JSON 的 kernel_source（相对于 JSON）指明源码目录。无需把源码搬进公共仓库。未给 config 时使用 project/configs/k4-production.config，kernel_profile=debug 才选 debug 配置。默认 release/构建用户/主机/时间固定为通用值。正式配方检查 OCRAM/PM/health/restart/charger/USB/watchdog 内建，并拒绝与 profile 不符的诊断配置。
+默认从本仓库源码构建。已有内核可选 `MODE=prebuilt`；精确复现选择 `MODE=reproduce`，详见[三种构建方式](docs/BUILD.md)。barebox 单独构建：
 
-正式 DTS 使用阶段3已等价验证的 common + 顶层结构，不绑定独立诊断驱动；历史 include 链仅本地归档。共享 Papyrus 寄存器头保留正式路径，STOP 汇编/代码偏移/池布局不变，trace 返回 stub 不参与功能成功判定。
+```sh
+python3 porting/barebox-emmc/build.py --output "$OUT/barebox-v9"
+```
 
-阶段3 DTS：默认正式目标为 `nxp/imx/imx50-kindle-k4.dtb`，只包含正式 common；旧 `stock-pxp` 别名继续兼容外部配方，两者与已冷验基线字节相同。debug 顶层为 `nxp/imx/k4-debug/imx50-kindle-k4-debug.dtb`，需 debug patch 系列；debug kernel profile 不改变硬件参数。74份历史 DTS 只在研究仓库本地归档，不公开导出，不列入默认 dtbs。离线等价检查：`python3 project/verify_dtb.py --baseline BASE.dtb --candidate NEW.dtb --report REPORT.json`；报告包含五类硬件属性逐项对照。W=1 dtc检查不等同 dt-schema，后者现已用外部独立工具验证；K4专项通过、全量剩上游CCM IRQ编码问题，见docs/KNOWN-ISSUES.md。
+安装需要备份 eMMC 用户区、boot0、boot1 与 EXT_CSD。boot1 写入会替换引导程序；EXT_CSD[179] 决定启动分区；Alpine 部署会格式化并覆盖指定分区的数据。boot0 保存原厂启动内容，覆盖它会失去这条原厂恢复路径。具体命令集中在[boot1 指南](docs/BAREBOX-BOOT1.md)和[Alpine 部署指南](docs/EMMC-ROOT.md)。
 
-Stage 4 input profile: production GPIO_KEYS is modular; power-button and recovery drivers stay builtin. Structured RAM-root generation wraps the unchanged external rcS as rcS.k4-base, then runs generic modalias coldplug after protected startup succeeds (10 s per request, 60 s total). Coldplug is nonfatal, does not feed watchdog, uses existing modprobe without -b or blacklist, and skips already bound devices. Original SPI coldplug is preserved. Production excludes dmatest/usbtest and rejects diagnostic modules in the installed root; debug does not automatically run generic coldplug. BusyBox/modutils binaries are external hashed inputs and unchanged. Hardware acceptance remains pending the combined stage4 checklist.
+## 日常连接与恢复
 
-公共草稿入口：[范围与状态](docs/README.md)、[构建](docs/BUILD.md)、[RAM启动/恢复](docs/RAM-BOOT.md)、[zqcal](docs/ZQCAL.md)、[限制](docs/KNOWN-ISSUES.md)。这些说明不扩大既有硬件验收范围，boot1和eMMC安装与回退说明见 docs/BAREBOX-BOOT1.md 与 docs/EMMC-ROOT.md。
+Alpine 在 USB 地址 `169.254.212.2` 和 Wi-Fi 地址上提供 OpenSSH（22 端口，公钥登录及 SFTP）。维护系统通过 USB 提供 Dropbear（2222 端口）与 ACM 控制台：
 
-阶段7可选 `filesystem_recipe.reproducible_metadata=true` 固定主机ext3内部时间与目录hash seed；默认false保留旧配方。仅元数据，不改条目内容/模式/链接/设备号，guard/只读保护代码不变。两次clean比对使用独立外部配方启用，不重写任何冻结包。
+```sh
+ssh root@169.254.212.2
+ssh -p 2222 root@169.254.212.2
+```
 
-当前配置入口为 k4_defconfig + configs 下的小型 profile 片段，替代旧完整 .config；ATH6KL/SDIO=m。emmc-root 使用 production 片段与标准直接根挂载，详 [eMMC根](docs/EMMC-ROOT.md)。上文模块数量、旧冷门槛为历史阶段记录，以 README 与 docs 当前状态为准。
+barebox 启动时有 5 秒倒计时，按 Ctrl-C 进入 shell。启用 fastboot 后可将维护 FIT 启动到 RAM，再重新部署 Alpine 或恢复 boot1。若引导程序无法运行，长按电源键强制复位，松开电源键时按住方向键“下”，进入 i.MX50 ROM USB 下载模式。完整流程见[恢复指南](docs/RAM-BOOT.md)。
+
+Alpine 使用官方 OpenRC watchdog 服务，配置在 `/etc/conf.d/watchdog`；维护系统持续运行 BusyBox watchdog。重启进入当前选择的启动分区。
+
+Linux 和 barebox 使用各自源码的许可；项目工具与第三方用户态的许可见[用户态文档](userspace/README.md)和[第三方说明](THIRD-PARTY.md)。

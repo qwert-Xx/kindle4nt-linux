@@ -1,4 +1,0 @@
-#!/bin/sh
-echo "USB host loader: use explicit YMODEM RAM uploads and bootm"
-echo "loady -t usbserial -f /k4-kernel.zImage (then DTB and RAM cpio)"
-exit 1

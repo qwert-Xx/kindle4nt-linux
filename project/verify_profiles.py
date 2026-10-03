@@ -6,7 +6,7 @@ p=argparse.ArgumentParser();p.add_argument('baseline');p.add_argument('productio
 paths={k:pathlib.Path(getattr(a,k)) for k in ('baseline','production','debug')}
 sha=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
 def symbols(x):return subprocess.check_output(['arm-linux-gnueabihf-nm',str(x/'vmlinux')],text=True)
-required=('IMX50_PM','IMX50_OCRAM','K4_MC13892_STANDBY','K4_PM_HEALTH_CLOCK','POWER_RESET_K4_MC13892','CHARGER_K4_MC13892','USB_K4_PHY','IMX2_WDT')
+required=('IMX50_PM','IMX50_OCRAM','K4_MC13892_STANDBY','POWER_RESET_K4_MC13892','CHARGER_K4_MC13892','USB_K4_PHY','IMX2_WDT')
 reports={}
 for name in ('production','debug'):
  x=paths[name];s=symbols(x);c=(x/'.config').read_text()

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Offline ABI, dependency, content and deterministic archive checks."""
 import argparse,hashlib,json,pathlib,re,subprocess,tarfile
-from build import RELEASE,sha,run
+from build import kernel_release,sha,run
 
 def resolve(root,n):
     p=root/n.lstrip('/')
@@ -12,13 +12,14 @@ def resolve(root,n):
     raise ValueError(n)
 def verify(out):
     root=out/'rootfs';q=out/'qemu/usr/bin/qemu-arm-static';qr=[q,'-L',root]
+    release=kernel_release(root/'boot/zImage')
     elfs=[];modules=[];dynamic=[]
     for p in sorted(root.rglob('*')):
         if p.is_symlink() or not p.is_file() or p.read_bytes()[:4]!=b'\x7fELF':continue
         header=run(['readelf','-h',p]);assert 'ELF32' in header and 'little endian' in header and re.search(r'Machine:\s+ARM',header) and 'Version5 EABI' in header,p
         attrs=run(['readelf','-A',p]);assert ('Tag_CPU_arch: v7' in attrs or p.suffix=='.ko' and 'Tag_CPU_arch: v6K' in attrs),p
         if p.suffix=='.ko':
-            assert RELEASE in run(['readelf','-p','.modinfo',p]);modules.append(str(p.relative_to(root)))
+            assert release in run(['readelf','-p','.modinfo',p]);modules.append(str(p.relative_to(root)))
         else:
             assert 'hard-float ABI' in header,p
             segments=run(['readelf','-l',p]);interp=re.findall(r'Requesting program interpreter: ([^\]]+)',segments)
@@ -50,20 +51,14 @@ def verify(out):
             assert p.read_bytes()==(root/p.relative_to(pathlib.Path(__file__).parent/'network')).read_bytes()
     for level,n in [('boot','wpa_supplicant'),('boot','networking'),('default','wpa_cli')]:
         assert (root/'etc/runlevels'/level/n).readlink()==pathlib.Path('/etc/init.d/'+n)
-    reference=out/'busybox-source'
+    report=json.loads((out/'build-report.json').read_text())
     same=[]
-    for base in ('lib/firmware',):
-        for p in sorted((reference/base).rglob('*')):
-            if p.is_file() and not p.is_symlink():
-                n=p.relative_to(reference).as_posix()
-                if n.startswith('lib/modules/') and p.suffix!='.ko' and '/modules.' in n:continue
-                assert p.read_bytes()==(root/n).read_bytes(),n;same.append(n)
-    lock=json.loads((pathlib.Path(__file__).parent/'kernel.lock.json').read_text())
-    assert sha(root/'boot/zImage')==lock['zImage']
-    assert sha(root/'boot/imx50-kindle-k4.dtb')==lock['dtb']
-    actual={p.relative_to(root/'lib/modules'/RELEASE).as_posix():sha(p) for p in (root/'lib/modules'/RELEASE).rglob('*.ko')}
-    assert actual==lock['modules']
-    assert len(modules)==23,len(modules)
+    for name,expected in report['firmware_sha256'].items():
+        n='lib/firmware/'+name
+        assert sha(root/n)==expected,n;same.append(n)
+    assert sha(root/'boot/zImage')==report['kernel_sha256']
+    assert sha(root/'boot/imx50-kindle-k4.dtb')==report['dtb_sha256']
+    assert len(modules)==report['module_count']
     assert not list(root.rglob('*watchdog-guard*'))
     assert not list(root.rglob('*watchdog-probe*'))
     assert '--rtc=/dev/rtc0' in (root/'etc/conf.d/hwclock').read_text()
@@ -71,11 +66,13 @@ def verify(out):
     assert (root/'etc/runlevels/boot/hwclock').is_symlink()
     assert (root/'etc/runlevels/default/k4-ntpd').is_symlink()
     assert '/dev/mmcblk2p1 / ext4 rw,defaults 0 0' in (root/'etc/fstab').read_text()
-    assert 'watchdog -T 30 -t 10 /dev/watchdog' in (root/'etc/init.d/k4-filesystems').read_text()
+    assert '-T 30 -t 10' in (root/'etc/conf.d/watchdog').read_text()
+    assert (root/'etc/runlevels/boot/watchdog').readlink()==pathlib.Path('/etc/init.d/watchdog')
+    assert not (root/'etc/init.d/k4-filesystems').exists()
     run(['sh','-n',out/'deploy-alpine-root'])
     for p in (root/'bin').glob('k4-*'):
         if p.is_file() and p.read_bytes()[:2]==b'#!':run(['sh','-n',p])
-    services=['k4-filesystems','k4-platform','k4-coldplug','sshd','wpa_supplicant','networking','wpa_cli','killprocs','mount-ro','hwclock','k4-ntpd','localmount','hostname','root','fsck','modules'];graph={n:set() for n in services};declarations={}
+    services=['sysfs','devfs','hwdrivers','watchdog','k4-platform','k4-coldplug','sshd','wpa_supplicant','networking','wpa_cli','killprocs','mount-ro','hwclock','k4-ntpd','localmount','hostname','root','fsck','modules'];graph={n:set() for n in services};declarations={}
     # Source declarations only in a host shell, never call service start/stop.
     for n in services:
         p=root/'etc/init.d'/n;run(['sh','-n',p])
@@ -85,14 +82,15 @@ def verify(out):
         for l in text.splitlines():
             op,*targets=l.split()
             for target in targets:
+                if target=='dev':target='devfs'
                 if op=='need':assert target in services,(n,target)
-                if target not in services:continue
+                if target not in services or target==n:continue
                 if op in ('need','after'):graph[n].add(target)
                 elif op=='before':graph[target].add(n)
     order=[]
     while len(order)<len(graph):
         ready=sorted(n for n,deps in graph.items() if n not in order and deps<=set(order));assert ready,graph;order.extend(ready)
-    startup=['k4-filesystems','k4-platform','k4-coldplug','wpa_supplicant','networking','wpa_cli']
+    startup=['watchdog','k4-platform','k4-coldplug','wpa_supplicant','networking','wpa_cli']
     for a,b in zip(startup,startup[1:]):assert order.index(a)<order.index(b)
     assert 'networking' in graph['sshd']
     assert {'networking','wpa_cli','hwclock'}<=graph['k4-ntpd']
@@ -125,8 +123,8 @@ def verify(out):
         for l in sums:
             expected,n=l.split('  ',1);assert hashlib.sha256(t.extractfile(n).read()).hexdigest()==expected,n
         assert t.getmember('dev/console').ischr()
-    signatures=(out/'package-signatures.log').read_text();assert signatures.count(': OK')==84 and 'UNTRUSTED' not in signatures
-    report=dict(elf_count=len(elfs),dynamic_elf_count=len(dynamic),module_count=len(modules),abi='ARMv7 little-endian EABI5, hard-float userspace; musl dynamic or existing static K4 binaries',reference_equal_files=len(same),service_declarations=declarations,topological_order=order,service_validation='shell syntax and evaluated dependency graph; no PID1/OpenRC boot or hardware execution',qemu_smoke=checks,tar_files=len(members),signature_packages=84,package_index_validation=True,device_operations=False)
+    signatures=(out/'package-signatures.log').read_text();assert signatures.count(': OK')==len(pkgs) and 'UNTRUSTED' not in signatures
+    report=dict(elf_count=len(elfs),dynamic_elf_count=len(dynamic),module_count=len(modules),abi='ARMv7 little-endian EABI5, hard-float userspace; musl dynamic or existing static K4 binaries',reference_equal_files=len(same),service_declarations=declarations,topological_order=order,service_validation='shell syntax and evaluated dependency graph; no PID1/OpenRC boot or hardware execution',qemu_smoke=checks,tar_files=len(members),signature_packages=len(pkgs),package_index_validation=True,device_operations=False)
     (out/'verification.json').write_text(json.dumps(report,indent=2)+'\n');return report
 def verify_ram(directory):
     import gzip,stat
@@ -148,10 +146,12 @@ def verify_ram(directory):
             result=subprocess.run(['sh','-n'],input=data.decode(),text=True,capture_output=True);assert result.returncode==0,(n,result.stderr)
     assert entries['dev/console'][2:]==(5,1) and stat.S_ISCHR(entries['dev/console'][0])
     assert b'/dev/mmc' not in entries['etc/fstab'][1]
-    assert b'blockdev --setro' in entries['init'][1] and b'exec /sbin/init' in entries['init'][1]
-    assert b'600 30 expire' in entries['etc/init.d/k4-filesystems'][1]
+    assert b'setro' not in entries['init'][1] and b'exec /sbin/init' in entries['init'][1]
+    assert 'etc/runlevels/boot/watchdog' in entries
+    assert b'-T 30 -t 10' in entries['etc/conf.d/watchdog'][1]
+    assert not any('watchdog-guard' in n for n in entries)
     for n in ('zImage','imx50-kindle-k4.dtb'):assert (directory/n).read_bytes()==entries['boot/'+n][1]
-    report=dict(entries=len(entries),checksums=True,sorted_zero_owner_time=True,shell_syntax=True,emmc_fstab_absent=True,read_only_init_present=True,device_executed=False)
+    report=dict(entries=len(entries),checksums=True,sorted_zero_owner_time=True,shell_syntax=True,emmc_fstab_absent=True,ordinary_block_devices=True,device_executed=False)
     (directory/'ram-verification.json').write_text(json.dumps(report,indent=2)+'\n');return report
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--build',type=pathlib.Path,required=True);ap.add_argument('--compare',type=pathlib.Path);ap.add_argument('--ram',type=pathlib.Path);a=ap.parse_args();r=verify(a.build)

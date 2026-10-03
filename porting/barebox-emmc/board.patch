@@ -1,0 +1,138 @@
+--- a/arch/arm/boards/kindle-mx50/Makefile
++++ b/arch/arm/boards/kindle-mx50/Makefile
+@@ -3,3 +3,5 @@
+ obj-y += board.o
+ lwl-y += lowlevel.o
+ bbenv-y += defaultenv-kindle-mx50
++
++obj-y += boot-trace.o
+--- a/arch/arm/boards/kindle-mx50/board.c
++++ b/arch/arm/boards/kindle-mx50/board.c
+@@ -112,20 +112,6 @@
+ BAREBOX_MAGICVAR(global.board.postmode,
+ 	"The postmode in ATAG_BOOTMODE to fill /proc/postmode");
+ 
+-static struct envdata {
+-	size_t offset;
+-	size_t size;
+-	const char *env_name;
+-	char *data;
+-} kindle_mx50_boardinfo[] = {
+-	{ 0x0,  16, "board.serial16" },
+-	{ 0x60, 16, "board.revision16" },
+-	{ 0x30, 16, "board.mac" },
+-	{ 0x40, 20, "board.sec" },
+-	{ 0x1000, 16, "board.bootmode" },
+-	{ 0x1010, 16, "board.postmode" },
+-};
+-
+ /* The original kernel expects multiple custom ATAGs. */
+ static struct tag *kindle_mx50_append_atags(struct tag *params)
+ {
+@@ -146,29 +132,6 @@
+ 	return params;
+ }
+ 
+-static void kindle_rev_init(const char *part, struct envdata *env, size_t num)
+-{
+-	void *buf;
+-
+-	int ret = read_file_2(part, NULL, &buf, 0x1060);
+-	if (ret && ret != -EFBIG) {
+-		pr_err("Could not read board info from %s\n", part);
+-		return;
+-	}
+-	for (int i = 0; i < num; i++) {
+-		size_t offset = env[i].offset;
+-		size_t size = env[i].size;
+-		const char *name = env[i].env_name;
+-
+-		env[i].data = xzalloc(size + 1);
+-		env[i].data[size] = 0;
+-		memcpy(env[i].data, buf + offset, size);
+-		globalvar_add_simple_string(name, &env[i].data);
+-	}
+-
+-	free(buf);
+-}
+-
+ static int is_mx50_kindle(void)
+ {
+ 	return of_machine_is_compatible("amazon,kindle-d01100") ||
+@@ -184,8 +147,7 @@
+ 	armlinux_set_revision(0x50000 | imx_silicon_revision());
+ 	/* Compatibility ATAGs for original kernel */
+ 	armlinux_set_atag_appender(kindle_mx50_append_atags);
+-	kindle_rev_init("/dev/mmc2.boot0.userdata", kindle_mx50_boardinfo,
+-		ARRAY_SIZE(kindle_mx50_boardinfo));
++	/* Host loader does not read idme or probe storage. */
+ 
+ 	return 0;
+ }
+@@ -203,15 +165,9 @@
+ 
+ static int kindle_mx50_devices_init(void)
+ {
+-	struct device *dev;
+ 
+ 	if (!is_mx50_kindle())
+ 		return 0;
+-
+-	/* Probe the eMMC to allow reading the board serial and revision */
+-	dev = get_device_by_name("mci0");
+-	if (dev)
+-		dev_set_param(dev, "probe", "1");
+ 
+ 	defaultenv_append_directory(defaultenv_kindle_mx50);
+ 
+--- a/arch/arm/boards/kindle-mx50/lowlevel.c
++++ b/arch/arm/boards/kindle-mx50/lowlevel.c
+@@ -19,6 +19,8 @@
+ {
+ 	void *fdt;
+ 
++	writel(0x4b344231, IOMEM(0xf8008000));
++	writel(1, IOMEM(0xf8008004));
+ 	imx5_cpu_lowlevel_init();
+ 	arm_setup_stack(MX50_IRAM_BASE_ADDR + MX50_IRAM_SIZE);
+ 
+--- /dev/null
++++ b/arch/arm/boards/kindle-mx50/boot-trace.c
+@@ -0,0 +1,37 @@
++// SPDX-License-Identifier: GPL-2.0-only
++#include <common.h>
++#include <init.h>
++#include <io.h>
++#include <watchdog.h>
++#include <driver.h>
++#include <of.h>
++/* One volatile record at f8008000, outside ROM buffers and plugin code. */
++static int k4_host_loader_init(void)
++{
++ u32 record[12] = { 0x4b344231, 2 };
++ struct watchdog *wd;
++ int i, ret;
++ if (!of_machine_is_compatible("amazon,kindle-d01100")) return 0;
++ record[2] = readl(IOMEM(0x53fd0000));
++ record[3] = readl(IOMEM(0x53fd0004));
++ record[4] = readl(IOMEM(0x53fd0008));
++ record[5] = readw(IOMEM(0x53f98000));
++ record[6] = readw(IOMEM(0x53f98002));
++ record[7] = readw(IOMEM(0x53f98004));
++ record[8] = readl(IOMEM(0x14000050));
++ record[9] = readl(IOMEM(0x14000054));
++ record[10] = readl(IOMEM(0x14000058));
++ record[11] = readl(IOMEM(0x1400012c));
++ for (i = 0; i < 12; i++) {
++  writel(record[i], IOMEM(0xf8008000 + i * 4));
++ }
++ wd = watchdog_get_default();
++ if (!wd) return -ENODEV;
++ ret = watchdog_set_timeout(wd, 120);
++ if (ret) return ret;
++ ret = dev_set_param(&wd->dev, "autoping", "1");
++ if (ret) return ret;
++ puts("K4 boot1 host loader: OCRAM phase 2; watchdog 120s/autoping; storage unprobed\n");
++ return 0;
++}
++late_initcall(k4_host_loader_init);

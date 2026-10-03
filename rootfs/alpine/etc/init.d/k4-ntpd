@@ -1,0 +1,7 @@
+#!/sbin/openrc-run
+description="Optional BusyBox network time"
+supervisor="supervise-daemon"
+command="/bin/busybox"
+command_args="ntpd -n -p pool.ntp.org"
+pidfile="/run/k4-ntpd.pid"
+depend() { need networking wpa_cli hwclock; }

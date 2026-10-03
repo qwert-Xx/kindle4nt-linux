@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
 """User-mode, offline Alpine/K4 assembly. Never accesses a device."""
-import argparse,gzip,hashlib,io,json,os,pathlib,shutil,stat,subprocess,tarfile
+import argparse,gzip,hashlib,io,json,os,pathlib,shutil,stat,subprocess,tarfile,bz2,lzma,re,sys
+sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]))
+from userspace.build_support import output
+import rootfs_sources
 HERE=pathlib.Path(__file__).resolve().parent
-RELEASE='6.6.157-k4-production'
 def sha(p,algorithm='sha256'):return hashlib.new(algorithm,p.read_bytes()).hexdigest()
 def run(args,log=None):
     r=subprocess.run([str(x) for x in args],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
@@ -32,15 +34,56 @@ def installed(root):
     for b in (root/'lib/apk/db/installed').read_text().strip().split('\n\n'):
         d=dict(l.split(':',1) for l in b.splitlines() if ':' in l);result[d['P']]=d['V']
     return result
+def kernel_release(kernel):
+    data=kernel.read_bytes()
+    if int.from_bytes(data[36:40],'little') != 0x016f2818:
+        raise ValueError('expected ARM zImage')
+    payloads=[data]
+    for magic,decompress in ((b'\x1f\x8b\x08',lambda b: __import__('zlib').decompress(b,31)),(b'BZh',bz2.decompress),(b'\xfd7zXZ\x00',lzma.decompress)):
+        offset=data.find(magic)
+        while offset>=0:
+            try:payloads.append(decompress(data[offset:]));break
+            except (ValueError,OSError,EOFError,__import__('zlib').error):offset=data.find(magic,offset+1)
+    for payload in payloads:
+        match=re.search(rb'Linux version ([^\s\x00]+)',payload)
+        if match:return match[1].decode()
+    raise ValueError('kernel release missing from zImage')
+
+def compatible_modules(kernel,source_modules):
+    release=kernel_release(kernel)
+    if source_modules.name != release:raise ValueError('kernel/modules release mismatch')
+    actual={}
+    for p in source_modules.rglob('*.ko'):
+        data=p.read_bytes()
+        if data[:4]!=b'\x7fELF' or int.from_bytes(data[18:20],'little')!=40:
+            raise ValueError('expected ARM module: '+str(p))
+        vermagic=re.search(rb'vermagic=([^\s\x00]+)',data)
+        if not vermagic or vermagic[1].decode()!=release:raise ValueError('module release mismatch: '+str(p))
+        actual[p.relative_to(source_modules).as_posix()]=sha(p)
+    return release,actual
+
+def verify_release(kernel,dtb,source_modules):
+    lock=json.loads((HERE/'kernel.lock.json').read_text())
+    release,actual=compatible_modules(kernel,source_modules)
+    if sha(kernel)!=lock['zImage'] or sha(dtb)!=lock['dtb'] or actual!=lock['modules']:
+        raise ValueError('release hash mismatch')
+    print('VERIFY_RELEASE_OK '+release+' modules='+str(len(actual)))
+
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--cache',type=pathlib.Path,required=True);ap.add_argument('--busybox-tar',type=pathlib.Path);ap.add_argument('--busybox-sha');ap.add_argument('--k4-root',type=pathlib.Path);ap.add_argument('--ssh-host-key',type=pathlib.Path);ap.add_argument('--authorized-keys',type=pathlib.Path);ap.add_argument('--out',type=pathlib.Path,required=True);ap.add_argument('--kernel',type=pathlib.Path,required=True);ap.add_argument('--dtb',type=pathlib.Path,required=True);ap.add_argument('--modules',type=pathlib.Path,required=True);a=ap.parse_args()
-    a.out.mkdir(mode=0o700);out=a.out.resolve();cache=a.cache.resolve();root=out/'rootfs';root.mkdir()
+    ap=argparse.ArgumentParser();ap.add_argument('--cache',type=pathlib.Path,required=True);ap.add_argument('--firmware-dir',type=pathlib.Path,required=True,help='external contents of /lib/firmware (ath6kl firmware, calibration and regulatory.db); private input');ap.add_argument('--wifi-config',type=pathlib.Path,required=True,help='external private wpa_supplicant.conf');ap.add_argument('--tools-dir',type=pathlib.Path,help='bin directory from project/userspace builds or explicitly supplied K4 ELF tools; diagnostics are omitted');ap.add_argument('--ssh-host-key',type=pathlib.Path,help='existing external OpenSSH ECDSA private host key; omit for first-start key generation');ap.add_argument('--authorized-keys',type=pathlib.Path,help='external root SSH public-key authorization file');ap.add_argument('--out',type=pathlib.Path,default=os.environ.get('OUT',str(HERE.parents[1]/'out/alpine')));ap.add_argument('--clean',action='store_true');ap.add_argument('--verify-release',action='store_true');ap.add_argument('--kernel',type=pathlib.Path,required=True);ap.add_argument('--dtb',type=pathlib.Path,required=True);ap.add_argument('--modules',type=pathlib.Path,required=True);a=ap.parse_args()
+    out=output(a.out,[HERE,a.cache,a.firmware_dir,a.wifi_config,a.kernel,a.dtb,a.modules]+[p for p in (a.tools_dir,a.ssh_host_key,a.authorized_keys) if p],a.clean);cache=a.cache.resolve()
+    # Reassemble staging trees; retain reusable output and logs between invocations.
+    for directory in ('rootfs','host','hostkeys','repository','fetched','qemu'):
+        if (out/directory).exists():shutil.rmtree(out/directory)
+    root=out/'rootfs';root.mkdir()
+    release=kernel_release(a.kernel);source_modules=a.modules/release
+    release,actual=compatible_modules(a.kernel,source_modules)
+    if a.verify_release:verify_release(a.kernel,a.dtb,source_modules)
     lock=json.loads((HERE/'packages.lock.json').read_text())
     def checked(name,d,key='sha256'):p=cache/name;assert sha(p,key)==d[key],name;return p
     mini=checked(lock['minirootfs']['file'],lock['minirootfs']);hostpkg=checked(lock['host_apk']['file'],lock['host_apk']);hostmini=checked(lock['host_mini']['file'],lock['host_mini']);qdeb=checked(lock['qemu']['file'],lock['qemu'],'sha512')
     for d in lock['packages']:checked(d['file'],d)
     assert sha(cache/'APKINDEX-armv7.tar.gz')==lock['index_sha256']
-    if a.busybox_tar:assert sha(a.busybox_tar)==a.busybox_sha
     run(['tar','-xf',mini,'-C',root]);host=out/'host';host.mkdir();run(['tar','-xf',hostpkg,'-C',host]);keys=out/'hostkeys';keys.mkdir();run(['tar','-xf',hostmini,'-C',keys,'./etc/apk/keys'])
     apk=host/'sbin/apk.static'
     run([apk,'--keys-dir',keys/'etc/apk/keys','verify',hostpkg],out/'host-apk-signature.log')
@@ -82,46 +125,24 @@ def main():
         while (certdir/(h+'.'+str(i))).is_symlink():i+=1
         link(root,'etc/ssl/certs/'+h+'.'+str(i),pem)
     # OpenRC legacy migration post-install has no rcS.d/rcL.d on minirootfs.
-    private=out/'busybox-source'
-    if a.busybox_tar:
-        private.mkdir();run(['tar','-xf',a.busybox_tar,'-C',private,'--exclude=dev/*'])
-    else:
-        shutil.copytree(a.k4_root,private,symlinks=True)
-    kernel_lock=json.loads((HERE/'kernel.lock.json').read_text())
-    assert sha(a.kernel)==kernel_lock['zImage']
-    assert sha(a.dtb)==kernel_lock['dtb']
-    source_modules=a.modules/RELEASE
-    actual={p.relative_to(source_modules).as_posix():sha(p) for p in source_modules.rglob('*.ko')}
-    assert actual==kernel_lock['modules']
-    assert len(actual)==23
     copied=[]
-    for directory in ('lib/firmware',):
-        shutil.copytree(private/directory,root/directory,dirs_exist_ok=True,symlinks=True)
+    shutil.copytree(a.firmware_dir,root/'lib/firmware',dirs_exist_ok=True,symlinks=True)
     shutil.copytree(a.modules,root/'lib/modules',symlinks=True)
-    if not a.busybox_tar:
-        for name in ('build','source'):
-            (root/'lib/modules'/RELEASE/name).unlink(missing_ok=True)
     (root/'boot').mkdir()
     shutil.copy2(a.kernel,root/'boot/zImage')
     shutil.copy2(a.dtb,root/'boot/imx50-kindle-k4.dtb')
-    for p in sorted((private/'bin').iterdir()):
-        if p.name.startswith('k4-') and p.name not in ('k4-wifi-connect','k4-userspace-service') and 'watchdog-guard' not in p.name and 'watchdog-probe' not in p.name:
+    for p in sorted(a.tools_dir.iterdir()) if a.tools_dir else ():
+        if p.name.startswith('k4-') and not rootfs_sources.diagnostic('bin/'+p.name) and p.read_bytes().startswith(b'\x7fELF'):
             shutil.copy2(p,root/'bin'/p.name);copied.append('bin/'+p.name)
-    for p in (root/'bin').glob('k4-*'):
-        if p.read_bytes().startswith(b'#!'):
-            text=p.read_text().replace('/bin/wpa_supplicant','/sbin/wpa_supplicant').replace('/bin/wpa_cli','/sbin/wpa_cli')
-            write(root,'bin/'+p.name,text,0o755)
-    for n in ('k4-charge-current-ua','k4-wifi-driver'):shutil.copy2(private/'etc'/n,root/'etc'/n)
-    shutil.copy2(private/'etc/wpa_supplicant.conf',root/'etc/wpa_supplicant/wpa_supplicant.conf')
+    copied += [n for n in rootfs_sources.copy(root,'common',exclude=('bin/k4-wifi-connect','bin/k4-userspace-service','bin/udhcpc-wifi','bin/k4-root-select')) if n.startswith('bin/')]
+    copied.sort()
+    shutil.copy2(a.wifi_config,root/'etc/wpa_supplicant/wpa_supplicant.conf')
     (root/'etc/wpa_supplicant/wpa_supplicant.conf').chmod(0o600)
-    link(root,'bin/iw','/usr/sbin/iw')
     (root/'root/.ssh').mkdir(mode=0o700,exist_ok=True)
     if a.authorized_keys:
         shutil.copy2(a.authorized_keys,root/'root/.ssh/authorized_keys')
-    else:
-        shutil.copytree(private/'root/.ssh',root/'root/.ssh',dirs_exist_ok=True,symlinks=True)
+        (root/'root/.ssh/authorized_keys').chmod(0o600)
     (root/'root/.ssh').chmod(0o700)
-    (root/'root/.ssh/authorized_keys').chmod(0o600)
     if a.ssh_host_key:
         shutil.copy2(a.ssh_host_key,root/'etc/ssh/ssh_host_ecdsa_key')
         (root/'etc/ssh/ssh_host_ecdsa_key').chmod(0o600)
@@ -129,42 +150,14 @@ def main():
         assert public.startswith('ecdsa-sha2-'), 'provide an OpenSSH ECDSA host key'
         write(root,'etc/ssh/ssh_host_ecdsa_key.pub',public)
     shadow=(root/'etc/shadow').read_text();shadow='\n'.join('root::0:0:99999:7:::' if l.startswith('root:') else l for l in shadow.splitlines())+'\n';write(root,'etc/shadow',shadow,0o600)
-    assert list((root/'lib/modules').iterdir())[0].name==RELEASE
-    run(qr+[root/'sbin/depmod','-b',root,RELEASE],out/'depmod.log')
-    write(root,'etc/k4-root-profile','alpine-emmc-root\n')
-    fstab='/dev/mmcblk2p1 / ext4 rw,defaults 0 0\nproc /proc proc defaults 0 0\nsysfs /sys sysfs defaults 0 0\ndevtmpfs /dev devtmpfs defaults 0 0\ndevpts /dev/pts devpts defaults 0 0\ntmpfs /tmp tmpfs mode=1777,size=32m 0 0\ntmpfs /run tmpfs mode=0755 0 0\nconfigfs /sys/kernel/config configfs defaults 0 0\n'
-    write(root,'etc/fstab',fstab)
-    # Keep existing initialization contents; OpenRC now owns mounts/watchdog.
-    base=(private/'etc/init.d/rcS.k4-base').read_text();base=base[base.index('$bb mkdir -p /run/wpa_supplicant'):];base='#!/bin/sh\nPATH=/bin:/sbin:/usr/bin:/usr/sbin\nbb=/bin/busybox\n'+base;base=base.replace('/bin/busybox modprobe','/sbin/modprobe')
-    base=base[:base.index('count=0\n')]+base[base.index("if /bin/busybox grep -q 'amazon,k4-accessory-controller'"):]
-    base=base.replace('test -s /etc/dropbear/k4-hostkey || exit 1\n','')
-    write(root,'etc/k4/platform-start',base,0o755)
-    services={
-    'k4-filesystems': '#!/sbin/openrc-run\ndescription="K4 virtual filesystems and early watchdog"\ndepend() { before k4-platform; }\nstart() {\n grep -q " /proc proc " /proc/mounts 2>/dev/null || mount -t proc proc /proc\n grep -q " /sys sysfs " /proc/mounts || mount -t sysfs sysfs /sys\n grep -q " /dev devtmpfs " /proc/mounts || mount -t devtmpfs devtmpfs /dev\n mkdir -p /dev/pts\n mount -t devpts devpts /dev/pts\n mount -t tmpfs -o mode=1777,size=32m tmpfs /tmp\n mount -t tmpfs tmpfs /run\n mount -t configfs configfs /sys/kernel/config\n /bin/busybox watchdog -T 30 -t 10 /dev/watchdog\n}\n',
-    'k4-platform':'#!/sbin/openrc-run\ndescription="K4 USB, SPI and charging initialization"\ndepend() { need k4-filesystems; before k4-coldplug; }\nstart() { /bin/sh /etc/k4/platform-start; }\nstop() { /bin/sh /bin/k4-charge-policy stop; }\n',
-    'k4-coldplug':'#!/sbin/openrc-run\ndescription="K4 generic modalias coldplug"\ndepend() { need k4-platform; before k4-wifi; }\nstart() { (umask 077; /bin/busybox timeout 60 /bin/sh /bin/k4-modalias-coldplug > /run/k4-modalias-coldplug.log 2>&1) || :; }\n',
-    }
-    mounts=services['k4-filesystems'].split('start() {\n',1)[1].split(' /bin/busybox watchdog',1)[0]
-    write(root,'etc/k4/mount-early','#!/bin/sh\nPATH=/bin:/sbin:/usr/bin:/usr/sbin\n'+mounts,0o755)
-    services['k4-filesystems']='#!/sbin/openrc-run\ndescription="K4 early watchdog"\ndepend() { before k4-platform; }\nstart() { /bin/busybox watchdog -T 30 -t 10 /dev/watchdog; }\n'
-    # Original UTC SRTC source, including halt/reboot systohc.
-    write(root,'etc/conf.d/hwclock','clock="UTC"\nclock_hctosys="YES"\nclock_systohc="YES"\nclock_adjfile="NO"\nclock_args="--rtc=/dev/rtc0"\n')
-    services['k4-ntpd']='#!/sbin/openrc-run\ndescription="Optional BusyBox network time"\nsupervisor="supervise-daemon"\ncommand="/bin/busybox"\ncommand_args="ntpd -n -p pool.ntp.org"\npidfile="/run/k4-ntpd.pid"\ndepend() { need networking wpa_cli hwclock; }\n'
-    for n,s in services.items():write(root,'etc/init.d/'+n,s,0o755)
-    for level,names in {'sysinit':['k4-filesystems'],'boot':['k4-platform','k4-coldplug','hwclock','wpa_supplicant','networking'],'default':['sshd','wpa_cli','k4-ntpd'],'shutdown':['killprocs','mount-ro']}.items():
-        for n in names:link(root,'etc/runlevels/'+level+'/'+n,'/etc/init.d/'+n)
-    write(root,'etc/rc.conf',(root/'etc/rc.conf').read_text()+'\nrc_parallel="NO"\nrc_sys=""\n')
-    write(root,'etc/inittab','::sysinit:/bin/sh /etc/k4/mount-early\n::sysinit:/sbin/openrc sysinit\n::sysinit:/sbin/openrc boot\n::wait:/sbin/openrc default\nttyGS0::respawn:/bin/sh\n::ctrlaltdel:/bin/busybox reboot\n::shutdown:/sbin/openrc shutdown\n')
-    write(root,'etc/apk/repositories','https://dl-cdn.alpinelinux.org/alpine/v3.24/main\n')
+    run(qr+[root/'sbin/depmod','-b',root,release],out/'depmod.log')
+    if not (root/'lib/modules'/release/'modules.dep').is_file():raise ValueError('depmod did not generate modules.dep')
+    rootfs_sources.copy(root,'alpine')
     # Match the device's apk world: split packages stay dependencies.
     world=(root/'etc/apk/world').read_text().splitlines()
     world=[n.split('=')[0] if n.split('=')[0] in ('ifupdown-ng','openssh','openssh-server','openssh-sftp-server') else n for n in world
            if n.split('=')[0] not in ('bridge','ifupdown-ng-wifi','wpa_supplicant-openrc','libedit','openssh-keygen','openssh-client-common','openssh-client-default','openssh-server-common','openssh-server-common-openrc')]
     write(root,'etc/apk/world','\n'.join(world)+'\n')
-    for p in sorted((HERE/'network').rglob('*')):
-        if p.is_file() and not p.name.endswith('.license'):
-            write(root,p.relative_to(HERE/'network').as_posix(),p.read_text())
-    link(root,'etc/resolv.conf','/run/resolv.conf')
     # APK lock inode is host state, not a deployment input.
     (root/'lib/apk/db/lock').unlink(missing_ok=True)
     write(root,'var/log/apk.log','')
@@ -173,7 +166,7 @@ def main():
     archive(root,out/'rootfs.tar.gz')
     (out/'rootfs.tar.gz').chmod(0o600)
     shutil.copy2(HERE.parent/'tools/deploy-emmc-root',out/'deploy-alpine-root')
-    report=dict(kernel_release=RELEASE,packages=installed(root),busybox_tar_sha256=a.busybox_sha,source_built_k4=not bool(a.busybox_tar),kernel_reference=kernel_lock['reference'],kernel_sha256=sha(a.kernel),dtb_sha256=sha(a.dtb),module_count=len(actual),k4_copied=copied,device_operations=False,rootfs_sha256=sha(out/'rootfs.tar.gz'),rootfs_bytes=(out/'rootfs.tar.gz').stat().st_size)
+    report=dict(kernel_release=release,packages=installed(root),firmware_sha256={p.relative_to(a.firmware_dir).as_posix():sha(p) for p in sorted(a.firmware_dir.rglob("*")) if p.is_file() and not p.is_symlink()},release_verified=a.verify_release,kernel_sha256=sha(a.kernel),dtb_sha256=sha(a.dtb),module_count=len(actual),k4_copied=copied,device_operations=False,rootfs_sha256=sha(out/'rootfs.tar.gz'),rootfs_bytes=(out/'rootfs.tar.gz').stat().st_size)
     (out/'build-report.json').write_text(json.dumps(report,indent=2)+'\n')
     print(json.dumps({k:v for k,v in report.items() if k not in ('packages','k4_copied')}))
 if __name__=='__main__':main()

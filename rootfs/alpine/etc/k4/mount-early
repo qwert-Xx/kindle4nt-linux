@@ -1,0 +1,7 @@
+#!/bin/sh
+PATH=/bin:/sbin:/usr/bin:/usr/sbin
+ grep -q " /proc proc " /proc/mounts 2>/dev/null || mount -t proc proc /proc
+ grep -q " /sys sysfs " /proc/mounts || mount -t sysfs sysfs /sys
+ mkdir -p /dev/pts
+ mount -t devpts devpts /dev/pts
+ mount -t configfs configfs /sys/kernel/config

@@ -1,7 +1,0 @@
-#!/bin/sh
-# No automatic disk access, writes, or kernel boot.
-global.autoboot=halt
-global.boot.default=host-ram
-usbserial || exit 1
-echo "K4 BOOT1 HOST LOADER v2: waiting for explicit YMODEM RAM uploads"
-echo "loady -t usbserial -f /k4-kernel.zImage (then DTB and RAM cpio)"

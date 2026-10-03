@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Build only a static ARM mke2fs maintenance tool, never run on devices."""
+from build_support import output, toolchain
 import argparse,gzip,hashlib,json,os,pathlib,shutil,subprocess,tarfile
 HERE=pathlib.Path(__file__).parent
 def package(bundle,output):
@@ -9,12 +10,14 @@ def package(bundle,output):
             info=t.gettarinfo(str(src),arcname='maintenance/'+src.name);info.uid=info.gid=info.mtime=0;info.uname=info.gname=''
             with src.open('rb') as f:t.addfile(info,f)
 def main():
-    a=argparse.ArgumentParser();a.add_argument('--source',required=True,type=pathlib.Path);a.add_argument('--out',required=True,type=pathlib.Path);v=a.parse_args()
+    a=argparse.ArgumentParser();a.add_argument('--source',required=True,type=pathlib.Path);a.add_argument('--out',type=pathlib.Path,default=os.environ.get('OUT',str(HERE.parents[1]/'out/e2fsprogs')));a.add_argument('--clean',action='store_true');v=a.parse_args()
     lock=json.loads((HERE/'e2fsprogs.lock.json').read_text())
     assert hashlib.sha256(v.source.read_bytes()).hexdigest()==lock['sha256']
-    v.out.mkdir(parents=True,exist_ok=False)
-    with tarfile.open(v.source) as t:t.extractall(v.out,filter='data')
-    src=v.out/('e2fsprogs-'+lock['version']);build=v.out/'build';build.mkdir();bundle=v.out/'maintenance';bundle.mkdir()
+    v.out=output(v.out,[v.source,HERE],v.clean)
+    toolchain()
+    if not (v.out/('e2fsprogs-'+lock['version'])).exists():
+        with tarfile.open(v.source) as t:t.extractall(v.out,filter='data')
+    src=v.out/('e2fsprogs-'+lock['version']);build=v.out/'build';build.mkdir(exist_ok=True);bundle=v.out/'maintenance';bundle.mkdir(exist_ok=True)
     env=dict(os.environ,CC='arm-linux-gnueabihf-gcc',AR='arm-linux-gnueabihf-ar',RANLIB='arm-linux-gnueabihf-ranlib',CFLAGS='-O2 -mno-unaligned-access',LDFLAGS='-static',SOURCE_DATE_EPOCH='1727740800')
     with (v.out/'build.log').open('w') as log:
         def run(cmd):subprocess.run(cmd,cwd=build,env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
@@ -29,7 +32,7 @@ def main():
     shutil.copyfile(src/'NOTICE',bundle/'NOTICE')
     shutil.copyfile(v.source,bundle/v.source.name)
     shutil.copyfile(HERE.parent/'tools/deploy-emmc-root',bundle/'deploy-emmc-root');(bundle/'deploy-emmc-root').chmod(0o755)
-    report={'source':lock,'compiler':subprocess.check_output(['arm-linux-gnueabihf-gcc','--version'],text=True).splitlines()[0],'static_armhf':True,'artifacts':{x.name:{'size':x.stat().st_size,'sha256':hashlib.sha256(x.read_bytes()).hexdigest()} for x in sorted(bundle.iterdir())}}
+    report={'source':lock,'compiler':subprocess.check_output(['arm-linux-gnueabihf-gcc','--version'],text=True).splitlines()[0],'static_armhf':True,'artifacts':{x.name:{'size':x.stat().st_size,'sha256':hashlib.sha256(x.read_bytes()).hexdigest()} for x in sorted(bundle.iterdir()) if x.name!='SHA256SUMS'}}
     (bundle/'SHA256SUMS').write_text(''.join(v['sha256']+'  '+n+'\n' for n,v in report['artifacts'].items()))
     package(bundle,v.out/'maintenance.tar.gz')
     report['bundle_sha256']=hashlib.sha256((v.out/'maintenance.tar.gz').read_bytes()).hexdigest()

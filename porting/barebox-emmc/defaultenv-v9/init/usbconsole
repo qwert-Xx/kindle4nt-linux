@@ -1,0 +1,9 @@
+#!/bin/sh
+# Compiled environment only; no persistent eMMC environment.
+
+global.boot.default="emmc manual-ram"
+global k4.kernel=/boot/zImage
+global k4.dtb=/boot/imx50-kindle-k4.dtb
+global.system.partitions="/dev/mmc2.boot0(boot0)r,/dev/mmc2.boot1(boot1)r,/dev/mmc2(user)r"
+usbserial || exit 1
+echo "K4 BOOT1 v9: stop autoboot to enter the shell for manual RAM loading"

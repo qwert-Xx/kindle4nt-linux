@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Watchdog is started once by rcS, never placed in a respawn action.
+::sysinit:/etc/init.d/rcS
+::respawn:/bin/k4-userspace-service usb-ssh
+::respawn:/bin/k4-userspace-service wifi
+ttyGS0::respawn:/bin/sh
+::ctrlaltdel:/bin/busybox reboot
+::shutdown:/etc/init.d/rcShutdown

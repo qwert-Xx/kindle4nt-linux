@@ -1,0 +1,83 @@
+#!/bin/sh
+PATH=/bin:/sbin:/usr/bin:/usr/sbin
+bb=/bin/busybox
+$bb mkdir -p /run/wpa_supplicant
+export K4_DHCP_RESOLV_FILE=/run/resolv.conf
+$bb true
+
+mark() {
+	$bb true "$1"
+	echo "$1" > /dev/kmsg
+}
+
+mark K4_6_6_COMPOSITE_PROBE_INIT
+/bin/busybox cat /proc/version > /dev/console
+
+
+# Resolve SPI module aliases before USB consumers.
+if (umask 077; /bin/sh /bin/k4-spi-coldplug > /tmp/k4-spi-coldplug.log 2>&1); then
+	mark K4_6_6_SPI_MODULES_READY
+else
+	mark K4_6_6_SPI_MODULES_FAILED
+fi
+
+g=/sys/kernel/config/usb_gadget/k4_composite_probe
+if [ ! -d /sys/kernel/config/usb_gadget ]; then
+	mark K4_6_6_GADGET_CONFIGFS_MISSING
+else
+	/bin/busybox mkdir -p "$g/strings/0x409" "$g/configs/c.1/strings/0x409"
+	/bin/busybox mkdir -p "$g/functions/rndis.usb0"
+	/bin/busybox mkdir -p "$g/functions/acm.GS0"
+	if [ -d "$g/functions/rndis.usb0" ] && [ -d "$g/functions/acm.GS0" ]; then
+		mark K4_6_6_RNDIS_FUNCTION_PRESENT
+		mark K4_6_6_ACM_FUNCTION_PRESENT
+		echo 02:4b:34:00:00:01 > "$g/functions/rndis.usb0/host_addr"
+		echo 02:4b:34:00:00:02 > "$g/functions/rndis.usb0/dev_addr"
+		echo RNDIS > "$g/functions/rndis.usb0/os_desc/interface.rndis/compatible_id"
+		echo 5162001 > "$g/functions/rndis.usb0/os_desc/interface.rndis/sub_compatible_id"
+		echo 1 > "$g/os_desc/use"
+		echo 0xcd > "$g/os_desc/b_vendor_code"
+		echo MSFT100 > "$g/os_desc/qw_sign"
+		echo 0x0525 > "$g/idVendor"
+		echo 0xa4a8 > "$g/idProduct"
+		echo K4-6.6-COMPOSITE-PROBE > "$g/strings/0x409/serialnumber"
+		echo KindlePort > "$g/strings/0x409/manufacturer"
+		echo "K4 Linux USB composite" > "$g/strings/0x409/product"
+		echo "Linux RNDIS and ACM" > "$g/configs/c.1/strings/0x409/configuration"
+		# USB budget for the whole device, not a battery charge-current setting.
+		echo 500 > "$g/configs/c.1/MaxPower"
+		echo 0x80 > "$g/configs/c.1/bmAttributes"
+		/bin/busybox ln -s "$g/functions/rndis.usb0" "$g/configs/c.1/rndis.usb0"
+		/bin/busybox ln -s "$g/functions/acm.GS0" "$g/configs/c.1/acm.GS0"
+		/bin/busybox ln -s "$g/configs/c.1" "$g/os_desc/c.1"
+		for node in /sys/class/udc/*; do
+			[ -e "$node" ] || continue
+			udc=$(/bin/busybox basename "$node")
+			if echo "$udc" > "$g/UDC"; then
+				mark "K4_6_6_RNDIS_BOUND $udc"
+			else
+				mark "K4_6_6_RNDIS_BIND_FAILED $udc"
+			fi
+			break
+		done
+	else
+		mark K4_6_6_COMPOSITE_FUNCTION_MISSING
+	fi
+fi
+
+if /bin/busybox grep -q 'amazon,k4-accessory-controller' /proc/device-tree/accessory-inputs/compatible 2>/dev/null; then
+    if /sbin/modprobe k4-accessory-inputs; then
+        mark K4_ACCESSORY_CONTROLLER_LOADED
+    else
+        mark K4_ACCESSORY_CONTROLLER_LOAD_FAILED
+    fi
+fi
+# Start once; existing kernel work owns budget, full and fault decisions.
+if /bin/sh /bin/k4-charge-policy start > /run/k4-charge-start.log 2>&1; then
+    mark K4_SERVICE_ROOT_CHARGE_STARTED
+else
+    mark K4_SERVICE_ROOT_CHARGE_START_FAILED
+fi
+echo ready > /run/k4-boot-ready
+mark K4_SERVICE_ROOT_BOOT_READY
+exit 0

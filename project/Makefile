@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-.PHONY: images check
+.PHONY: images kernel check
+MODE ?= source
 images:
-	python3 build.py --inputs "$(INPUTS)" --out "$(OUT)" $(if $(SOURCE),--source "$(SOURCE)",)
+	python3 images.py --inputs "$(INPUTS)" --out "$(OUT)" --mode "$(MODE)" $(if $(SOURCE),--source "$(SOURCE)",)
 check:
-	python3 build.py --inputs "$(INPUTS)" --out "$(OUT)" $(if $(SOURCE),--source "$(SOURCE)",) --check-only
+	python3 images.py --inputs "$(INPUTS)" --out "$(OUT)" --mode "$(MODE)" $(if $(SOURCE),--source "$(SOURCE)",) --check-only
+kernel:
+	python3 build.py --inputs "$(INPUTS)" --out "$(OUT)" --mode "$(MODE)" $(if $(SOURCE),--source "$(SOURCE)",)

@@ -1,7 +1,3 @@
 SPDX-FileCopyrightText: 2026 qwert-Xx
-SPDX-License-Identifier: GPL-2.0-only
-
-Target: arch/arm/boot/dts/nxp/imx/k4-debug/imx50-kindle-k4-debug.dts
-hardware description/format based on Amazon's GPL-2.0 Kindle kernel source
-Source: Kindle GPL kernel source: arch/arm/mach-mx5/mx50_yoshi.c
 SPDX-FileCopyrightText: Copyright (C) 2010 Amazon.com, Inc. All Rights Reserved.
+SPDX-License-Identifier: GPL-2.0-only

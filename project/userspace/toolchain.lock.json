@@ -1,0 +1,5 @@
+{
+  "compiler": "arm-linux-gnueabihf-gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+  "linker": "GNU ld (GNU Binutils for Ubuntu) 2.42",
+  "busybox_compiler": "arm-linux-gnueabi-gcc (Linaro GCC 4.9-2017.01) 4.9.4"
+}

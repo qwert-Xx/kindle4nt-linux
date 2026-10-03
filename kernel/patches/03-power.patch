@@ -704,14 +704,13 @@
 +obj-$(CONFIG_POWER_RESET_K4_MC13892) += k4-mc13892-restart.o
 --- /dev/null
 +++ b/drivers/power/reset/k4-mc13892-restart.c
-@@ -0,0 +1,409 @@
+@@ -0,0 +1,374 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/* Yoshi's PMIC RTC-assisted board restart; no GPIO change at probe. */
 +#include <linux/delay.h>
 +#include <linux/gpio/consumer.h>
 +#include <linux/ktime.h>
 +#include <linux/kexec.h>
-+#include <linux/hrtimer.h>
 +#include <linux/mfd/mc13xxx.h>
 +#include <linux/module.h>
 +#include <linux/of.h>
@@ -723,14 +722,8 @@
 +#include <linux/reboot.h>
 +#include <linux/rtc.h>
 +
-+/* Explicit RAM experiments only; normal shutdown remains unchanged. */
-+static unsigned int ram_shutdown_timeout_ms, ram_shutdown_stall_ms;
 +static bool reboot_pending;
 +module_param(reboot_pending, bool, 0444);
-+module_param(ram_shutdown_timeout_ms, uint, 0644);
-+module_param(ram_shutdown_stall_ms, uint, 0644);
-+MODULE_PARM_DESC(ram_shutdown_timeout_ms, "RAM recovery: 500..1500ms prepared restart deadline; zero disables");
-+MODULE_PARM_DESC(ram_shutdown_stall_ms, "RAM recovery validation: delay after prepare, only with deadline enabled");
 +
 +#define K4_PC2 15
 +#define K4_MEMA 18
@@ -750,7 +743,6 @@
 +	struct pinctrl_state *watchdog, *reset;
 +	struct gpio_desc *gpio;
 +	struct notifier_block prepare_nb, restart_nb;
-+	struct hrtimer shutdown_timer;
 +	u32 pc2, mema, toda, daya, mask;
 +	bool snapshot, alarm_changed, pc2_changed, mema_changed, armed;
 +	u64 deadline_ns;
@@ -934,18 +926,6 @@
 +	return ret;
 +}
 +
-+static enum hrtimer_restart k4_shutdown_timeout(struct hrtimer *timer)
-+{
-+	struct k4_restart *k = container_of(timer, struct k4_restart, shutdown_timer);
-+
-+	/* SPI/RTC preparation completed in process context. No sleeping here. */
-+	if (k->armed && ktime_get_boottime_ns() < k->deadline_ns) {
-+		pr_emerg("K4 prepared shutdown timed out; emergency restart\n");
-+		emergency_restart(); /* ARM restart chain, bypasses device_shutdown(). */
-+	}
-+	return HRTIMER_NORESTART;
-+}
-+
 +static int k4_restart_prepare_notify(struct notifier_block *nb,
 +				     unsigned long event, void *data)
 +{
@@ -961,19 +941,8 @@
 +	if (k->last_error)
 +		dev_err(k->dev, "board restart preparation failed %d rollback %d; internal fallback\n",
 +			k->last_error, k->rollback_error);
-+	else {
-+		unsigned int ms = READ_ONCE(ram_shutdown_timeout_ms);
++	else
 +		dev_info(k->dev, "board restart armed: PMIC alarm +5s, WDI held high\n");
-+		if (ms >= 500 && ms <= 1500 &&
-+		    ktime_get_boottime_ns() + (u64)ms * NSEC_PER_MSEC < k->deadline_ns) {
-+			hrtimer_start(&k->shutdown_timer, ms_to_ktime(ms), HRTIMER_MODE_REL);
-+			dev_info(k->dev, "RAM shutdown recovery deadline %u ms\n", ms);
-+			if (READ_ONCE(ram_shutdown_stall_ms) &&
-+			    READ_ONCE(ram_shutdown_stall_ms) <= 5000) {
-+				msleep(READ_ONCE(ram_shutdown_stall_ms));
-+			}
-+		}
-+	}
 +	return NOTIFY_DONE;
 +}
 +
@@ -1034,8 +1003,6 @@
 +	if (!k)
 +		return -ENOMEM;
 +	k->dev = &pdev->dev;
-+	hrtimer_init(&k->shutdown_timer, CLOCK_BOOTTIME, HRTIMER_MODE_REL);
-+	k->shutdown_timer.function = k4_shutdown_timeout;
 +	k->pmic = dev_get_drvdata(pdev->dev.parent);
 +	if (!k->pmic || !pdev->dev.of_node)
 +		return -ENODEV;
@@ -1094,8 +1061,6 @@
 +static void k4_restart_remove(struct platform_device *pdev)
 +{
 +	struct k4_restart *k = platform_get_drvdata(pdev);
-+
-+	hrtimer_cancel(&k->shutdown_timer);
 +	unregister_restart_handler(&k->restart_nb);
 +	unregister_reboot_notifier(&k->prepare_nb);
 +	if (k->snapshot)
@@ -4910,7 +4875,7 @@
  }
 --- a/drivers/soc/imx/Kconfig
 +++ b/drivers/soc/imx/Kconfig
-@@ -1,5 +1,32 @@
+@@ -1,5 +1,23 @@
  # SPDX-License-Identifier: GPL-2.0-only
  menu "i.MX SoC drivers"
 +
@@ -4921,15 +4886,6 @@
 +	  Sleepable serialized XRGB8888 to 8-bit luma conversion for kernel
 +	  display consumers. Uses the i.MX50 register layout and IRQ completion.
 +	  Faulted DMA arenas are quarantined until reboot; no runtime unbind.
-+
-+config K4_PM_HEALTH_CLOCK
-+	bool "Kindle K4 userspace PM health clock"
-+	depends on SOC_IMX50 && PM_SLEEP && TRACING_SUPPORT
-+	select TRACING
-+	help
-+	  Export a read-only clock excluding userspace freeze intervals for
-+	  watchdog heartbeat checks. Separate from optional reserved-RAM logs.
-+	  Uses suspend tracepoints and supports suspend-to-idle as well as STOP.
 +
 +config K4_PM_RAM_TRACE
 +	bool "Kindle K4 PM callback trace in reserved watchdog RAM"
@@ -4943,7 +4899,7 @@
  
  config IMX_GPCV2_PM_DOMAINS
  	bool "i.MX GPCv2 PM domains"
-@@ -39,4 +66,13 @@
+@@ -39,4 +57,13 @@
  	default SOC_IMX9 && IMX_GPCV2_PM_DOMAINS
  	depends on PM_GENERIC_DOMAINS
  
@@ -4959,13 +4915,12 @@
  endmenu
 --- a/drivers/soc/imx/Makefile
 +++ b/drivers/soc/imx/Makefile
-@@ -4,3 +4,6 @@
+@@ -4,3 +4,5 @@
  endif
  obj-$(CONFIG_SOC_IMX8M) += soc-imx8m.o
  obj-$(CONFIG_SOC_IMX9) += imx93-src.o
 +obj-$(CONFIG_K4_PM_RAM_TRACE) += k4-pm-trace.o
 +obj-$(CONFIG_IMX50_PXP_KERNEL) += imx50-pxp.o
-+obj-$(CONFIG_K4_PM_HEALTH_CLOCK) += k4-pm-health.o
 --- /dev/null
 +++ b/drivers/soc/imx/imx50-pxp.c
 @@ -0,0 +1,581 @@
@@ -5549,155 +5504,6 @@
 +}
 +module_init(k4_display_init);
 +MODULE_DEVICE_TABLE(of, imx50_pxp_match);
-+MODULE_LICENSE("GPL");
---- /dev/null
-+++ b/drivers/soc/imx/k4-pm-health-state.h
-@@ -0,0 +1,54 @@
-+/* SPDX-License-Identifier: GPL-2.0-only */
-+#ifndef K4_PM_HEALTH_STATE_H
-+#define K4_PM_HEALTH_STATE_H
-+
-+/* Called with the owner's lock held. All timestamps are BOOTTIME ns. */
-+struct k4_pm_health_state {
-+	u64 frozen_ns;
-+	u64 begin_ns;
-+	u64 last_ns;
-+	u64 cycles;
-+	bool active;
-+	bool fault;
-+};
-+
-+static inline bool k4_health_read(struct k4_pm_health_state *s, u64 now,
-+				  u64 *awake)
-+{
-+	u64 effective = s->active ? s->begin_ns : now;
-+
-+	if (s->fault || now < s->last_ns || effective < s->frozen_ns) {
-+		s->fault = true;
-+		return false;
-+	}
-+	s->last_ns = now;
-+	*awake = effective - s->frozen_ns;
-+	return true;
-+}
-+
-+static inline void k4_health_begin(struct k4_pm_health_state *s, u64 now)
-+{
-+	u64 awake;
-+
-+	if (s->active || !k4_health_read(s, now, &awake)) {
-+		s->fault = true;
-+		return;
-+	}
-+	s->begin_ns = now;
-+	s->active = true;
-+}
-+
-+static inline void k4_health_end(struct k4_pm_health_state *s, u64 now)
-+{
-+	u64 awake;
-+
-+	/* A failed freeze can thaw without any successful freeze transition. */
-+	if (!s->active)
-+		return;
-+	if (!k4_health_read(s, now, &awake))
-+		return;
-+	s->frozen_ns += now - s->begin_ns;
-+	s->cycles++;
-+	s->active = false;
-+}
-+#endif
---- /dev/null
-+++ b/drivers/soc/imx/k4-pm-health.c
-@@ -0,0 +1,89 @@
-+// SPDX-License-Identifier: GPL-2.0-only
-+/* A userspace health clock excluding the interval in which PM freezes tasks. */
-+#include <linux/init.h>
-+#include <linux/ktime.h>
-+#include <linux/module.h>
-+#include <linux/of.h>
-+#include <linux/spinlock.h>
-+#include <trace/events/power.h>
-+#include "k4-pm-health-state.h"
-+
-+static DEFINE_RAW_SPINLOCK(health_lock);
-+static struct k4_pm_health_state health;
-+static bool ready;
-+
-+static int awake_get(char *buffer, const struct kernel_param *parameter)
-+{
-+	unsigned long flags;
-+	u64 awake;
-+	bool valid;
-+
-+	/* Registration is published before userspace may sample the clock. */
-+	if (!smp_load_acquire(&ready))
-+		return -ENODEV;
-+	raw_spin_lock_irqsave(&health_lock, flags);
-+	valid = k4_health_read(&health, ktime_get_boottime_ns(), &awake);
-+	raw_spin_unlock_irqrestore(&health_lock, flags);
-+	if (!valid)
-+		return -EIO;
-+	return scnprintf(buffer, PAGE_SIZE, "%llu\n", awake);
-+}
-+
-+static const struct kernel_param_ops awake_ops = {
-+	.get = awake_get,
-+};
-+module_param_cb(awake_ns, &awake_ops, NULL, 0444);
-+MODULE_PARM_DESC(awake_ns, "BOOTTIME ns excluding userspace PM freeze intervals");
-+
-+static int state_get(char *buffer, const struct kernel_param *parameter)
-+{
-+	unsigned long flags;
-+	struct k4_pm_health_state snapshot;
-+
-+	raw_spin_lock_irqsave(&health_lock, flags);
-+	snapshot = health;
-+	raw_spin_unlock_irqrestore(&health_lock, flags);
-+	return scnprintf(buffer, PAGE_SIZE,
-+			 "frozen_ns=%llu cycles=%llu active=%u fault=%u\n",
-+			 snapshot.frozen_ns, snapshot.cycles,
-+			 snapshot.active, snapshot.fault);
-+}
-+
-+static const struct kernel_param_ops state_ops = {
-+	.get = state_get,
-+};
-+module_param_cb(freeze_state, &state_ops, NULL, 0444);
-+MODULE_PARM_DESC(freeze_state, "Cumulative userspace PM freeze accounting");
-+
-+static void health_phase(void *unused, const char *action, int value, bool start)
-+{
-+	unsigned long flags;
-+
-+	if (!start)
-+		return;
-+	if (strcmp(action, "freeze_processes") && strcmp(action, "thaw_processes"))
-+		return;
-+	raw_spin_lock_irqsave(&health_lock, flags);
-+	if (!strcmp(action, "freeze_processes"))
-+		k4_health_begin(&health, ktime_get_boottime_ns());
-+	else
-+		/* This tracepoint precedes waking any frozen userspace task. */
-+		k4_health_end(&health, ktime_get_boottime_ns());
-+	raw_spin_unlock_irqrestore(&health_lock, flags);
-+}
-+
-+static int __init k4_pm_health_init(void)
-+{
-+	int ret;
-+
-+	if (!of_machine_is_compatible("amazon,kindle-4"))
-+		return -ENODEV;
-+	ret = register_trace_suspend_resume(health_phase, NULL);
-+	if (ret)
-+		return ret;
-+	/* Pair with the sysfs reader after tracepoint registration. */
-+	smp_store_release(&ready, true);
-+	return 0;
-+}
-+late_initcall(k4_pm_health_init);
 +MODULE_LICENSE("GPL");
 --- a/drivers/watchdog/imx2_wdt.c
 +++ b/drivers/watchdog/imx2_wdt.c

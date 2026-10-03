@@ -1,0 +1,4 @@
+#!/sbin/openrc-run
+description="K4 generic modalias coldplug"
+depend() { need k4-platform; before k4-wifi; }
+start() { (umask 077; /bin/busybox timeout 60 /bin/sh /bin/k4-modalias-coldplug > /run/k4-modalias-coldplug.log 2>&1) || :; }

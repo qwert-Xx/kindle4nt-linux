@@ -106,6 +106,13 @@
       "index_checksum": "Q17uhNXVsxAPRypD1NoWvaC8+H/R0="
     },
     {
+      "name": "busybox-openrc",
+      "version": "1.37.0-r31",
+      "file": "busybox-openrc-1.37.0-r31.apk",
+      "sha256": "9c03426af5102e2b66889da6e633f039e461acb4b03cf8f80a72076392ee57ec",
+      "index_checksum": "Q1IScKGjrHm8gC3NymZGRbDoNjgtY="
+    },
+    {
       "name": "ca-certificates",
       "version": "20260909-r0",
       "file": "ca-certificates-20260909-r0.apk",

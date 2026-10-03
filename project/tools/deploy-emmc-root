@@ -1,23 +1,20 @@
 #!/bin/busybox sh
 # SPDX-License-Identifier: GPL-2.0-or-later
-# Explicitly run in the USB/RAM maintenance system. Destructively replaces p1.
+# Explicitly run in the USB/RAM maintenance system. Destructively replaces the requested partition.
 set -eu
 bb=/bin/busybox
-[ "$#" = 3 ] || { echo "usage: $0 ROOTFS.tar.gz SHA256 MAINTENANCE_DIR" >&2; exit 2; }
+[ "$#" = 4 ] || { echo "usage: $0 ROOTFS.tar.gz SHA256 MAINTENANCE_DIR TARGET_PARTITION" >&2; exit 2; }
 archive=$1
 expected=$2
 tools=$3
-disk=/dev/mmcblk2
-part=/dev/mmcblk2p1
+part=$4
 mnt=/tmp/k4-emmc-root
 [ -b "$part" ]
-[ "$($bb cat /sys/class/block/mmcblk2p1/start)" = 65536 ]
-[ "$($bb cat /sys/class/block/mmcblk2p1/size)" = 3760128 ]
-# Reject p1 even if mounted as /dev/root or by UUID.
-[ -r /proc/self/mountinfo ] && [ -r /proc/mounts ]
-$bb awk '$3 == "179:1" { exit 1 }' /proc/self/mountinfo
-if $bb grep -q '^/dev/mmcblk2' /proc/mounts; then
-    echo 'eMMC is mounted; refusing deployment' >&2
+major=$($bb stat -L -c '%t' "$part")
+minor=$($bb stat -L -c '%T' "$part")
+devnum="$((0x$major)):$((0x$minor))"
+if ! $bb awk -v dev="$devnum" '$3 == dev {found=1} END {exit found}' /proc/self/mountinfo; then
+    echo 'Target partition is mounted; refusing deployment' >&2
     exit 1
 fi
 [ -f "$tools/mke2fs.conf" ] && [ -x "$tools/mke2fs" ]
@@ -27,12 +24,8 @@ $bb mkdir -p "$mnt"
 cleanup() {
     $bb sync
     if $bb grep -q " $mnt " /proc/mounts; then $bb umount "$mnt"; fi
-    $bb blockdev --setro "$part"
-    $bb blockdev --setro "$disk"
 }
 trap cleanup EXIT
-$bb blockdev --setrw "$disk"
-$bb blockdev --setrw "$part"
 MKE2FS_CONFIG="$tools/mke2fs.conf" "$tools/mke2fs" -t ext4 -b 4096 -I 256 -m 5 -L K4ROOT -U bc53465e-1be7-4c38-8965-d5bdc7b4c4f1 -E lazy_itable_init=0,lazy_journal_init=0,nodiscard "$part"
 $bb mount -t ext4 "$part" "$mnt"
 $bb tar -xzpf "$archive" -C "$mnt"
@@ -42,4 +35,4 @@ $bb umount "$mnt"
 $bb mount -t ext4 -o ro "$part" "$mnt"
 (cd "$mnt" && $bb sha256sum -c etc/k4-rootfs.sha256)
 $bb umount "$mnt"
-echo 'p1 deployment and file readback verified; no bootloader update performed'
+echo 'Partition deployment and file readback verified; no bootloader update performed'

@@ -1,0 +1,30 @@
+#!/bin/busybox sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Foreground consumers supervised by BusyBox init; no watchdog ownership here.
+set -eu
+umask 077
+bb=/bin/busybox
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export K4_DHCP_RESOLV_FILE=/run/resolv.conf
+# Bound respawn rate even when prerequisites or exec fail.
+$bb sleep 2
+test -e /run/k4-boot-ready
+case "${1:-}" in
+    usb-ssh)
+        if [ ! -s /etc/dropbear/k4-hostkey ]; then
+            $bb mkdir -p /etc/dropbear
+            /bin/dropbearkey -t ecdsa -s 256 -f /etc/dropbear/k4-hostkey
+        fi
+        test -e /sys/class/net/usb0
+        echo $$ > /run/k4-usb-ssh-service.pid
+        exec /bin/dropbear -F -r /etc/dropbear/k4-hostkey \
+            -p 169.254.212.2:2222 -P /run/dropbear.pid \
+            >> /tmp/k4-usb-ssh-service.log 2>&1
+        ;;
+    wifi)
+        echo $$ > /run/k4-wifi-supervisor.pid
+        exec /bin/sh /bin/k4-wifi-connect --service \
+            >> /tmp/k4-wifi-service.log 2>&1
+        ;;
+    *) exit 2 ;;
+esac

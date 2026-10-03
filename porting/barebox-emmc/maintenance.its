@@ -1,0 +1,43 @@
+/dts-v1/;
+
+/ {
+    description = "RAM maintenance kernel, device tree and initramfs";
+    #address-cells = <1>;
+    images {
+        kernel {
+            description = "Linux ARM zImage";
+            data = /incbin/("k4-kernel.zImage");
+            type = "kernel";
+            arch = "arm";
+            os = "linux";
+            compression = "none";
+            hash { algo = "sha256"; };
+        };
+        fdt {
+            description = "Board device tree";
+            data = /incbin/("k4-board.dtb");
+            type = "flat_dt";
+            arch = "arm";
+            compression = "none";
+            hash { algo = "sha256"; };
+        };
+        ramdisk {
+            description = "gzip cpio initramfs";
+            data = /incbin/("k4-full-ram.cpio.gz");
+            type = "ramdisk";
+            arch = "arm";
+            os = "linux";
+            compression = "none";
+            hash { algo = "sha256"; };
+        };
+    };
+    configurations {
+        default = "maintenance";
+        maintenance {
+            description = "RAM maintenance";
+            kernel = "kernel";
+            fdt = "fdt";
+            ramdisk = "ramdisk";
+        };
+    };
+};

@@ -1,41 +1,43 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
-# eMMC 根构建与部署
+# Alpine eMMC 部署
 
-本页为操作配方，不会自动访问设备。当前默认根见 [Alpine](ALPINE-ROOT.md)；本页保留 BusyBox 直接 ext4 rw 根维护/备选配方。内核使用 k4_defconfig + k4-production.config，kernel_profile=emmc-root，release=6.6.157-k4-production。MMC_BLOCK/ESDHC/EXT4/DEVTMPFS 为 builtin，无嵌入 initramfs；ATH6KL/ATH6KL_SDIO=m，根挂载后标准 coldplug 加载，固件不嵌入内核。硬件 DTS 与 production 相同。
+`alpine/rootfs.tar.gz` 包含 Alpine 根及 `/boot/zImage`、`/boot/imx50-kindle-k4.dtb`。barebox 默认启动用户区第一分区，Linux 参数为 `root=/dev/mmcblk2p1 rw rootwait`，不使用 initrd。根文件系统为 ext4。
 
-## 离线构建
+## 上传
 
-在公开补丁应用后的独立 Linux v6.6.157 源码树运行：
+先[启动 RAM 维护系统](RAM-BOOT.md)，在主机使用自己的 SSH 私钥，上传归档、部署脚本和静态 mke2fs 工具包：
 
 ```sh
-python3 project/build.py --source /absolute/linux --inputs /absolute/emmc-root.json --out /absolute/new-output --jobs 8
-python3 project/userspace/e2fsprogs.py --source /absolute/e2fsprogs-1.47.1.tar.xz --out /absolute/new-mke2fs-output
-python3 project/userspace/maintenance.py --source /absolute/mmc-utils-1.0.tar.gz --out out/new-mmc-maintenance
+ssh -p 2222 root@169.254.212.2 'cat > /tmp/rootfs.tar.gz' < "$OUT/images/alpine/rootfs.tar.gz"
+ssh -p 2222 root@169.254.212.2 'cat > /tmp/deploy-emmc-root' < project/tools/deploy-emmc-root
+ssh -p 2222 root@169.254.212.2 'cat > /tmp/e2fsprogs.tar.gz' < "$OUT/e2fsprogs/maintenance.tar.gz"
+sha256sum "$OUT/images/alpine/rootfs.tar.gz"
 ```
 
-外部 JSON 选 kernel_profile=emmc-root，inputs.ram_recipe 提供路径与 SHA256；遵循 project/README.md 的逐文件根配方。所有固件、波形、Wi-Fi凭据、密钥和备份由拥有者在仓库外提供，不随公开 tar 发布。rootfs.tar.gz 固定名字排序/uid/gid/mtime/gzip元数据，清单记录模式、链接、文件SHA与特殊设备号。BusyBox watchdog 持续10秒喂30秒硬件狗；eMMC根没有有限 RAM guard。关机 sync/remount ro，重启使用已有生产 restart 路径。
+维护根提供 Dropbear 服务，没有默认安装 SCP/SFTP 服务程序，因此用 SSH 标准输入传输。正常 Alpine 可用 scp/SFTP。
 
-维护工具使用 userspace 下的版本/SHA锁；mke2fs 和 mmc 均静态 ARM hard-float，无 INTERP。mke2fs.conf 显式 ext4 特性，禁用 discard、立即初始化 inode/journal，避免 host 默认新特性影响 barebox。维护工具不装入 production 根。maintenance.py 当前要求输出位于草案 out/；输出不要提交。
+## 选择目标与部署
 
-## 部署顺序（会覆盖 p1；仅按明确设备授权执行）
+部署会格式化并覆盖显式指定分区，原数据只能从自己的备份恢复。它不创建分区表，不写 boot0/boot1，不改 EXT_CSD。先保存用户区备份；在设备维护 shell 中核对实际容量、分区与挂载状态：
 
-先准备完整主机备份和“下+复位→ROM→USB加载Linux RAM”恢复链，确认容量、枚举与剩余 guard 时间。既有 RAM 维护根保持存储只读，部署脚本显式临时解除后恢复。当前布局 p1 起始65536、大小3760128扇区；不改 MBR/前32MiB/boot0。这里 /dev/mmcblk2 是已验证枚举，换设备必须重新确认。root tar 与维护包先在 RAM 校验SHA。
+```sh
+ls /sys/class/block/mmcblk*
+cat /proc/partitions
+cat /proc/mounts
+mkdir -p /tmp/e2fsprogs
+tar -xzpf /tmp/e2fsprogs.tar.gz -C /tmp/e2fsprogs
+```
 
-1. `project/tools/deploy-emmc-root`：静态 mke2fs 格式化 p1 → mount → 解包 tar → sync → umount → 只读重挂载，以 /etc/k4-rootfs.sha256 校验全部文件 → 恢复主设备/p1只读。调用 `/bin/busybox sh deploy-emmc-root rootfs.tar.gz <SHA256> maintenance-directory`。挂载点在 /tmp；脚本不写 boot区、不延长有限 guard。
-2. 按 [boot1说明](BAREBOX-BOOT1.md) 备份完整 boot1，写入离线核验的 v8 镜像，保留尾部并完整读回比较，恢复 force_ro 与 blockdev RO。不要写 boot0。
-3. 最后单独激活：主设备暂时 setrw，`mmc extcsd write 179 0x50 /dev/mmcblk2`，重新 extcsd read 核对0x50，setro。不改 BOOT_BUS_WIDTH、fuse 或永久保护。
-4. 正常 reboot 观察 v8 自动读取 /boot/zImage 与 /boot/imx50-kindle-k4.dtb，root=/dev/mmcblk2p1 rw rootwait；核对模块/固件、显示、网络、看门狗与文件SHA。保留已知可用 kernel/DTB 的 .prev；模块也须与 kernel 完整匹配。
+将下例 SHA256 替换为主机输出，目标分区按实际设备选择。默认 barebox 从第一分区启动，因此这个示例使用 `/dev/mmcblk2p1`：
 
-## 回退
+```sh
+sh /tmp/deploy-emmc-root /tmp/rootfs.tar.gz SHA256_FROM_HOST /tmp/e2fsprogs/maintenance /dev/mmcblk2p1
+```
 
-按住“下”配合复位进入 ROM，再由主机 USB 加载已验证 barebox/Linux RAM；或向 v8 USB 串口发送 Ctrl-C 中断5秒窗口，进入 shell/YMODEM 主机加载，显式上传 kernel/DTB/RAM根并 bootm。Linux RAM 中用标准 mmc 修改179（0x48选择boot0），核对并恢复RO；p1已被替换时，改179本身不会恢复原厂root，须用备份重写p1或修复新的p1内容。不得把改179当作自动完整回滚。完整 boot1 读回流程见链接，不靠 guard 超时进行部署恢复。
+脚本要求四个参数，验证归档 SHA，拒绝已挂载的目标，使用静态 mke2fs 格式化 ext4，再解包、sync、重新只读挂载并验证 `etc/k4-rootfs.sha256` 中所有普通文件。最后打印 `Partition deployment and file readback verified`。这里的只读挂载是部署后的文件读回步骤，运行时根正常读写。
 
-## 验证范围
+## 启动与修复
 
-## 当前状态（2026-10-03，既有实机记录）
+按[boot1 指南](BAREBOX-BOOT1.md)安装并选择 boot1 后，`reboot` 会进入当前 Alpine。USB 地址是 `169.254.212.2`，SSH 为 22 端口，root 公钥登录。
 
-boot1 barebox v8，EXT_CSD[179]=0x50，默认 eMMC p1 Alpine 3.24.2；BusyBox 根作为维护/备选。
-USB 串口发送 Ctrl-C（0x03）中断 boot/emmc 的 sleep 5 进入 shell，再 YMODEM 加载方案 A RAM 维护包（k4-maint-ram-20261003，900/30 expire-health）；不要复位前按上。5秒从脚本运行计起，Windows枚举可能缩短实际主机窗口，窗口末尾和电池独立冷启动待验。
-WDI 原厂方案 A 为 ALT2/0x0c，正常态由 restart pinctrl 持有。Alpine 正常根持续 watchdog 喂狗，无有限 RAM guard；Wi-Fi使用官方 main 的 wpa_supplicant 2.11-r4。
-Alpine 首次启动与3轮正常 reboot、两档 RTC STOP/内存保持/醒后刷新、NTP/SRTC正常关机读写和 HTTPS apk update 已有实机记录；长期运行、upgrade、第二台 K4 与物理电源轨仍未验。详 [Alpine 配方](ALPINE-ROOT.md) 与 [guard 对照](RAM-GUARD-COMPARISON.md)。发布前需用户许可审阅。
-本次只离线编辑、构建和扫描，未访问设备、未 push。默认根更新不意味着覆盖所有冷启动/耐久验收。
+若根文件缺失或损坏，Ctrl-C 进入 barebox，fastboot 启动维护 FIT 后重新执行上述部署；boot1 无法运行时使用 ROM 下载恢复。入口见[恢复指南](RAM-BOOT.md)。部署到其它分区时，也需相应修改 barebox 的读取路径与 Linux root 参数。

@@ -10,7 +10,11 @@ export SOURCE_DATE_EPOCH=1790812800
 mapflags="-ffile-prefix-map=$out=/build/k4-wifi -fdebug-prefix-map=$out=/build/k4-wifi"
 mkdir -p "$out/work" "$out/bin"
 cd "$cache"
-python3 "$repo/../../sources/fetch.py" --cache "$cache" --offline --name wpa_supplicant --name libnl --name iw
+sha256sum -c <<'EOF'
+912ea06f74e30a8e36fbb68064d6cdff218d8d591db0fc5d75dee6c81ac7fc0a  wpa_supplicant-2.11.tar.gz
+fc51ca7196f1a3f5fdf6ffd3864b50f4f9c02333be28be4eeca057e103c0dd18  libnl-3.12.0.tar.gz
+7d182e498289ab39b257da6780d562e415377107f50358ee5b55b8cfe40b1e33  iw-6.17.tar.xz
+EOF
 if [ ! -d "$out/work/libnl-3.12.0" ]; then
 	tar -xzf libnl-3.12.0.tar.gz -C "$out/work"
 fi

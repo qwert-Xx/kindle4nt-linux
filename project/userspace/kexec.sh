@@ -5,7 +5,7 @@ set -euo pipefail
 cache=${1:?CACHE}; out=${2:?NEW_EXTERNAL_OUT}; cross=${3:?LINARO_CROSS_PREFIX}
 [ ! -e "$out" ] || { echo 'Output must be fresh' >&2; exit 1; }
 mkdir -p "$out"
-python3 "$(dirname "$0")/../../sources/fetch.py" --cache "$cache" --offline --name kexec-tools
+echo "8f81422a5fd2362cf6cb001b511e535565ed0f32c2f4451fb5eb68fed6710a5d  $cache/kexec-tools-2.0.32.tar.xz" | sha256sum -c -
 tar -xJf "$cache/kexec-tools-2.0.32.tar.xz" -C "$out"
 patch -d "$out/kexec-tools-2.0.32" -p1 < "$(dirname "$0")/kexec-dtb-handoff.patch"
 cd "$out/kexec-tools-2.0.32"

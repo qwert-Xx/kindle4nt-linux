@@ -1,0 +1,5 @@
+#!/sbin/openrc-run
+description="K4 USB, SPI and charging initialization"
+depend() { after watchdog; before k4-coldplug; }
+start() { /bin/sh /etc/k4/platform-start; }
+stop() { /bin/sh /bin/k4-charge-policy stop; }

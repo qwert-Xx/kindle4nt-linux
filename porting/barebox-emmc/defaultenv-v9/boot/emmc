@@ -1,0 +1,16 @@
+#!/bin/sh
+# USB console is enabled before the upstream autoboot countdown.
+mkdir -p /mnt/emmc
+mount -t ext4 /dev/mmc2.0 /mnt/emmc || exit 1
+if [ ! -f "/mnt/emmc${global.k4.kernel}" ] || [ ! -f "/mnt/emmc${global.k4.dtb}" ]; then
+    echo "Kernel or DTB missing: returning to shell for manual RAM loading"
+    exit 1
+fi
+global.bootm.boot_atag=false
+global.bootm.appendroot=false
+# Display defaults in nv/linux.bootargs.console keep fbcon off fb0 and hide the logo; users may change them.
+global linux.bootargs.k4="console=ttymxc0,115200 root=/dev/mmcblk2p1 rw rootwait watchdog.open_timeout=120 imx2_wdt.nowayout=1 ath6kl_sdio.force_virtual_scatter=0"
+global.bootm.image="/mnt/emmc${global.k4.kernel}"
+global.bootm.oftree="/mnt/emmc${global.k4.dtb}"
+global.bootm.initrd=""
+# Standard boot script machinery invokes bootm after this script returns.
