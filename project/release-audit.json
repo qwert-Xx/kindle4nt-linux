@@ -1,9 +1,9 @@
 {
   "refs": [
-    "refs/heads/draft/public"
+    "refs/heads/main"
   ],
   "remotes": [],
-  "reachable_blobs": 282,
+  "reachable_blobs": 301,
   "findings": [
     {
       "oid": "ee548d51aed375adeac4390d6676e2b8f5ba21aa",
@@ -13,7 +13,7 @@
       "line": 7
     },
     {
-      "oid": "0861a51040d0d3617e9abc9f28c8709d4d042899",
+      "oid": "3b3f2cf1d75c24b61140c8646c181efee22bb02e",
       "file": "project/audit_release.py",
       "object_type": "blob",
       "category": "local_path",
@@ -34,6 +34,13 @@
       "line": 49
     },
     {
+      "oid": "0861a51040d0d3617e9abc9f28c8709d4d042899",
+      "file": "project/audit_release.py",
+      "object_type": "blob",
+      "category": "local_path",
+      "line": 20
+    },
+    {
       "oid": "be022bfc43f5122f97e7b13fb43d715f65a31808",
       "file": "project/audit_release.py",
       "object_type": "blob",
@@ -48,11 +55,9 @@
   "missing_license_texts": [],
   "unexpected_identities": [],
   "manual_copyright_review_required": false,
-  "audited_commit": "98f6a75cb0d79f7687ca372fb140e17dda6fef96",
-  "reviewed_findings": [
-    "Scanner regex literals in audit_public.py and audit_release.py",
-    "Fixed locally administered USB gadget address defaults in rcS.k4-base; not extracted device MACs"
-  ],
-  "unresolved_privacy_findings": [],
-  "copyright_classifications_approved": "2026-10-03"
+  "reviewed_findings": "Scanner regex literals and fixed locally administered USB gadget MAC defaults; no private device identifiers or actual local paths.",
+  "audited_commit": "fb9da921a2e324bcbde4250484089a50b06c3e26",
+  "copyright_classifications_approved": "2026-10-03",
+  "reuse_lint": "PASS: REUSE Specification 3.0; 169/169 files, no bad, deprecated, missing or unused licenses",
+  "compiled_inputs": "Unchanged against pre-attribution release commit 8c2f00c; existing reproduction evidence remains applicable."
 }
