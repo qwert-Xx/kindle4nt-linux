@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
-# 新用户待决项实施与主机验证
+# 新用户待决项实施、主机与设备验证
 
 在 fix/new-user-pending worktree，基线 e550b249d。只写本 worktree（含 ignored .k4-build/pending）与 Windows AGENTS.md 副本；以 kindle 用户构建/提交，LF，不 push、不访问设备。内核、驱动、barebox 代码及历史日期报告未修改。
 
@@ -58,3 +58,9 @@ mmc-utils 新工具包两次相同 SHA256：`1d35dadd8a4cdcee057a22acdbbe7bc8c76
 设备待验证：两种 Alpine 的标准挂载时序、维护 /tmp 同时存放根和维护工具并按原流程部署；简化 barebox 参数后的 fastboot 启动；Linux/Windows 主机 USB 权限、驱动、WSL gadget 转接；面板 NOR 导出、波形面板匹配及刷新/跨温区画质。主机验证不代替这些设备验收。
 
 功能提交：1411ef298（tmpfs）、349cd7f7f/c5dfaa4b2（mmc commit/包元数据）、620427144（自动源码缓存）、827e84f29（fastboot/RAM参数）、949ff6a2a/8a4f07bf9/34d0332de（波形）、587eb3a2e（AGENTS）。后续报告与文字校对见本文件的 Git 历史。
+
+## 本轮发布的设备验证补充
+
+以上主机阶段的“设备待验证”是当时范围。本轮发布已按简化barebox参数启动维护FIT并经SSH2222连接，确认维护/tmp与/run均118.9M；根归档和维护工具均放/tmp，解包后仍可用86.0M，原指南单一/tmp部署流程通过。新Alpine仅部署到/dev/mmcblk2p1并只读文件读回通过；根rw、官方watchdog、Wi-Fi/DHCP/ping、USB与Wi-Fi SSH22通过。eMMC Alpine实际df显示/tmp与/run同为118.9M，挂载无size参数；以本轮运行结果为准，不把早先对OpenRC脚本20%选项的静态描述当作运行时容量。一次停喂51.531秒内自动经v9返回新Alpine，默认tmpfs与上述服务再次通过。详细输出及验证边界见[发布实机记录](../../porting/RELEASE-DEPLOY-PUBLIC-20261003.md)。
+
+Alpine RAM挂载时序仍仅主机构建；本轮沿用既有Windows USB/IP与驱动，未新增独立Linux普通用户USB权限验收。面板NOR导出/匹配/刷新、物理拔USB电池启动、电源轨及长期稳定性没有本轮实机证据。

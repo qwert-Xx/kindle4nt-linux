@@ -67,7 +67,7 @@ usbserial -d
 usbgadget -a -A
 ```
 
-`emmc-v9` 只在自动启动选择 emmc 条目后执行，才设置 `linux.bootargs.k4`；`usbconsole-v9` 在倒计时前仅设置入口、路径和控制台。倒计时中 Ctrl-C 不执行 emmc 脚本，无需删除这些命名空间。依据为编译环境脚本和上游 autoboot 调用路径；新命令序列未实机验证。
+`emmc-v9` 只在自动启动选择 emmc 条目后执行，才设置 `linux.bootargs.k4`；`usbconsole-v9` 在倒计时前仅设置入口、路径和控制台。倒计时中 Ctrl-C 不执行 emmc 脚本，无需删除这些命名空间。依据为编译环境脚本和上游 autoboot 调用路径；本命令序列已在本轮发布中通过维护 FIT 实机启动，见[发布验证](../../porting/RELEASE-DEPLOY-PUBLIC-20261003.md)。
 
 切换 gadget 时原 USB 控制台会断开。准备主机后运行：
 
