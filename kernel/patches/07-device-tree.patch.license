@@ -3,3 +3,16 @@ SPDX-FileCopyrightText: Copyright 2011 Freescale Semiconductor, Inc.
 SPDX-FileCopyrightText: Copyright 2011 Linaro Ltd.
 SPDX-FileCopyrightText: Copyright 2013 Greg Ungerer <gerg@uclinux.org>
 SPDX-License-Identifier: GPL-2.0-only
+
+Target: arch/arm/boot/dts/nxp/imx/imx50-kindle-k4-common.dtsi
+hardware description/format based on Amazon's GPL-2.0 Kindle kernel source
+Source: Kindle GPL kernel source: arch/arm/mach-mx5/mx50_yoshi.c
+SPDX-FileCopyrightText: Copyright (C) 2010 Amazon.com, Inc. All Rights Reserved.
+
+Target: arch/arm/boot/dts/nxp/imx/imx50-kindle-k4-stock-pxp.dts
+hardware description/format based on Amazon's GPL-2.0 Kindle kernel source
+Source: Kindle GPL kernel source: arch/arm/mach-mx5/mx50_yoshi.c
+
+Target: arch/arm/boot/dts/nxp/imx/imx50-kindle-k4.dts
+hardware description/format based on Amazon's GPL-2.0 Kindle kernel source
+Source: Kindle GPL kernel source: arch/arm/mach-mx5/mx50_yoshi.c

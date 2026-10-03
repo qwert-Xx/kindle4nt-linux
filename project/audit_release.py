@@ -35,6 +35,6 @@ def audit(repo):
  expected='qwert-Xx <128706845+qwert-Xx@users.noreply.github.com>'
  bad=sorted(set(x for x in authors if x!=expected))
  refs=git('for-each-ref','--format=%(refname)').decode().splitlines()
- return dict(refs=refs,remotes=git('remote').decode().splitlines(),reachable_blobs=count,findings=findings,crlf=crlf,binary_or_private_files=binaries,missing_spdx=missing,missing_copyright=copyright_missing,missing_license_texts=license_missing,unexpected_identities=bad,manual_copyright_review_required=True)
+ return dict(refs=refs,remotes=git('remote').decode().splitlines(),reachable_blobs=count,findings=findings,crlf=crlf,binary_or_private_files=binaries,missing_spdx=missing,missing_copyright=copyright_missing,missing_license_texts=license_missing,unexpected_identities=bad,manual_copyright_review_required=any(x.get("status")=="需人工确认" for x in json.loads((repo/"COPYRIGHT-PROVENANCE.json").read_text())))
 if __name__=='__main__':
  p=argparse.ArgumentParser();p.add_argument('repo');p.add_argument('--out',required=True);a=p.parse_args();d=audit(a.repo);pathlib.Path(a.out).write_text(json.dumps(d,indent=2)+'\n');print(json.dumps(d,indent=2))

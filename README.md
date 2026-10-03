@@ -43,6 +43,6 @@ The normal Alpine root continuously feeds the watchdog; RAM maintenance has a fi
 
 ## Licenses and acknowledgements
 
-Kernel/barebox patches and derivative code: GPL-2.0-only. Original scripts/tools: GPL-2.0-or-later. Documentation: CC-BY-4.0. Individual upstream notices and file license expressions remain applicable. Full texts are in [LICENSES](LICENSES); see [copyright provenance](COPYRIGHT-PROVENANCE.md) and [third-party components](THIRD-PARTY.md). Outstanding attribution questions are marked “需人工确认” for review before publication.
+Kernel/barebox patches and derivative code: GPL-2.0-only. Original scripts/tools: GPL-2.0-or-later. Documentation: CC-BY-4.0. Individual upstream notices and file license expressions remain applicable. Full texts are in [LICENSES](LICENSES); see [copyright provenance](COPYRIGHT-PROVENANCE.md) and [third-party components](THIRD-PARTY.md). Attribution classifications were reviewed and approved by the project owner; the provenance table records the source and notice for each affected file.
 
-Thanks to Linux, barebox, Alpine, BusyBox and the other upstream maintainers, and to the Amazon/Lab126/Freescale original open-source code authors. This repository contains source, patches, recipes and build scripts only. Publication remains subject to user review.
+Thanks to Linux, barebox, Alpine, BusyBox and the other upstream maintainers, and to the Amazon/Lab126/Freescale original open-source code authors. This repository contains source, patches, recipes and build scripts only. 

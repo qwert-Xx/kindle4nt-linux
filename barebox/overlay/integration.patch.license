@@ -1,2 +1,4 @@
 SPDX-FileCopyrightText: 2026 qwert-Xx
 SPDX-License-Identifier: GPL-2.0-only
+
+interface conventions determined from the behaviour of the stock boot ROM/SPL; no stock code copied

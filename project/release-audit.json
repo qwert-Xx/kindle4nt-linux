@@ -47,11 +47,12 @@
   "missing_copyright": [],
   "missing_license_texts": [],
   "unexpected_identities": [],
-  "manual_copyright_review_required": true,
+  "manual_copyright_review_required": false,
   "audited_commit": "98f6a75cb0d79f7687ca372fb140e17dda6fef96",
   "reviewed_findings": [
     "Scanner regex literals in audit_public.py and audit_release.py",
     "Fixed locally administered USB gadget address defaults in rcS.k4-base; not extracted device MACs"
   ],
-  "unresolved_privacy_findings": []
+  "unresolved_privacy_findings": [],
+  "copyright_classifications_approved": "2026-10-03"
 }

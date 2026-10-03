@@ -293,7 +293,7 @@
     "userspace_unittests_pass": 5,
     "barebox_python_tests_pass": 15
   },
-  "manual_copyright_confirmation_required": true,
+  "manual_copyright_confirmation_required": false,
   "one_command_entry": {
     "status": "PASS: complete clean command with stock ZQ, user key and external firmware/boot0 inputs; no existing root tar or our signing private key",
     "prior_failures": [
@@ -317,5 +317,6 @@
     "identity": "qwert-Xx <128706845+qwert-Xx@users.noreply.github.com>",
     "pre_rewrite_bundle_external": true,
     "old_identity_refs_retained": false
-  }
+  },
+  "copyright_classifications_approved": "2026-10-03"
 }

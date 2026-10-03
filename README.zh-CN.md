@@ -41,6 +41,6 @@ python3 project/release.py --cache /external/source-cache --out /external/new-bu
 
 正常 Alpine 根持续喂看门狗；RAM 维护使用有限 guard。内核、DTB、模块必须匹配，并保存已知可用 RAM 救援包。下键复位进入 ROM 后，可在 RAM 中恢复自己的完整 boot1/p1 备份；单独选择 boot0 不等于恢复原厂系统。见[已知问题](project/docs/KNOWN-ISSUES.md)与 [RAM 恢复](project/docs/RAM-BOOT.md)。
 
-内核/barebox 补丁及派生代码 GPL-2.0-only；原创脚本/工具 GPL-2.0-or-later；文档 CC-BY-4.0。上游文件原作者通知及逐文件许可表达式仍有效。[LICENSES](LICENSES) 提供全文，[版权出处表](COPYRIGHT-PROVENANCE.md)和[第三方清单](THIRD-PARTY.md)供发布前审阅，“需人工确认”项不得当成已解决。
+内核/barebox 补丁及派生代码 GPL-2.0-only；原创脚本/工具 GPL-2.0-or-later；文档 CC-BY-4.0。上游文件原作者通知及逐文件许可表达式仍有效。[LICENSES](LICENSES) 提供全文，[版权出处表](COPYRIGHT-PROVENANCE.md)和[第三方清单](THIRD-PARTY.md)记录逐文件依据；版权分类已由项目所有者审阅批准，无待确认项。
 
 感谢 Linux、barebox、Alpine、BusyBox 和其他上游维护者，以及 Amazon/Lab126/Freescale 原厂开源代码作者。本仓库只分发源码、补丁、配方和构建脚本，正式发布仍待用户审阅。

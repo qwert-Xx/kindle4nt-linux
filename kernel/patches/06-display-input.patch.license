@@ -5,3 +5,14 @@ SPDX-FileCopyrightText: Copyright (C) 2009 Sascha Hauer, Pengutronix
 SPDX-FileCopyrightText: Copyright (C) 2010 Philippe Rétornaz
 SPDX-FileCopyrightText: Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
 SPDX-License-Identifier: GPL-2.0-only
+
+Target: drivers/video/fbdev/imx50-epdc-waveform.c
+hardware description/format based on Amazon's GPL-2.0 Kindle kernel source
+Source: Kindle GPL kernel source: drivers/video/mxc/mxc_epdc_fb.c
+SPDX-FileCopyrightText: Copyright (C) 2010-2011 Freescale Semiconductor, Inc.
+SPDX-FileCopyrightText: Copyright 2010-2012 Amazon Technologies, Inc. All Rights Reserved.
+
+Target: include/linux/imx50-pxp.h
+hardware description/format based on Amazon's GPL-2.0 Kindle kernel source
+Source: Kindle GPL kernel source: include/linux/pxp_dma.h
+SPDX-FileCopyrightText: Copyright (C) 2010 Freescale Semiconductor, Inc. All Rights Reserved.

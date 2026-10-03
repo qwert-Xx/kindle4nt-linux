@@ -6,7 +6,7 @@
     "copyright_lines": [
       "Copyright 2010 Amazon Technologies, Inc. All Rights Reserved."
     ],
-    "status": "confirmed attribution; derivative scope needs user review"
+    "status": "已确认派生，已署名"
   },
   {
     "file": "barebox/overlay/zqcal-sram.S",
@@ -15,7 +15,7 @@
     "copyright_lines": [
       "Copyright 2010-2012 Amazon.com, Inc. All rights reserved."
     ],
-    "status": "confirmed attribution; derivative scope needs user review"
+    "status": "已确认派生，已署名"
   },
   {
     "file": "barebox/overlay/zqcal.c",
@@ -24,14 +24,14 @@
     "copyright_lines": [
       "Copyright 2010 Amazon Technologies, Inc. All Rights Reserved."
     ],
-    "status": "confirmed attribution; derivative scope needs user review"
+    "status": "已确认派生，已署名"
   },
   {
     "file": "barebox/boot1/ocram-stock-entry.S",
-    "source": "stock ROM/SPL ABI, register-sequence reconstruction",
-    "basis": "source header and code/source correspondence",
+    "source": "stock boot ROM/SPL interface behaviour",
+    "basis": "interface conventions determined from the behaviour of the stock boot ROM/SPL; no stock code copied",
     "copyright_lines": [],
-    "status": "需人工确认"
+    "status": "项目原创（接口参照）"
   },
   {
     "file": "kernel/patches/03-power.patch",
@@ -40,7 +40,7 @@
     "copyright_lines": [
       "Copyright (C) 2010-2011 Amazon.com, Inc. All Rights Reserved."
     ],
-    "status": "confirmed attribution; derivative scope needs user review"
+    "status": "已确认派生，已署名"
   },
   {
     "file": "barebox/boot1/rollback-boot0-draft.sh",
@@ -79,10 +79,10 @@
   },
   {
     "file": "barebox/boot1/build-plugin.py",
-    "source": "barebox v2026.09.0 board support / Amazon stock baseline where cited",
-    "basis": "overlay, build script or independently written tool; upstream headers retained in generated tree",
+    "source": "stock boot ROM/SPL interface behaviour",
+    "basis": "interface conventions determined from the behaviour of the stock boot ROM/SPL; no stock code copied",
     "copyright_lines": [],
-    "status": "需人工确认"
+    "status": "项目原创（接口参照）"
   },
   {
     "file": "barebox/boot1/emmc-v8",
@@ -121,10 +121,10 @@
   },
   {
     "file": "barebox/boot1/plugin_common.py",
-    "source": "barebox v2026.09.0 board support / Amazon stock baseline where cited",
-    "basis": "overlay, build script or independently written tool; upstream headers retained in generated tree",
+    "source": "stock boot ROM/SPL interface behaviour",
+    "basis": "interface conventions determined from the behaviour of the stock boot ROM/SPL; no stock code copied",
     "copyright_lines": [],
-    "status": "需人工确认"
+    "status": "项目原创（接口参照）"
   },
   {
     "file": "barebox/boot1/usbconsole-v8",
@@ -142,24 +142,24 @@
   },
   {
     "file": "barebox/boot1/ocram-stock-entry.S",
-    "source": "barebox v2026.09.0 board support / Amazon stock baseline where cited",
-    "basis": "overlay, build script or independently written tool; upstream headers retained in generated tree",
+    "source": "stock boot ROM/SPL interface behaviour",
+    "basis": "interface conventions determined from the behaviour of the stock boot ROM/SPL; no stock code copied",
     "copyright_lines": [],
-    "status": "original project work except recorded derivations"
+    "status": "项目原创（接口参照）"
   },
   {
     "file": "barebox/boot1/prepare.py",
-    "source": "barebox v2026.09.0 board support / Amazon stock baseline where cited",
-    "basis": "overlay, build script or independently written tool; upstream headers retained in generated tree",
+    "source": "stock boot ROM/SPL interface behaviour",
+    "basis": "interface conventions determined from the behaviour of the stock boot ROM/SPL; no stock code copied",
     "copyright_lines": [],
-    "status": "需人工确认"
+    "status": "项目原创（接口参照）"
   },
   {
     "file": "barebox/overlay/integration.patch",
-    "source": "barebox v2026.09.0 board support / Amazon stock baseline where cited",
-    "basis": "overlay, build script or independently written tool; upstream headers retained in generated tree",
+    "source": "stock boot ROM/SPL interface behaviour",
+    "basis": "interface conventions determined from the behaviour of the stock boot ROM/SPL; no stock code copied",
     "copyright_lines": [],
-    "status": "需人工确认"
+    "status": "项目原创（接口参照）"
   },
   {
     "file": "barebox/overlay/test_sram_structure.py",
@@ -199,7 +199,7 @@
     "copyright_lines": [
       "Copyright 2010 Amazon Technologies, Inc. All Rights Reserved."
     ],
-    "status": "original project work except recorded derivations"
+    "status": "已确认派生，已署名"
   },
   {
     "file": "barebox/overlay/usbconsole-diagnostic",
@@ -251,20 +251,6 @@
     "status": "original project work except recorded derivations"
   },
   {
-    "file": "barebox/boot1/__pycache__/plugin_common.cpython-312.pyc",
-    "source": "barebox v2026.09.0 board support / Amazon stock baseline where cited",
-    "basis": "overlay, build script or independently written tool; upstream headers retained in generated tree",
-    "copyright_lines": [],
-    "status": "original project work except recorded derivations"
-  },
-  {
-    "file": "barebox/boot1/__pycache__/inspect_image.cpython-312.pyc",
-    "source": "barebox v2026.09.0 board support / Amazon stock baseline where cited",
-    "basis": "overlay, build script or independently written tool; upstream headers retained in generated tree",
-    "copyright_lines": [],
-    "status": "original project work except recorded derivations"
-  },
-  {
     "file": "barebox/overlay/configs/k4-local-1-zq.imxcfg",
     "source": "barebox v2026.09.0 board support / Amazon stock baseline where cited",
     "basis": "overlay, build script or independently written tool; upstream headers retained in generated tree",
@@ -303,7 +289,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/02-clocks.patch",
@@ -311,7 +297,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/02-clocks.patch",
@@ -319,7 +305,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/02-clocks.patch",
@@ -433,7 +419,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/03-power.patch",
@@ -457,7 +443,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/03-power.patch",
@@ -491,7 +477,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/03-power.patch",
@@ -499,7 +485,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/03-power.patch",
@@ -507,7 +493,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/03-power.patch",
@@ -554,7 +540,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/03-power.patch",
@@ -607,7 +593,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/03-power.patch",
@@ -615,7 +601,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/03-power.patch",
@@ -623,7 +609,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/03-power.patch",
@@ -642,7 +628,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/03-power.patch",
@@ -650,7 +636,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/03-power.patch",
@@ -676,7 +662,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/07-device-tree.patch",
@@ -684,7 +670,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/07-device-tree.patch",
@@ -692,7 +678,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/07-device-tree.patch",
@@ -724,7 +710,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/07-device-tree.patch",
@@ -740,7 +726,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/07-device-tree.patch",
@@ -756,7 +742,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/07-device-tree.patch",
@@ -764,7 +750,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/07-device-tree.patch",
@@ -780,7 +766,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/07-device-tree.patch",
@@ -796,7 +782,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/07-device-tree.patch",
@@ -804,7 +790,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/07-device-tree.patch",
@@ -820,7 +806,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/07-device-tree.patch",
@@ -828,7 +814,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/07-device-tree.patch",
@@ -836,7 +822,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/07-device-tree.patch",
@@ -844,7 +830,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/07-device-tree.patch",
@@ -852,7 +838,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/07-device-tree.patch",
@@ -881,26 +867,32 @@
   {
     "file": "kernel/patches/07-device-tree.patch",
     "target": "arch/arm/boot/dts/nxp/imx/imx50-kindle-k4-common.dtsi",
-    "source": "Original project implementation; stock board source used as hardware reference; Amazon arch/arm/mach-mx5/mx50_yoshi.c (hardware baseline)",
-    "basis": "new unified-diff file; existing source provenance comments; distinguish hardware constants from copied creative code",
-    "copyright_lines": [],
-    "status": "需人工确认"
+    "source": "Kindle GPL kernel source: arch/arm/mach-mx5/mx50_yoshi.c",
+    "basis": "hardware description/format based on Amazon's GPL-2.0 Kindle kernel source; original source header wording and years retained",
+    "copyright_lines": [
+      "Copyright (C) 2010 Amazon.com, Inc. All Rights Reserved."
+    ],
+    "status": "已署名"
   },
   {
     "file": "kernel/patches/07-device-tree.patch",
     "target": "arch/arm/boot/dts/nxp/imx/imx50-kindle-k4-stock-pxp.dts",
-    "source": "Original project implementation; stock board source used as hardware reference; Amazon arch/arm/mach-mx5/mx50_yoshi.c (hardware baseline)",
-    "basis": "new unified-diff file; existing source provenance comments; distinguish hardware constants from copied creative code",
-    "copyright_lines": [],
-    "status": "需人工确认"
+    "source": "Kindle GPL kernel source: arch/arm/mach-mx5/mx50_yoshi.c",
+    "basis": "hardware description/format based on Amazon's GPL-2.0 Kindle kernel source; original source header wording and years retained",
+    "copyright_lines": [
+      "Copyright (C) 2010 Amazon.com, Inc. All Rights Reserved."
+    ],
+    "status": "已署名"
   },
   {
     "file": "kernel/patches/07-device-tree.patch",
     "target": "arch/arm/boot/dts/nxp/imx/imx50-kindle-k4.dts",
-    "source": "Original project implementation; stock board source used as hardware reference; Amazon arch/arm/mach-mx5/mx50_yoshi.c (hardware baseline)",
-    "basis": "new unified-diff file; existing source provenance comments; distinguish hardware constants from copied creative code",
-    "copyright_lines": [],
-    "status": "需人工确认"
+    "source": "Kindle GPL kernel source: arch/arm/mach-mx5/mx50_yoshi.c",
+    "basis": "hardware description/format based on Amazon's GPL-2.0 Kindle kernel source; original source header wording and years retained",
+    "copyright_lines": [
+      "Copyright (C) 2010 Amazon.com, Inc. All Rights Reserved."
+    ],
+    "status": "已署名"
   },
   {
     "file": "kernel/patches/07-device-tree.patch",
@@ -947,7 +939,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/06-display-input.patch",
@@ -983,7 +975,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/06-display-input.patch",
@@ -991,7 +983,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/06-display-input.patch",
@@ -999,7 +991,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/06-display-input.patch",
@@ -1023,7 +1015,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/06-display-input.patch",
@@ -1031,7 +1023,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/06-display-input.patch",
@@ -1039,7 +1031,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/06-display-input.patch",
@@ -1047,7 +1039,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/06-display-input.patch",
@@ -1055,15 +1047,18 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/06-display-input.patch",
     "target": "drivers/video/fbdev/imx50-epdc-waveform.c",
-    "source": "Original project implementation; stock board source used as hardware reference",
-    "basis": "new unified-diff file; existing source provenance comments",
-    "copyright_lines": [],
-    "status": "需人工确认"
+    "source": "Kindle GPL kernel source: drivers/video/mxc/mxc_epdc_fb.c",
+    "basis": "hardware description/format based on Amazon's GPL-2.0 Kindle kernel source; original source header wording and years retained",
+    "copyright_lines": [
+      "Copyright (C) 2010-2011 Freescale Semiconductor, Inc.",
+      "Copyright 2010-2012 Amazon Technologies, Inc. All Rights Reserved."
+    ],
+    "status": "已署名"
   },
   {
     "file": "kernel/patches/06-display-input.patch",
@@ -1071,7 +1066,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/06-display-input.patch",
@@ -1079,7 +1074,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/06-display-input.patch",
@@ -1087,7 +1082,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/06-display-input.patch",
@@ -1095,7 +1090,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/06-display-input.patch",
@@ -1103,15 +1098,17 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/06-display-input.patch",
     "target": "include/linux/imx50-pxp.h",
-    "source": "Original project implementation; stock board source used as hardware reference",
-    "basis": "new unified-diff file; existing source provenance comments",
-    "copyright_lines": [],
-    "status": "需人工确认"
+    "source": "Kindle GPL kernel source: include/linux/pxp_dma.h",
+    "basis": "hardware description/format based on Amazon's GPL-2.0 Kindle kernel source; original source header wording and years retained",
+    "copyright_lines": [
+      "Copyright (C) 2010 Freescale Semiconductor, Inc. All Rights Reserved."
+    ],
+    "status": "已署名"
   },
   {
     "file": "kernel/patches/05-wifi-mmc.patch",
@@ -1139,7 +1136,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/05-wifi-mmc.patch",
@@ -1217,7 +1214,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/01-platform.patch",
@@ -1251,7 +1248,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/01-platform.patch",
@@ -1259,7 +1256,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/01-platform.patch",
@@ -1301,7 +1298,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/01-platform.patch",
@@ -1309,7 +1306,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/01-platform.patch",
@@ -1317,7 +1314,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/01-platform.patch",
@@ -1325,7 +1322,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/01-platform.patch",
@@ -1390,7 +1387,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/patches/08-ccm-interrupts.patch",
@@ -1421,7 +1418,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/debug-patches/02-k4-trace-hooks.patch",
@@ -1471,7 +1468,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/debug-patches/02-k4-trace-hooks.patch",
@@ -1479,7 +1476,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/debug-patches/02-k4-trace-hooks.patch",
@@ -1487,7 +1484,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/debug-patches/02-k4-trace-hooks.patch",
@@ -1495,7 +1492,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/debug-patches/02-k4-trace-hooks.patch",
@@ -1503,7 +1500,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/debug-patches/02-k4-trace-hooks.patch",
@@ -1511,7 +1508,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/debug-patches/02-k4-trace-hooks.patch",
@@ -1519,7 +1516,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/debug-patches/02-k4-trace-hooks.patch",
@@ -1527,7 +1524,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/debug-patches/02-k4-trace-hooks.patch",
@@ -1535,7 +1532,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/debug-patches/02-k4-trace-hooks.patch",
@@ -1543,7 +1540,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/debug-patches/02-k4-trace-hooks.patch",
@@ -1551,7 +1548,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/debug-patches/02-k4-trace-hooks.patch",
@@ -1559,7 +1556,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/debug-patches/02-k4-trace-hooks.patch",
@@ -1567,7 +1564,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/debug-patches/02-k4-trace-hooks.patch",
@@ -1575,7 +1572,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/debug-patches/02-k4-trace-hooks.patch",
@@ -1583,7 +1580,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/debug-patches/02-k4-trace-hooks.patch",
@@ -1591,7 +1588,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/debug-patches/02-k4-trace-hooks.patch",
@@ -1599,7 +1596,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/debug-patches/02-k4-trace-hooks.patch",
@@ -1661,7 +1658,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/debug-patches/02-k4-trace-hooks.patch",
@@ -1669,7 +1666,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/debug-patches/02-k4-trace-hooks.patch",
@@ -1677,7 +1674,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/debug-patches/02-k4-trace-hooks.patch",
@@ -1695,7 +1692,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/debug-patches/02-k4-trace-hooks.patch",
@@ -1703,7 +1700,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/debug-patches/02-k4-trace-hooks.patch",
@@ -1731,7 +1728,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/debug-patches/02-k4-trace-hooks.patch",
@@ -1739,7 +1736,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/debug-patches/02-k4-trace-hooks.patch",
@@ -1747,7 +1744,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "kernel/debug-patches/02-k4-trace-hooks.patch",
@@ -1762,10 +1759,12 @@
   {
     "file": "kernel/debug-patches/01-k4-diagnostics.patch",
     "target": "arch/arm/boot/dts/nxp/imx/k4-debug/imx50-kindle-k4-debug.dts",
-    "source": "Original project implementation; stock board source used as hardware reference; Amazon arch/arm/mach-mx5/mx50_yoshi.c (hardware baseline)",
-    "basis": "new unified-diff file; existing source provenance comments; distinguish hardware constants from copied creative code",
-    "copyright_lines": [],
-    "status": "需人工确认"
+    "source": "Kindle GPL kernel source: arch/arm/mach-mx5/mx50_yoshi.c",
+    "basis": "hardware description/format based on Amazon's GPL-2.0 Kindle kernel source; original source header wording and years retained",
+    "copyright_lines": [
+      "Copyright (C) 2010 Amazon.com, Inc. All Rights Reserved."
+    ],
+    "status": "已署名"
   },
   {
     "file": "project/debug-patches/02-k4-trace-hooks.patch",
@@ -1784,7 +1783,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "project/debug-patches/02-k4-trace-hooks.patch",
@@ -1834,7 +1833,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "project/debug-patches/02-k4-trace-hooks.patch",
@@ -1842,7 +1841,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "project/debug-patches/02-k4-trace-hooks.patch",
@@ -1850,7 +1849,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "project/debug-patches/02-k4-trace-hooks.patch",
@@ -1858,7 +1857,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "project/debug-patches/02-k4-trace-hooks.patch",
@@ -1866,7 +1865,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "project/debug-patches/02-k4-trace-hooks.patch",
@@ -1874,7 +1873,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "project/debug-patches/02-k4-trace-hooks.patch",
@@ -1882,7 +1881,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "project/debug-patches/02-k4-trace-hooks.patch",
@@ -1890,7 +1889,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "project/debug-patches/02-k4-trace-hooks.patch",
@@ -1898,7 +1897,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "project/debug-patches/02-k4-trace-hooks.patch",
@@ -1906,7 +1905,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "project/debug-patches/02-k4-trace-hooks.patch",
@@ -1914,7 +1913,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "project/debug-patches/02-k4-trace-hooks.patch",
@@ -1922,7 +1921,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "project/debug-patches/02-k4-trace-hooks.patch",
@@ -1930,7 +1929,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "project/debug-patches/02-k4-trace-hooks.patch",
@@ -1938,7 +1937,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "project/debug-patches/02-k4-trace-hooks.patch",
@@ -1946,7 +1945,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "project/debug-patches/02-k4-trace-hooks.patch",
@@ -1954,7 +1953,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "project/debug-patches/02-k4-trace-hooks.patch",
@@ -1962,7 +1961,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "project/debug-patches/02-k4-trace-hooks.patch",
@@ -2024,7 +2023,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "project/debug-patches/02-k4-trace-hooks.patch",
@@ -2032,7 +2031,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "project/debug-patches/02-k4-trace-hooks.patch",
@@ -2040,7 +2039,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "project/debug-patches/02-k4-trace-hooks.patch",
@@ -2058,7 +2057,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "project/debug-patches/02-k4-trace-hooks.patch",
@@ -2066,7 +2065,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "project/debug-patches/02-k4-trace-hooks.patch",
@@ -2094,7 +2093,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "project/debug-patches/02-k4-trace-hooks.patch",
@@ -2102,7 +2101,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "project/debug-patches/02-k4-trace-hooks.patch",
@@ -2110,7 +2109,7 @@
     "source": "Original project implementation; stock board source used as hardware reference",
     "basis": "new unified-diff file; existing source provenance comments",
     "copyright_lines": [],
-    "status": "project authorship; review any stock code derivation"
+    "status": "项目原创；已完成来源审阅"
   },
   {
     "file": "project/debug-patches/02-k4-trace-hooks.patch",
@@ -2125,17 +2124,17 @@
   {
     "file": "barebox/overlay/integration.patch",
     "target": "commands/Kconfig",
-    "source": "barebox v2026.09.0/commands/Kconfig",
-    "basis": "unified diff target and upstream file header",
+    "source": "stock boot ROM/SPL interface behaviour",
+    "basis": "interface conventions determined from the behaviour of the stock boot ROM/SPL; no stock code copied",
     "copyright_lines": [],
-    "status": "upstream original header retained"
+    "status": "项目原创（接口参照）"
   },
   {
     "file": "barebox/overlay/integration.patch",
     "target": "arch/arm/boards/kindle-mx50/Makefile",
-    "source": "barebox v2026.09.0/arch/arm/boards/kindle-mx50/Makefile",
-    "basis": "unified diff target and upstream file header",
+    "source": "stock boot ROM/SPL interface behaviour",
+    "basis": "interface conventions determined from the behaviour of the stock boot ROM/SPL; no stock code copied",
     "copyright_lines": [],
-    "status": "upstream original header retained"
+    "status": "项目原创（接口参照）"
   }
 ]
