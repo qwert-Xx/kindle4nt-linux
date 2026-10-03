@@ -141,20 +141,6 @@
       "index_checksum": "Q1P4rY4pcoQ/IXsWFztN65Rvd9VoU="
     },
     {
-      "name": "dropbear",
-      "version": "2026.91-r0",
-      "file": "dropbear-2026.91-r0.apk",
-      "sha256": "6b9171bc1b8bd1883302396430f88a4ff173a194abfcc022f5d1b5c126b69c15",
-      "index_checksum": "Q1TCDFV0eEtPEjgT2ixo4l9iPIPI8="
-    },
-    {
-      "name": "dropbear-openrc",
-      "version": "2026.91-r0",
-      "file": "dropbear-openrc-2026.91-r0.apk",
-      "sha256": "643094a43f38f071724b1c26dc22e3710d5383c04d194535cd542a24b9934198",
-      "index_checksum": "Q1WOoVrvRgBfPTAqDloJ2OEWb3gTM="
-    },
-    {
       "name": "e2fsprogs",
       "version": "1.47.4-r0",
       "file": "e2fsprogs-1.47.4-r0.apk",
@@ -272,6 +258,13 @@
       "file": "libeconf-0.8.3-r0.apk",
       "sha256": "1ced9b481d9c0a6e1ce6e04650a13da1e45c9cadb655efe6c8b17c595d764bd7",
       "index_checksum": "Q1zobNUxggE1UOXoV1oeghSRRCV4E="
+    },
+    {
+      "name": "libedit",
+      "version": "20260508.3.1-r1",
+      "file": "libedit-20260508.3.1-r1.apk",
+      "sha256": "62be3fb7907bb5fbb471589872d544b8f6b7880e8fd7ac2bb86f1bac72cbd1d2",
+      "index_checksum": "Q1rnsOL2uUwBx+qL80OZn8WvNKj20="
     },
     {
       "name": "libfdisk",
@@ -412,6 +405,62 @@
       "file": "openrc-user-0.63.2-r0.apk",
       "sha256": "21d77b1c088b199a77b766d028ba061e0af43cb18d2b4f588da6db29c1c31971",
       "index_checksum": "Q1g7B6WZSFqgsKwBaLQzn3t5T/RrM="
+    },
+    {
+      "name": "openssh",
+      "version": "10.3_p1-r1",
+      "file": "openssh-10.3_p1-r1.apk",
+      "sha256": "b6ad9d25bf28d1ed5cd9d844172bb4fa2dcf00a0f1af98d8e7ba5168b034e5d7",
+      "index_checksum": "Q1sp7DwluSusY7pymFeNpI3JdfnYQ="
+    },
+    {
+      "name": "openssh-client-common",
+      "version": "10.3_p1-r1",
+      "file": "openssh-client-common-10.3_p1-r1.apk",
+      "sha256": "5168b04fd76bc645a37a7e5a5d991495eaba31b58f0171c66f19214ef0d47ce8",
+      "index_checksum": "Q1j1+GLAm5qin2xHgOnBDVYcouEog="
+    },
+    {
+      "name": "openssh-client-default",
+      "version": "10.3_p1-r1",
+      "file": "openssh-client-default-10.3_p1-r1.apk",
+      "sha256": "fd96a93aff5a1f8dacb7207158fa9eb3594ecbbe5b6823bc0db4a53bace065dc",
+      "index_checksum": "Q1eJegzj0rl+qPFiGG1Q6040PcIBY="
+    },
+    {
+      "name": "openssh-keygen",
+      "version": "10.3_p1-r1",
+      "file": "openssh-keygen-10.3_p1-r1.apk",
+      "sha256": "e42648675eac1292536c484d3ce27de8c60a9e818fba2497829b6669781b3626",
+      "index_checksum": "Q1yziETXrQA0TWl5OYacgRijid5lA="
+    },
+    {
+      "name": "openssh-server",
+      "version": "10.3_p1-r1",
+      "file": "openssh-server-10.3_p1-r1.apk",
+      "sha256": "398efe347e710c8701943983d3b7447bd9c30dd4b68690123562d51352190ff2",
+      "index_checksum": "Q1KXG9waA5sfZc5CF9i4K1Vt4EqQs="
+    },
+    {
+      "name": "openssh-server-common",
+      "version": "10.3_p1-r1",
+      "file": "openssh-server-common-10.3_p1-r1.apk",
+      "sha256": "c6b6a9a5b9a1328534fb63d19cc9579c2c0d2fd23d266e6084750dc877b59c0e",
+      "index_checksum": "Q1dPI5eg74EnuFaSkUl5Bb+kUqLag="
+    },
+    {
+      "name": "openssh-server-common-openrc",
+      "version": "10.3_p1-r1",
+      "file": "openssh-server-common-openrc-10.3_p1-r1.apk",
+      "sha256": "8be956f1687d758869164afd2243bc3a683c1df656b22329ec7b69662ab4e020",
+      "index_checksum": "Q1JfXBznjB2hK8nO5z9ztMdb5kWHM="
+    },
+    {
+      "name": "openssh-sftp-server",
+      "version": "10.3_p1-r1",
+      "file": "openssh-sftp-server-10.3_p1-r1.apk",
+      "sha256": "ece9cdb6d116665a7a6e8a2c29163b4f20099dce62cbb38853b1f13cd7b9f2e2",
+      "index_checksum": "Q1qwZ6Qhv2WhrnhUgbPhkDQrLQN1c="
     },
     {
       "name": "partx",

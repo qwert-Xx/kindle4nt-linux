@@ -38,8 +38,10 @@ def verify(out):
     for n in ('bin/k4-wifi-connect','bin/udhcpc-wifi','etc/init.d/k4-wifi','etc/runlevels/default/k4-wifi','etc/wpa_supplicant.conf'):
         assert not (root/n).exists() and not (root/n).is_symlink(),n
     assert (root/'etc/wpa_supplicant/wpa_supplicant.conf').stat().st_mode&0o777==0o600
-    assert 'wifi)' not in (root/'bin/k4-userspace-service').read_text()
-    assert 'K4_DHCP_RESOLV_FILE' not in (root/'bin/k4-userspace-service').read_text()
+    for n in ('bin/k4-userspace-service','bin/dropbear','bin/dropbearkey','usr/sbin/dropbear','etc/dropbear','etc/init.d/k4-usb-ssh','etc/conf.d/k4-usb-ssh','etc/runlevels/default/k4-usb-ssh'):
+        assert not (root/n).exists() and not (root/n).is_symlink(),n
+    assert not any(n.startswith('dropbear') for n in pkgs)
+    assert pkgs['openssh']=='10.3_p1-r1'
     assert 'ifconfig usb0' not in (root/'etc/k4/platform-start').read_text()
     for n in ('ifup','ifdown','ifquery'):
         assert (root/'sbin'/n).readlink()==pathlib.Path('ifupdown')
@@ -50,7 +52,7 @@ def verify(out):
         assert (root/'etc/runlevels'/level/n).readlink()==pathlib.Path('/etc/init.d/'+n)
     reference=out/'busybox-source'
     same=[]
-    for base in ('lib/firmware','root/.ssh','etc/dropbear'):
+    for base in ('lib/firmware',):
         for p in sorted((reference/base).rglob('*')):
             if p.is_file() and not p.is_symlink():
                 n=p.relative_to(reference).as_posix()
@@ -73,7 +75,7 @@ def verify(out):
     run(['sh','-n',out/'deploy-alpine-root'])
     for p in (root/'bin').glob('k4-*'):
         if p.is_file() and p.read_bytes()[:2]==b'#!':run(['sh','-n',p])
-    services=['k4-filesystems','k4-platform','k4-coldplug','k4-usb-ssh','wpa_supplicant','networking','wpa_cli','killprocs','mount-ro','hwclock','k4-ntpd','localmount','hostname','root','fsck','modules'];graph={n:set() for n in services};declarations={}
+    services=['k4-filesystems','k4-platform','k4-coldplug','sshd','wpa_supplicant','networking','wpa_cli','killprocs','mount-ro','hwclock','k4-ntpd','localmount','hostname','root','fsck','modules'];graph={n:set() for n in services};declarations={}
     # Source declarations only in a host shell, never call service start/stop.
     for n in services:
         p=root/'etc/init.d'/n;run(['sh','-n',p])
@@ -92,16 +94,24 @@ def verify(out):
         ready=sorted(n for n,deps in graph.items() if n not in order and deps<=set(order));assert ready,graph;order.extend(ready)
     startup=['k4-filesystems','k4-platform','k4-coldplug','wpa_supplicant','networking','wpa_cli']
     for a,b in zip(startup,startup[1:]):assert order.index(a)<order.index(b)
-    assert 'networking' in graph['k4-usb-ssh']
+    assert 'networking' in graph['sshd']
     assert {'networking','wpa_cli','hwclock'}<=graph['k4-ntpd']
     assert {'localmount','hostname','wpa_supplicant','k4-coldplug'}<=graph['networking']
-    assert ' -s -r ' in (root/'bin/k4-userspace-service').read_text()
     assert (root/'root/.ssh/authorized_keys').stat().st_mode&0o777==0o600
-    assert (root/'etc/dropbear/k4-hostkey').stat().st_mode&0o777==0o600
+    hostkey=root/'etc/ssh/ssh_host_ecdsa_key'
+    if hostkey.exists():assert hostkey.stat().st_mode&0o777==0o600
+    assert 'dropbear' not in (root/'etc/k4/platform-start').read_text()
+    assert 'ttyGS0::respawn:/bin/sh' in (root/'etc/inittab').read_text()
+    assert (root/'etc/runlevels/default/sshd').is_symlink()
+    effective=run(qr+[root/'usr/sbin/sshd','-G','-f',root/'etc/ssh/sshd_config'])
+    for setting in ('port 22','listenaddress 0.0.0.0:22','listenaddress [::]:22','hostkey /etc/ssh/ssh_host_ecdsa_key','permitrootlogin prohibit-password','passwordauthentication no','kbdinteractiveauthentication no','pubkeyauthentication yes','subsystem sftp internal-sftp'):
+        assert setting in effective.splitlines(),setting
+    assert 'sshd:x:22:22:sshd:/dev/null:/sbin/nologin' in (root/'etc/passwd').read_text()
+    assert (root/'usr/lib/ssh/sftp-server').is_file()
     interfaces=run(qr+[root/'sbin/ifquery','-i',root/'etc/network/interfaces','--list','-a']).splitlines()
     assert interfaces==['lo','usb0','wlan0']
     checks={}
-    for name,args in [('busybox',['bin/busybox','--help']),('kmod',['bin/kmod','--version']),('openrc',['sbin/openrc','--version']),('dropbear',['usr/sbin/dropbear','-h']),('wpa-official',['sbin/wpa_supplicant','-v']),('wpa-cli-official',['sbin/wpa_cli','-v']),('iw',['usr/sbin/iw','--version']),('e2fsprogs',['sbin/e2fsck','-V']),('mount',['bin/mount','--version']),('hwclock',['sbin/hwclock','--help']),('ntpd',['bin/busybox','ntpd','--help'])]:
+    for name,args in [('busybox',['bin/busybox','--help']),('kmod',['bin/kmod','--version']),('openrc',['sbin/openrc','--version']),('openssh',['usr/sbin/sshd','-V']),('wpa-official',['sbin/wpa_supplicant','-v']),('wpa-cli-official',['sbin/wpa_cli','-v']),('iw',['usr/sbin/iw','--version']),('e2fsprogs',['sbin/e2fsck','-V']),('mount',['bin/mount','--version']),('hwclock',['sbin/hwclock','--help']),('ntpd',['bin/busybox','ntpd','--help'])]:
         # Some programs print help/version and deliberately return nonzero.
         r=subprocess.run([str(x) for x in qr+[resolve(root,args[0])]+args[1:]],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
         assert r.returncode in (0,1) and r.stdout and not re.search('Error loading|not found|Illegal instruction|qemu:',r.stdout),(name,r.stdout)
@@ -115,8 +125,8 @@ def verify(out):
         for l in sums:
             expected,n=l.split('  ',1);assert hashlib.sha256(t.extractfile(n).read()).hexdigest()==expected,n
         assert t.getmember('dev/console').ischr()
-    signatures=(out/'package-signatures.log').read_text();assert signatures.count(': OK')==77 and 'UNTRUSTED' not in signatures
-    report=dict(elf_count=len(elfs),dynamic_elf_count=len(dynamic),module_count=len(modules),abi='ARMv7 little-endian EABI5, hard-float userspace; musl dynamic or existing static K4 binaries',reference_equal_files=len(same),service_declarations=declarations,topological_order=order,service_validation='shell syntax and evaluated dependency graph; no PID1/OpenRC boot or hardware execution',qemu_smoke=checks,tar_files=len(members),signature_packages=77,package_index_validation=True,device_operations=False)
+    signatures=(out/'package-signatures.log').read_text();assert signatures.count(': OK')==84 and 'UNTRUSTED' not in signatures
+    report=dict(elf_count=len(elfs),dynamic_elf_count=len(dynamic),module_count=len(modules),abi='ARMv7 little-endian EABI5, hard-float userspace; musl dynamic or existing static K4 binaries',reference_equal_files=len(same),service_declarations=declarations,topological_order=order,service_validation='shell syntax and evaluated dependency graph; no PID1/OpenRC boot or hardware execution',qemu_smoke=checks,tar_files=len(members),signature_packages=84,package_index_validation=True,device_operations=False)
     (out/'verification.json').write_text(json.dumps(report,indent=2)+'\n');return report
 def verify_ram(directory):
     import gzip,stat

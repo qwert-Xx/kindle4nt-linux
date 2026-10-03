@@ -17,6 +17,15 @@ Only project source, patches, recipes and build scripts are distributed. Upstrea
 | Linaro cross toolchain | 4.9.4-2017.01 | GPL-3.0-or-later AND LGPL-2.1-or-later AND BSD-3-Clause | [upstream](https://releases.linaro.org/components/toolchain/binaries/4.9-2017.01/arm-linux-gnueabi/gcc-linaro-4.9.4-2017.01-x86_64_arm-linux-gnueabi.tar.xz) |
 | e2fsprogs | 1.47.1 | GPL-2.0-only AND LGPL-2.0-only AND BSD-3-Clause AND MIT | [upstream](https://www.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v1.47.1/e2fsprogs-1.47.1.tar.xz) |
 | mmc-utils | v1.0 | GPL-2.0-only AND BSD-3-Clause | [upstream](https://git.kernel.org/pub/scm/utils/mmc/mmc-utils.git/snapshot/mmc-utils-v1.0.tar.gz) |
+| Alpine libedit | 20260508.3.1-r1 | BSD-3-Clause | [official APK](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/libedit-20260508.3.1-r1.apk) |
+| Alpine openssh | 10.3_p1-r1 | SSH-OpenSSH | [official APK](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/openssh-10.3_p1-r1.apk) |
+| Alpine openssh-client-common | 10.3_p1-r1 | SSH-OpenSSH | [official APK](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/openssh-client-common-10.3_p1-r1.apk) |
+| Alpine openssh-client-default | 10.3_p1-r1 | SSH-OpenSSH | [official APK](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/openssh-client-default-10.3_p1-r1.apk) |
+| Alpine openssh-keygen | 10.3_p1-r1 | SSH-OpenSSH | [official APK](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/openssh-keygen-10.3_p1-r1.apk) |
+| Alpine openssh-server | 10.3_p1-r1 | SSH-OpenSSH | [official APK](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/openssh-server-10.3_p1-r1.apk) |
+| Alpine openssh-server-common | 10.3_p1-r1 | SSH-OpenSSH | [official APK](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/openssh-server-common-10.3_p1-r1.apk) |
+| Alpine openssh-server-common-openrc | 10.3_p1-r1 | SSH-OpenSSH | [official APK](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/openssh-server-common-openrc-10.3_p1-r1.apk) |
+| Alpine openssh-sftp-server | 10.3_p1-r1 | SSH-OpenSSH | [official APK](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/openssh-sftp-server-10.3_p1-r1.apk) |
 | Alpine minirootfs | 3.24.2 | See contained Alpine package metadata | [upstream](https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/armv7/alpine-minirootfs-3.24.2-armv7.tar.gz) |
 | Alpine host_apk | 3.0.8-r0 | GPL-2.0-only | [upstream](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/apk-tools-static-3.0.8-r0.apk) |
 | Alpine host_mini | 3.24.2 | See contained Alpine package metadata | [upstream](https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/x86_64/alpine-minirootfs-3.24.2-x86_64.tar.gz) |
@@ -36,8 +45,6 @@ Only project source, patches, recipes and build scripts are distributed. Upstrea
 | Alpine cfdisk | 2.42.3-r1 | GPL-2.0-or-later | [upstream](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/cfdisk-2.42.3-r1.apk) |
 | Alpine dbus-libs | 1.16.2-r2 | AFL-2.1 OR GPL-2.0-or-later | [upstream](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/dbus-libs-1.16.2-r2.apk) |
 | Alpine dmesg | 2.42.3-r1 | GPL-3.0-or-later AND GPL-2.0-or-later AND GPL-2.0-only AND GPL-1.0-only AND LGPL-2.1-or-later AND BSD-1-Clause AND BSD-3-Clause AND BSD-4-Clause-UC AND MIT AND Public-Domain | [upstream](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/dmesg-2.42.3-r1.apk) |
-| Alpine dropbear | 2026.91-r0 | MIT | [upstream](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/dropbear-2026.91-r0.apk) |
-| Alpine dropbear-openrc | 2026.91-r0 | MIT | [upstream](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/dropbear-openrc-2026.91-r0.apk) |
 | Alpine e2fsprogs | 1.47.4-r0 | GPL-2.0-or-later AND LGPL-2.0-or-later AND BSD-3-Clause AND MIT | [upstream](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/e2fsprogs-1.47.4-r0.apk) |
 | Alpine e2fsprogs-libs | 1.47.4-r0 | GPL-2.0-or-later AND LGPL-2.0-or-later AND BSD-3-Clause AND MIT | [upstream](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/e2fsprogs-libs-1.47.4-r0.apk) |
 | Alpine findmnt | 2.42.3-r1 | GPL-2.0-or-later | [upstream](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/findmnt-2.42.3-r1.apk) |
@@ -111,7 +118,7 @@ These files are not included, and this project does not grant redistribution rig
 - **AR6003 firmware/calibration**: copy the firmware directory used by the stock driver (typically `/lib/firmware/ath6k/AR6003/hw2.1.1/`) from your own stock root backup. Preserve board calibration and all original bytes. Stage the matching path under `device-inputs/lib/firmware/`; identify the actual firmware/board paths from your stock driver rather than substituting another device’s calibration.
 - **Panel waveform/VCOM data**: copy the matching stock WBF/WRF pair and panel calibration from your own backup; consult [waveform analysis](project/docs/KNOWN-ISSUES.md) and the original driver/loader names. Keep these under the paths requested by the kernel firmware loader in `device-inputs/lib/firmware/`. Do not use a waveform merely because the screen size matches. Hash both files and preserve their pairing; the loader consumes the WRF proxy, not a raw WBF alone.
 - **boot0/idme**: read the complete eMMC boot0 area from your own existing backup (or in a separately authorized RAM maintenance session: `dd if=/dev/mmcblk2boot0 of=/tmp/boot0.bin bs=512`, after confirming the block-device identity). Copy it to the host and compare hashes, then supply `device-inputs/boot0.bin`. It contains device identity/idme: never commit or share it. The boot1 wrapper reads the original ROM header/entry reference; it does not publish this backup. Do not write boot0 to extract it.
-- **Wi-Fi/SSH configuration**: stage your own `etc/wpa_supplicant.conf`, `root/.ssh/authorized_keys` and optional `etc/dropbear/` identity. They are not project source. Hash/examine the external inputs locally and never commit credentials or private host keys.
+- **Wi-Fi/SSH configuration**: stage your own `etc/wpa_supplicant.conf`, `root/.ssh/authorized_keys` and an external OpenSSH ECDSA identity via `--ssh-host-key` for Alpine. BusyBox RAM maintenance separately uses optional `etc/dropbear/` identity. They are not project source. Hash/examine the external inputs locally and never commit credentials or private host keys.
 
 Alpine uses the official main wpa_supplicant 2.11-r4 APK and matching OpenRC split package, authenticated with Alpine keys. BusyBox maintenance and persistent roots build unmodified upstream 2.11 statically with libnl. No local WPA signing key or repository is required.
 

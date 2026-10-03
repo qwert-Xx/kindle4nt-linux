@@ -19,6 +19,13 @@
 | 恢复 | 下键/复位 ROM 与 RAM 维护路径、v8 串口 Ctrl-C | 五秒窗口末尾和主机枚举时序；历史 RAM guard 到 ROM 根因未定 |
 | 公开构建 | [本轮主机结果](project/docs/RELEASE-VALIDATION.md) | 用户自己的私有输入会改变根 tar 哈希，不等于新增硬件验收 |
 
+
+Alpine 使用官方 OpenSSH 10.3_p1-r1 与标准 sshd OpenRC 服务，22 端口、所有 IPv4/IPv6 地址监听，仅 root 公钥认证，启用 internal-sftp。USB 地址 169.254.212.2 和 Wi-Fi 均可连接；USB gadget 仍在 k4-platform，ttyGS0 root shell 保留。RAM 维护根保持 Dropbear/2222。Alpine 不再包含 Dropbear 包、k4-usb-ssh 或 k4-userspace-service。
+
+主机密钥用构建参数 `--ssh-host-key /absolute/ssh_host_ecdsa_key` 提供仓库外 OpenSSH 格式 ECDSA 私钥（600），公钥自动派生（644）；沿用既有身份。未提供时，官方 sshd 首次启动按 `key_types_to_generate="ecdsa"` 生成，不在构建时随机生成。`--authorized-keys /absolute/authorized_keys` 提供 root 公钥授权（600），也可沿用外部 K4 根的 root/.ssh/authorized_keys。私钥和凭据不入库。Alpine 连接：`ssh root@169.254.212.2`；RAM 维护：`ssh -p 2222 root@169.254.212.2`。
+
+
+
 ## 准备
 
 参考主机为 Ubuntu 24.04、Python 3.12、ARM hard-float GCC 13.3 / binutils 2.42。准备 make、主机编译工具、flex、bison、bc、libssl-dev、pkg-config、patch、tar、xz、curl、GnuPG、openssl、kmod 与 ARM 交叉编译器。维护 BusyBox 使用清单锁定的旧 Linaro 工具链。使用普通用户；本轮验证使用 kindle 用户（UID 1000）。详见[源码输入](sources/README.md)和[构建说明](project/docs/BUILD.md)。

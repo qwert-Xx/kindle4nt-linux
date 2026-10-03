@@ -19,6 +19,9 @@ Only **D01100** is supported. Evidence comes from one device; broader hardware v
 | Recovery | Down/reset ROM path and RAM maintenance workflow; v8 serial Ctrl-C interruption | five-second window end and host enumeration timing; historical RAM guard-to-ROM cause unresolved |
 | Release builds | see [current host validation](project/docs/RELEASE-VALIDATION.md) | source builds with private inputs have different root hashes; no new hardware acceptance |
 
+
+Alpine SSH uses official OpenSSH 10.3_p1-r1 and standard OpenRC sshd on port 22, on USB 169.254.212.2 and Wi-Fi (all IPv4/IPv6 addresses). Root public keys only; SFTP enabled. RAM maintenance keeps Dropbear on port 2222. USB gadget initialization and the ttyGS0 root shell remain. See [SSH inputs and first-start key generation](project/alpine/README.md) and [offline validation](project/docs/ALPINE-OPENSSH-OFFLINE-20261003.md).
+
 ## Prepare
 
 Use a Linux build host (reference: Ubuntu 24.04, Python 3.12, ARM hard-float GCC 13.3 / binutils 2.42). Install make, GCC host tools, flex, bison, bc, libssl-dev, pkg-config, patch, tar, xz, curl, GnuPG, openssl, kmod and the ARM cross compiler. The manifest also pins the old Linaro compiler required for the BusyBox maintenance build. Run as an ordinary user (this validation used the kindle account, UID 1000). See [source inputs](sources/README.md) and [build details](project/docs/BUILD.md).

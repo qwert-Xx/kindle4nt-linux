@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
-# 当前网络配方：Alpine标准服务
+# 当前配方：Alpine 标准网络与 OpenSSH
 
-当前根与证据以 [标准网络交付](ALPINE-STANDARD-NETWORK-OFFLINE-20261003.md) 为准；下面旧交付SHA为历史记录。
+当前根与证据以 [OpenSSH 离线交付](ALPINE-OPENSSH-OFFLINE-20261003.md) 为准；下面旧交付SHA为历史记录。
 
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 # Alpine 3.24.2 armv7 官方 Wi-Fi 根配方
@@ -17,7 +17,11 @@ python3 project/alpine/build.py --cache /absolute/cache --busybox-tar /absolute/
 python3 project/alpine/verify.py --build /absolute/new-alpine-a --compare /absolute/new-alpine-b
 ```
 
-扫描中止结论及既有实机证据见 WIFI-SCAN-ABORT.md；新离线产物和复现结果见 WIFI-211-OFFLINE-20261003.md。没有部署或推送，本次构建不是新增设备验收。
+扫描中止结论及既有实机证据见 WIFI-SCAN-ABORT.md；新离线产物和复现结果见 WIFI-211-OFFLINE-20261003.md。本次没有操作设备；离线构建不是新增设备验收。
+
+Alpine 使用官方 OpenSSH 10.3_p1-r1 与标准 sshd OpenRC 服务，22 端口、所有 IPv4/IPv6 地址监听，仅 root 公钥认证，启用 internal-sftp。USB 地址 169.254.212.2 和 Wi-Fi 均可连接；USB gadget 仍在 k4-platform，ttyGS0 root shell 保留。RAM 维护根保持 Dropbear/2222。Alpine 不再包含 Dropbear 包、k4-usb-ssh 或 k4-userspace-service。
+
+主机密钥用构建参数 `--ssh-host-key /absolute/ssh_host_ecdsa_key` 提供仓库外 OpenSSH 格式 ECDSA 私钥（600），公钥自动派生（644）；沿用既有身份。未提供时，官方 sshd 首次启动按 `key_types_to_generate="ecdsa"` 生成，不在构建时随机生成。`--authorized-keys /absolute/authorized_keys` 提供 root 公钥授权（600），也可沿用外部 K4 根的 root/.ssh/authorized_keys。私钥和凭据不入库。Alpine 连接：`ssh root@169.254.212.2`；RAM 维护：`ssh -p 2222 root@169.254.212.2`。
 
 ## 时间与原厂做法
 

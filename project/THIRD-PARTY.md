@@ -11,3 +11,5 @@
 本地draft不是已批准的GitHub发布；完整人工许可/隐私审阅与阶段4/5冷门槛通过前，不贴冷验release标签，不上传私有运行附件。
 
 - e2fsprogs 1.47.1 使用其各文件 GPL/LGPL/BSD/MIT 通知；mmc-utils v1.0 使用 GPL-2.0 系列，HMAC/SHA2保留BSD声明。锁文件给出源码归档SHA；构建维护包保留完整源码归档/NOTICE。静态glibc重分发还须履行LGPL对应源码与重新链接义务；当前公开草案只分发配方，不分发维护二进制或私有根tar。
+
+Alpine 使用官方 OpenSSH 10.3_p1-r1（SSH-OpenSSH）和 libedit 20260508.3.1-r1（BSD-3-Clause），锁定包与SHA见 project/alpine/packages.lock.json；保留包本身的完整许可通知。Dropbear2024.86只属于BusyBox/RAM维护构建，Alpine不再安装Dropbear。OpenSSH主机私钥、authorized_keys、Wi-Fi凭据仍是仓库外输入。

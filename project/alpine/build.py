@@ -33,7 +33,7 @@ def installed(root):
         d=dict(l.split(':',1) for l in b.splitlines() if ':' in l);result[d['P']]=d['V']
     return result
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--cache',type=pathlib.Path,required=True);ap.add_argument('--busybox-tar',type=pathlib.Path);ap.add_argument('--busybox-sha');ap.add_argument('--k4-root',type=pathlib.Path);ap.add_argument('--out',type=pathlib.Path,required=True);ap.add_argument('--kernel',type=pathlib.Path,required=True);ap.add_argument('--dtb',type=pathlib.Path,required=True);ap.add_argument('--modules',type=pathlib.Path,required=True);a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--cache',type=pathlib.Path,required=True);ap.add_argument('--busybox-tar',type=pathlib.Path);ap.add_argument('--busybox-sha');ap.add_argument('--k4-root',type=pathlib.Path);ap.add_argument('--ssh-host-key',type=pathlib.Path);ap.add_argument('--authorized-keys',type=pathlib.Path);ap.add_argument('--out',type=pathlib.Path,required=True);ap.add_argument('--kernel',type=pathlib.Path,required=True);ap.add_argument('--dtb',type=pathlib.Path,required=True);ap.add_argument('--modules',type=pathlib.Path,required=True);a=ap.parse_args()
     a.out.mkdir(mode=0o700);out=a.out.resolve();cache=a.cache.resolve();root=out/'rootfs';root.mkdir()
     lock=json.loads((HERE/'packages.lock.json').read_text())
     def checked(name,d,key='sha256'):p=cache/name;assert sha(p,key)==d[key],name;return p
@@ -95,7 +95,7 @@ def main():
     assert actual==kernel_lock['modules']
     assert len(actual)==23
     copied=[]
-    for directory in ('lib/firmware','root/.ssh','etc/dropbear'):
+    for directory in ('lib/firmware',):
         shutil.copytree(private/directory,root/directory,dirs_exist_ok=True,symlinks=True)
     shutil.copytree(a.modules,root/'lib/modules',symlinks=True)
     if not a.busybox_tar:
@@ -105,7 +105,7 @@ def main():
     shutil.copy2(a.kernel,root/'boot/zImage')
     shutil.copy2(a.dtb,root/'boot/imx50-kindle-k4.dtb')
     for p in sorted((private/'bin').iterdir()):
-        if p.name.startswith('k4-') and p.name!='k4-wifi-connect' and 'watchdog-guard' not in p.name and 'watchdog-probe' not in p.name:
+        if p.name.startswith('k4-') and p.name not in ('k4-wifi-connect','k4-userspace-service') and 'watchdog-guard' not in p.name and 'watchdog-probe' not in p.name:
             shutil.copy2(p,root/'bin'/p.name);copied.append('bin/'+p.name)
     for p in (root/'bin').glob('k4-*'):
         if p.read_bytes().startswith(b'#!'):
@@ -114,12 +114,20 @@ def main():
     for n in ('k4-charge-current-ua','k4-wifi-driver'):shutil.copy2(private/'etc'/n,root/'etc'/n)
     shutil.copy2(private/'etc/wpa_supplicant.conf',root/'etc/wpa_supplicant/wpa_supplicant.conf')
     (root/'etc/wpa_supplicant/wpa_supplicant.conf').chmod(0o600)
-    # Existing SSH public-key authorization and host identity; disable passwords.
-    link(root,'bin/dropbear','/usr/sbin/dropbear');link(root,'bin/dropbearkey','/usr/bin/dropbearkey');link(root,'bin/iw','/usr/sbin/iw')
-    s=(root/'bin/k4-userspace-service').read_text().replace('-F -r','-F -E -s -r')
-    s=s.replace('export K4_DHCP_RESOLV_FILE=/run/resolv.conf\n','')
-    s=s[:s.index('    wifi)')]+s[s.index('    *)'):]
-    write(root,'bin/k4-userspace-service',s,0o755)
+    link(root,'bin/iw','/usr/sbin/iw')
+    (root/'root/.ssh').mkdir(mode=0o700,exist_ok=True)
+    if a.authorized_keys:
+        shutil.copy2(a.authorized_keys,root/'root/.ssh/authorized_keys')
+    else:
+        shutil.copytree(private/'root/.ssh',root/'root/.ssh',dirs_exist_ok=True,symlinks=True)
+    (root/'root/.ssh').chmod(0o700)
+    (root/'root/.ssh/authorized_keys').chmod(0o600)
+    if a.ssh_host_key:
+        shutil.copy2(a.ssh_host_key,root/'etc/ssh/ssh_host_ecdsa_key')
+        (root/'etc/ssh/ssh_host_ecdsa_key').chmod(0o600)
+        public=run(['ssh-keygen','-y','-f',a.ssh_host_key])
+        assert public.startswith('ecdsa-sha2-'), 'provide an OpenSSH ECDSA host key'
+        write(root,'etc/ssh/ssh_host_ecdsa_key.pub',public)
     shadow=(root/'etc/shadow').read_text();shadow='\n'.join('root::0:0:99999:7:::' if l.startswith('root:') else l for l in shadow.splitlines())+'\n';write(root,'etc/shadow',shadow,0o600)
     assert list((root/'lib/modules').iterdir())[0].name==RELEASE
     run(qr+[root/'sbin/depmod','-b',root,RELEASE],out/'depmod.log')
@@ -129,14 +137,13 @@ def main():
     # Keep existing initialization contents; OpenRC now owns mounts/watchdog.
     base=(private/'etc/init.d/rcS.k4-base').read_text();base=base[base.index('$bb mkdir -p /run/wpa_supplicant'):];base='#!/bin/sh\nPATH=/bin:/sbin:/usr/bin:/usr/sbin\nbb=/bin/busybox\n'+base;base=base.replace('/bin/busybox modprobe','/sbin/modprobe')
     base=base[:base.index('count=0\n')]+base[base.index("if /bin/busybox grep -q 'amazon,k4-accessory-controller'"):]
+    base=base.replace('test -s /etc/dropbear/k4-hostkey || exit 1\n','')
     write(root,'etc/k4/platform-start',base,0o755)
     services={
     'k4-filesystems': '#!/sbin/openrc-run\ndescription="K4 virtual filesystems and early watchdog"\ndepend() { before k4-platform; }\nstart() {\n grep -q " /proc proc " /proc/mounts 2>/dev/null || mount -t proc proc /proc\n grep -q " /sys sysfs " /proc/mounts || mount -t sysfs sysfs /sys\n grep -q " /dev devtmpfs " /proc/mounts || mount -t devtmpfs devtmpfs /dev\n mkdir -p /dev/pts\n mount -t devpts devpts /dev/pts\n mount -t tmpfs -o mode=1777,size=32m tmpfs /tmp\n mount -t tmpfs tmpfs /run\n mount -t configfs configfs /sys/kernel/config\n /bin/busybox watchdog -T 30 -t 10 /dev/watchdog\n}\n',
     'k4-platform':'#!/sbin/openrc-run\ndescription="K4 USB, SPI and charging initialization"\ndepend() { need k4-filesystems; before k4-coldplug; }\nstart() { /bin/sh /etc/k4/platform-start; }\nstop() { /bin/sh /bin/k4-charge-policy stop; }\n',
-    'k4-coldplug':'#!/sbin/openrc-run\ndescription="K4 generic modalias coldplug"\ndepend() { need k4-platform; before k4-usb-ssh k4-wifi; }\nstart() { (umask 077; /bin/busybox timeout 60 /bin/sh /bin/k4-modalias-coldplug > /run/k4-modalias-coldplug.log 2>&1) || :; }\n',
+    'k4-coldplug':'#!/sbin/openrc-run\ndescription="K4 generic modalias coldplug"\ndepend() { need k4-platform; before k4-wifi; }\nstart() { (umask 077; /bin/busybox timeout 60 /bin/sh /bin/k4-modalias-coldplug > /run/k4-modalias-coldplug.log 2>&1) || :; }\n',
     }
-    for name,arg in [('k4-usb-ssh','usb-ssh')]:
-        services[name]='#!/sbin/openrc-run\ndescription="K4 '+arg+'"\nsupervisor="supervise-daemon"\ncommand="/bin/k4-userspace-service"\ncommand_args="'+arg+'"\npidfile="/run/'+name+'.pid"\ndepend() { need k4-coldplug hwclock; }\n'
     mounts=services['k4-filesystems'].split('start() {\n',1)[1].split(' /bin/busybox watchdog',1)[0]
     write(root,'etc/k4/mount-early','#!/bin/sh\nPATH=/bin:/sbin:/usr/bin:/usr/sbin\n'+mounts,0o755)
     services['k4-filesystems']='#!/sbin/openrc-run\ndescription="K4 early watchdog"\ndepend() { before k4-platform; }\nstart() { /bin/busybox watchdog -T 30 -t 10 /dev/watchdog; }\n'
@@ -144,15 +151,15 @@ def main():
     write(root,'etc/conf.d/hwclock','clock="UTC"\nclock_hctosys="YES"\nclock_systohc="YES"\nclock_adjfile="NO"\nclock_args="--rtc=/dev/rtc0"\n')
     services['k4-ntpd']='#!/sbin/openrc-run\ndescription="Optional BusyBox network time"\nsupervisor="supervise-daemon"\ncommand="/bin/busybox"\ncommand_args="ntpd -n -p pool.ntp.org"\npidfile="/run/k4-ntpd.pid"\ndepend() { need networking wpa_cli hwclock; }\n'
     for n,s in services.items():write(root,'etc/init.d/'+n,s,0o755)
-    for level,names in {'sysinit':['k4-filesystems'],'boot':['k4-platform','k4-coldplug','hwclock','wpa_supplicant','networking'],'default':['k4-usb-ssh','wpa_cli','k4-ntpd'],'shutdown':['killprocs','mount-ro']}.items():
+    for level,names in {'sysinit':['k4-filesystems'],'boot':['k4-platform','k4-coldplug','hwclock','wpa_supplicant','networking'],'default':['sshd','wpa_cli','k4-ntpd'],'shutdown':['killprocs','mount-ro']}.items():
         for n in names:link(root,'etc/runlevels/'+level+'/'+n,'/etc/init.d/'+n)
     write(root,'etc/rc.conf',(root/'etc/rc.conf').read_text()+'\nrc_parallel="NO"\nrc_sys=""\n')
     write(root,'etc/inittab','::sysinit:/bin/sh /etc/k4/mount-early\n::sysinit:/sbin/openrc sysinit\n::sysinit:/sbin/openrc boot\n::wait:/sbin/openrc default\nttyGS0::respawn:/bin/sh\n::ctrlaltdel:/bin/busybox reboot\n::shutdown:/sbin/openrc shutdown\n')
     write(root,'etc/apk/repositories','https://dl-cdn.alpinelinux.org/alpine/v3.24/main\n')
     # Match the device's apk world: split packages stay dependencies.
     world=(root/'etc/apk/world').read_text().splitlines()
-    world=[n.split('=')[0] if n.startswith('ifupdown-ng=') else n for n in world
-           if n.split('=')[0] not in ('bridge','ifupdown-ng-wifi','wpa_supplicant-openrc')]
+    world=[n.split('=')[0] if n.split('=')[0] in ('ifupdown-ng','openssh','openssh-server','openssh-sftp-server') else n for n in world
+           if n.split('=')[0] not in ('bridge','ifupdown-ng-wifi','wpa_supplicant-openrc','libedit','openssh-keygen','openssh-client-common','openssh-client-default','openssh-server-common','openssh-server-common-openrc')]
     write(root,'etc/apk/world','\n'.join(world)+'\n')
     for p in sorted((HERE/'network').rglob('*')):
         if p.is_file() and not p.name.endswith('.license'):

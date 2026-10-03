@@ -288,26 +288,6 @@
       "verification": "apk verify using official Alpine keys; signed APKINDEX membership"
     },
     {
-      "name": "Alpine dropbear",
-      "file": "dropbear-2026.91-r0.apk",
-      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/dropbear-2026.91-r0.apk",
-      "version": "2026.91-r0",
-      "license": "MIT",
-      "sha256": "6b9171bc1b8bd1883302396430f88a4ff173a194abfcc022f5d1b5c126b69c15",
-      "upstream_url": "https://matt.ucc.asn.au/dropbear/dropbear.html",
-      "verification": "apk verify using official Alpine keys; signed APKINDEX membership"
-    },
-    {
-      "name": "Alpine dropbear-openrc",
-      "file": "dropbear-openrc-2026.91-r0.apk",
-      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/dropbear-openrc-2026.91-r0.apk",
-      "version": "2026.91-r0",
-      "license": "MIT",
-      "sha256": "643094a43f38f071724b1c26dc22e3710d5383c04d194535cd542a24b9934198",
-      "upstream_url": "https://matt.ucc.asn.au/dropbear/dropbear.html",
-      "verification": "apk verify using official Alpine keys; signed APKINDEX membership"
-    },
-    {
       "name": "Alpine e2fsprogs",
       "file": "e2fsprogs-1.47.4-r0.apk",
       "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/e2fsprogs-1.47.4-r0.apk",
@@ -904,6 +884,78 @@
       "version": "0.13.0-r0",
       "license": "ISC",
       "sha256": "9c910c83d15f13f6e633959cbd26eb10da871556e857d915609977b47ded14f3"
+    },
+    {
+      "name": "Alpine libedit",
+      "file": "libedit-20260508.3.1-r1.apk",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/libedit-20260508.3.1-r1.apk",
+      "version": "20260508.3.1-r1",
+      "license": "BSD-3-Clause",
+      "sha256": "62be3fb7907bb5fbb471589872d544b8f6b7880e8fd7ac2bb86f1bac72cbd1d2"
+    },
+    {
+      "name": "Alpine openssh",
+      "file": "openssh-10.3_p1-r1.apk",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/openssh-10.3_p1-r1.apk",
+      "version": "10.3_p1-r1",
+      "license": "SSH-OpenSSH",
+      "sha256": "b6ad9d25bf28d1ed5cd9d844172bb4fa2dcf00a0f1af98d8e7ba5168b034e5d7"
+    },
+    {
+      "name": "Alpine openssh-client-common",
+      "file": "openssh-client-common-10.3_p1-r1.apk",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/openssh-client-common-10.3_p1-r1.apk",
+      "version": "10.3_p1-r1",
+      "license": "SSH-OpenSSH",
+      "sha256": "5168b04fd76bc645a37a7e5a5d991495eaba31b58f0171c66f19214ef0d47ce8"
+    },
+    {
+      "name": "Alpine openssh-client-default",
+      "file": "openssh-client-default-10.3_p1-r1.apk",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/openssh-client-default-10.3_p1-r1.apk",
+      "version": "10.3_p1-r1",
+      "license": "SSH-OpenSSH",
+      "sha256": "fd96a93aff5a1f8dacb7207158fa9eb3594ecbbe5b6823bc0db4a53bace065dc"
+    },
+    {
+      "name": "Alpine openssh-keygen",
+      "file": "openssh-keygen-10.3_p1-r1.apk",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/openssh-keygen-10.3_p1-r1.apk",
+      "version": "10.3_p1-r1",
+      "license": "SSH-OpenSSH",
+      "sha256": "e42648675eac1292536c484d3ce27de8c60a9e818fba2497829b6669781b3626"
+    },
+    {
+      "name": "Alpine openssh-server",
+      "file": "openssh-server-10.3_p1-r1.apk",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/openssh-server-10.3_p1-r1.apk",
+      "version": "10.3_p1-r1",
+      "license": "SSH-OpenSSH",
+      "sha256": "398efe347e710c8701943983d3b7447bd9c30dd4b68690123562d51352190ff2"
+    },
+    {
+      "name": "Alpine openssh-server-common",
+      "file": "openssh-server-common-10.3_p1-r1.apk",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/openssh-server-common-10.3_p1-r1.apk",
+      "version": "10.3_p1-r1",
+      "license": "SSH-OpenSSH",
+      "sha256": "c6b6a9a5b9a1328534fb63d19cc9579c2c0d2fd23d266e6084750dc877b59c0e"
+    },
+    {
+      "name": "Alpine openssh-server-common-openrc",
+      "file": "openssh-server-common-openrc-10.3_p1-r1.apk",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/openssh-server-common-openrc-10.3_p1-r1.apk",
+      "version": "10.3_p1-r1",
+      "license": "SSH-OpenSSH",
+      "sha256": "8be956f1687d758869164afd2243bc3a683c1df656b22329ec7b69662ab4e020"
+    },
+    {
+      "name": "Alpine openssh-sftp-server",
+      "file": "openssh-sftp-server-10.3_p1-r1.apk",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/openssh-sftp-server-10.3_p1-r1.apk",
+      "version": "10.3_p1-r1",
+      "license": "SSH-OpenSSH",
+      "sha256": "ece9cdb6d116665a7a6e8a2c29163b4f20099dce62cbb38853b1f13cd7b9f2e2"
     }
   ]
 }

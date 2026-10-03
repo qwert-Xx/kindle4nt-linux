@@ -1,0 +1,7 @@
+Port 22
+HostKey /etc/ssh/ssh_host_ecdsa_key
+PermitRootLogin prohibit-password
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+Subsystem sftp internal-sftp

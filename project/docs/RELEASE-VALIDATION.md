@@ -1,4 +1,9 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
+# Current OpenSSH recipe validation
+
+See [OpenSSH offline delivery](ALPINE-OPENSSH-OFFLINE-20261003.md); earlier root hashes below are historical.
+
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
 # Current standard networking validation
 
 Official Alpine OpenRC networking is now the recipe default. See [77-package verification, two identical roots and recorded device configuration comparison](ALPINE-STANDARD-NETWORK-OFFLINE-20261003.md). This offline work does not access or redeploy the device. Earlier results below describe historical roots.
