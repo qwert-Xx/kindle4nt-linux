@@ -1,5 +1,5 @@
 #!/bin/sh
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # DRAFT: standard mmc-utils on the temporarily writable main device; no sector writes.
 set -eu
 case "${1:-}" in 0x48|0x50) ;; *) echo 'usage: set-partition-config-draft.sh 0x48|0x50' >&2; exit 2;; esac

@@ -1,0 +1,300 @@
+{
+  "scope": {
+    "device_operations": false,
+    "push": false,
+    "remote_created": false,
+    "source_main_head": "b27485515"
+  },
+  "source_verification": {
+    "linux_tar_sha256": "b74a43d0630809b7871cc906ac155e956cbc0b2e78a7451f5e6c8bfcb1208c30",
+    "linux_signature_valid": true,
+    "linux_key_fingerprint": "647F28654894E3BD457199BE38DBBDC86092693E",
+    "linux_key_acquisition": "kernel.org WKD, TLS; fingerprint cross-checked with official signature page",
+    "barebox_tar_sha256": "491b504c8a79b5a4e30c419b824916b7329bad8abfe34987ba066bafa1fbcfc5",
+    "barebox_official_md5_valid": true,
+    "barebox_tag_file_content_mode_symlink_equal": true,
+    "barebox_file_count": 21195,
+    "mmc_snapshot_equal_legacy_file_contents_modes": true,
+    "mmc_source_files": 24
+  },
+  "artifacts": {
+    "zImage": {
+      "sha256": "5c666c72ad08914c1883b76d03bd5e1bcf40046f1a5155ee58229b1575419291",
+      "two_clean_builds_byte_equal": true,
+      "deployed_byte_equal": true
+    },
+    "dtb": {
+      "sha256": "8960edb8bdec2d216080b0f6dee682f38fd69b45f663062d539afc4a93bc0cdc",
+      "two_clean_builds_byte_equal": true,
+      "deployed_byte_equal": true
+    },
+    "barebox_v8": {
+      "sha256": "b283f374a5fda6e7ba2c5c3b83ba9f67a569c1e63493d9ab4ea3b79febda0606",
+      "two_clean_builds_byte_equal": true,
+      "deployed_byte_equal": true,
+      "source_built_usb_and_stock_boot0_header_check_equal": true
+    }
+  },
+  "userspace": {
+    "wpa_supplicant": {
+      "sha256": "3a1cb58b702463b0fa720bd8b0e673de4117d822eab35c0fd3ee38e5c4c20c49",
+      "two_clean_builds_byte_equal": true,
+      "deployed_comparison": {
+        "byte_identical": false,
+        "only_build_id_diff": true,
+        "normalized_sha256": "f8f8b8368b40250b6d7e57829f347ba99b94d2bced9f6111a759bc2ee50a575a",
+        "build_id_ranges": [
+          [
+            292,
+            20
+          ]
+        ],
+        "differing_offsets": [
+          292,
+          293,
+          294,
+          295,
+          296,
+          297,
+          298,
+          299,
+          300,
+          301,
+          302,
+          303,
+          304,
+          305,
+          306,
+          307,
+          308,
+          309,
+          310,
+          311
+        ],
+        "differing_offset_count": 20,
+        "same_length": true
+      }
+    },
+    "wpa_cli": {
+      "sha256": "3e8f1f091f5c5fafb6b60acc6fff913b2b29d7cce0aeccdbbae866d17ec1c47f",
+      "two_clean_builds_byte_equal": true,
+      "deployed_comparison": {
+        "byte_identical": false,
+        "only_build_id_diff": true,
+        "normalized_sha256": "daa8358844c31243dbb7110e17b0f2fd3deb5de017f21109fd0543cb448c3bf1",
+        "build_id_ranges": [
+          [
+            292,
+            20
+          ]
+        ],
+        "differing_offsets": [
+          292,
+          293,
+          294,
+          295,
+          296,
+          297,
+          298,
+          299,
+          300,
+          301,
+          302,
+          303,
+          304,
+          305,
+          306,
+          307,
+          308,
+          309,
+          310,
+          311
+        ],
+        "differing_offset_count": 20,
+        "same_length": true
+      }
+    },
+    "iw": {
+      "sha256": "d2db6154a4219a628fd7a8c3b2b730aeca455763c108bca544430048819299c7",
+      "two_clean_builds_byte_equal": true,
+      "deployed_comparison": {
+        "byte_identical": false,
+        "only_build_id_diff": true,
+        "normalized_sha256": "66a4ce133112755b7912e19dca433f5c91bc8c529ca77bd2e71cf19178d9f8bf",
+        "build_id_ranges": [
+          [
+            292,
+            20
+          ]
+        ],
+        "differing_offsets": [
+          292,
+          293,
+          294,
+          295,
+          296,
+          297,
+          298,
+          299,
+          300,
+          301,
+          302,
+          303,
+          304,
+          305,
+          306,
+          307,
+          308,
+          309,
+          310,
+          311
+        ],
+        "differing_offset_count": 20,
+        "same_length": true
+      }
+    }
+  },
+  "alpine": {
+    "public_source_root": {
+      "sha256": "17082677fb9a24d07682a080638751508f05fb93939739e8cd729d2a609e5de0",
+      "two_source_builds_same_user_key_byte_equal": true,
+      "deployed_byte_equal": false,
+      "reason": "User-generated signing key, source-built K4/WPA programs and omitted host build symlink; old identity not reproduced",
+      "verification": {
+        "elf_count": 312,
+        "dynamic_elf_count": 199,
+        "module_count": 23,
+        "abi": "ARMv7 little-endian EABI5, hard-float userspace; musl dynamic or existing static K4 binaries",
+        "reference_equal_files": 8,
+        "service_declarations": {
+          "k4-filesystems": [
+            "before k4-platform"
+          ],
+          "k4-platform": [
+            "need k4-filesystems",
+            "before k4-coldplug"
+          ],
+          "k4-coldplug": [
+            "need k4-platform",
+            "before k4-usb-ssh k4-wifi"
+          ],
+          "k4-usb-ssh": [
+            "need k4-coldplug hwclock"
+          ],
+          "k4-wifi": [
+            "need k4-coldplug hwclock"
+          ],
+          "killprocs": [],
+          "mount-ro": [
+            "after killprocs savecache"
+          ],
+          "hwclock": [
+            "provide clock",
+            "want modules",
+            "deps: 34: yesno: not found"
+          ],
+          "k4-ntpd": [
+            "need k4-wifi hwclock"
+          ]
+        },
+        "topological_order": [
+          "hwclock",
+          "k4-filesystems",
+          "killprocs",
+          "k4-platform",
+          "mount-ro",
+          "k4-coldplug",
+          "k4-usb-ssh",
+          "k4-wifi",
+          "k4-ntpd"
+        ],
+        "service_validation": "shell syntax and evaluated dependency graph; no PID1/OpenRC boot or hardware execution",
+        "qemu_smoke": {
+          "busybox": {
+            "exit": 0,
+            "output": "BusyBox v1.37.0 (2026-01-10 15:38:28 UTC) multi-call binary.\nBusyBox is copyrighted by many authors between 1998-2015.\nLicensed under GPLv2. See source distribution for detailed\ncopyright notices.\n\nUsage: busybox [function [arguments]...]\n   or: busybox --list[-full]\n   or: busybox --install [-s] [DIR]\n   or: function [arguments]...\n\n\tBusyBox is a multi-call binary that combines many common Unix\n\tutilities into a single executable.  Most people will create a\n\tlink to busybox for each function they wish to use and BusyBox\n\twill act like whatever it was invoked as.\n\nCurrently defined functions:\n\t[, [[, acpid, add-shell, addgroup, adduser, adjtimex, arch, arp,\n\tarping, ash, awk, base64, basename, bbconfig, bc, beep, blkdiscard,\n\tblkid, blockdev, brctl, bunzip2, bzcat, bzip2, cal, cat, chattr,"
+          },
+          "kmod": {
+            "exit": 0,
+            "output": "kmod version 34.2\n+ZSTD +XZ +ZLIB +OPENSSL\n"
+          },
+          "openrc": {
+            "exit": 0,
+            "output": "openrc (OpenRC) 0.63.2\n"
+          },
+          "dropbear": {
+            "exit": 0,
+            "output": "Dropbear server v2026.91 https://matt.ucc.asn.au/dropbear/dropbear.html\nUsage: /external/reference [options]\n-b bannerfile\tDisplay the contents of bannerfile before user login\n\t\t(default: none)\n-r keyfile      Specify hostkeys (repeatable)\n\t\tdefaults: \n\t\t- rsa /etc/dropbear/dropbear_rsa_host_key\n\t\t- ecdsa /etc/dropbear/dropbear_ecdsa_host_key\n\t\t- ed25519 /etc/dropbear/dropbear_ed25519_host_key\n-D\t\tDirectory containing authorized_keys file\n-R\t\tCreate hostkeys as required\n-F\t\tDon't fork into background\n-e\t\tPass on server process environment to child process\n-E\t\tLog to stderr rather than syslog\n-m\t\tDon't display the motd on login\n-w\t\tDisallow root logins\n-G\t\tRestrict logins to members of specified group\n-s\t\tDisable "
+          },
+          "wpa-k4": {
+            "exit": 0,
+            "output": "wpa_supplicant v2.12\nCopyright (c) 2003-2026, Jouni Malinen <j@w1.fi> and contributors\n"
+          },
+          "wpa-cli-k4": {
+            "exit": 0,
+            "output": "wpa_cli v2.12\nCopyright (c) 2004-2026, Jouni Malinen <j@w1.fi> and contributors\n"
+          },
+          "iw": {
+            "exit": 0,
+            "output": "iw version 6.17\n"
+          },
+          "e2fsprogs": {
+            "exit": 0,
+            "output": "e2fsck 1.47.4 (6-Mar-2025)\n\tUsing EXT2FS Library version 1.47.4, 6-Mar-2025\n"
+          },
+          "mount": {
+            "exit": 0,
+            "output": "mount from util-linux 2.42.3 (libmount 2.42.3: btrfs, namespaces, idmapping, fd-based-mount, statmount, statx, fanotify, assert, debug)\n"
+          },
+          "hwclock": {
+            "exit": 0,
+            "output": "\nUsage:\n hwclock [function] [option...]\n\nTime clocks utility.\n\nFunctions:\n -r, --show                      display the RTC time\n     --get                       display drift corrected RTC time\n     --set                       set the RTC according to --date\n -s, --hctosys                   set the system time from the RTC\n -w, --systohc                   set the RTC from the system time\n     --systz                     send timescale configurations to the kernel\n -a, --adjust                    adjust the RTC to account for systematic drift\n     --param-get <param>         display the RTC parameter\n     --param-set <param>=<value> set the RTC parameter\n     --param-index <number>      parameter index (default 0)\n     --vl-read                   read voltage low information\n     --vl-clear"
+          },
+          "ntpd": {
+            "exit": 0,
+            "output": "BusyBox v1.37.0 (2026-01-10 15:38:28 UTC) multi-call binary.\n\nUsage: ntpd [-dnqNwl] [-I IFACE] [-S PROG] [-k KEYFILE] [-p [keyno:N:]PEER]...\n\nNTP client/server\n\n\t-d[d]\tVerbose\n\t-n\tRun in foreground\n\t-q\tQuit after clock is set\n\t-N\tRun at high priority\n\t-w\tDo not set time (only query peers), implies -n\n\t-S PROG\tRun PROG after stepping time, stratum change, and every 11 min\n\t-k FILE\tKey file (ntp.keys compatible)\n\t-p [keyno:NUM:]PEER\n\t\tObtain time from PEER (may be repeated)\n\t\tUse key NUM for authentication\n\t\tIf -p is not given, 'server HOST' lines\n\t\tfrom /etc/ntp.conf are used\n\t-l\tAlso run as server on port 123\n\t-I IFACE Bind server to IFACE, implies -l\n"
+          }
+        },
+        "tar_files": 1488,
+        "signature_packages": 73,
+        "package_index_validation": true,
+        "device_operations": false,
+        "reproducible_tar": true
+      }
+    },
+    "deployed_input_replay": {
+      "sha256": "d81de7ef896e51d384e2ca4589a5fea1f08778c5a366246b4afa757f37507e37",
+      "two_archives_byte_equal": true,
+      "deployed_byte_equal": true,
+      "source_only_build": false,
+      "external_inputs": "Existing verified BusyBox base tar, deployed signed local WPA repository and deployed module-tree metadata; verification only"
+    },
+    "user_signature_solver_corrupt_tests": {
+      "tagged_version": "2.12-r0",
+      "untagged_higher_fixture": "99.0-r0",
+      "tagged_keeps_k4": true,
+      "untagged_control_upgrades": true,
+      "corrupt_apk_rejected": true,
+      "simulation_only": true,
+      "device_operations": false
+    }
+  },
+  "host_tests": {
+    "unittest_pass": 19,
+    "userspace_unittests_pass": 5,
+    "barebox_python_tests_pass": 15
+  },
+  "manual_copyright_confirmation_required": true,
+  "one_command_entry": {
+    "status": "running final clean verification; initial experimental ZQ profile assertion fixed to stock default",
+    "prior_failures": [
+      "experimental ZQ 8/4 was inappropriate for production 23/8; removed explicit diagnostic fragment",
+      "random temporary assembly FILE symbol and host module build symlink caused root differences; stable object names and omit host build/source symlinks in public root"
+    ]
+  },
+  "copyright": {
+    "records": 248,
+    "manual_confirmation_count": 11,
+    "list": "COPYRIGHT-PROVENANCE.md"
+  }
+}

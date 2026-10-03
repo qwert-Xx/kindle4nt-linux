@@ -1,14 +1,48 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
-# Kindle 4 NT D01100
+# kindle4nt-linux
 
-Local public-history draft, not a hardware-accepted release. Read [scope and status](project/docs/README.md), [build](project/docs/BUILD.md), [RAM recovery](project/docs/RAM-BOOT.md), [ZQ](project/docs/ZQCAL.md) and [known issues](project/docs/KNOWN-ISSUES.md). Apply kernel/patches/series to separate Linux v6.6.157 sources; debug additionally applies kernel/debug-patches/series. No device operation or deployment is automatic. Firmware/waveforms/credentials and raw evidence are excluded.
+Linux 6.6.157, barebox and an Alpine root for the Kindle 4 non-touch D01100 (Yoshi / Tequila).
 
-boot1主题见 [barebox boot1](project/docs/BAREBOX-BOOT1.md)。
+[简体中文](README.zh-CN.md). This is an unofficial community project by qwert-Xx, not affiliated with or endorsed by Amazon, Lab126, NXP/Freescale or the upstream projects. Kindle and other product names are trademarks of their respective owners.
 
-## 当前状态（2026-10-03，既有实机记录）
+**Writing eMMC boot1 or partition p1 can destroy data, brick the device and void your warranty.** Prepare verified backups and a working recovery path first. Hold **Down while resetting** to enter the i.MX ROM downloader, then load USB barebox and a Linux RAM maintenance system. Do not rely on the short Ctrl-C window as the only recovery method. Changing EXT_CSD[179] back does not restore an overwritten p1.
 
-boot1 barebox v8，EXT_CSD[179]=0x50，默认 eMMC p1 Alpine 3.24.2；BusyBox 根作为维护/备选。
-USB 串口发送 Ctrl-C（0x03）中断 boot/emmc 的 sleep 5 进入 shell，再 YMODEM 加载方案 A RAM 维护包（k4-maint-ram-20261003，900/30 expire-health）；不要复位前按上。5秒从脚本运行计起，Windows枚举可能缩短实际主机窗口，窗口末尾和电池独立冷启动待验。
-WDI 原厂方案 A 为 ALT2/0x0c，正常态由 restart pinctrl 持有。Alpine 正常根持续 watchdog 喂狗，无有限 RAM guard；静态 2.12 supplicant 由本地 @k4 APK 提供。
-Alpine 首次启动与3轮正常 reboot、两档 RTC STOP/内存保持/醒后刷新、NTP/SRTC正常关机读写和 HTTPS apk update 已有实机记录；长期运行、upgrade、第二台 K4 与物理电源轨仍未验。详 [Alpine 配方](project/docs/ALPINE-ROOT.md) 与 [guard 对照](project/docs/RAM-GUARD-COMPARISON.md)。发布前需用户许可审阅。
-本次只离线编辑、构建和扫描，未访问设备、未 push。默认根更新不意味着覆盖所有冷启动/耐久验收。
+## Status
+
+Only **D01100** is supported. Evidence comes from one device; broader hardware validation is pending. Existing device results are recorded here; release preparation runs only on the host.
+
+| Area | Verified on the reference device | Gaps / known issues |
+| --- | --- | --- |
+| Boot and storage | boot1 barebox v8, EXT_CSD[179]=0x50, automatic Alpine 3.24.2 p1 boot; three normal reboots | independent battery cold boot, second device, durability and recovery rehearsal |
+| Display and suspend | first refresh, RTC STOP at both CPU operating points, retained memory and refresh after resume | physical rail/power measurement, long sleep and many cycles |
+| Network and time | WPA2-PSK/CCMP, DHCP, USB console/SSH, NTP and normal shutdown SRTC writeback, HTTPS apk update | other Wi-Fi modes, physical unplug/replug, apk upgrade |
+| Recovery | Down/reset ROM path and RAM maintenance workflow; v8 serial Ctrl-C interruption | five-second window end and host enumeration timing; historical RAM guard-to-ROM cause unresolved |
+| Release builds | see [current host validation](project/docs/RELEASE-VALIDATION.md) | source builds with a user key/private inputs have different root hashes; no new hardware acceptance |
+
+## Prepare
+
+Use a Linux build host (reference: Ubuntu 24.04, Python 3.12, ARM hard-float GCC 13.3 / binutils 2.42). Install make, GCC host tools, flex, bison, bc, libssl-dev, pkg-config, patch, tar, xz, curl, GnuPG, openssl, kmod and the ARM cross compiler. The manifest also pins the old Linaro compiler required for the BusyBox maintenance build. Run as an ordinary user; the existing Alpine recipe requires UID 1000. See [source inputs](sources/README.md) and [build details](project/docs/BUILD.md).
+
+Keep an external cache, external build directory and external private-input directory. Extract firmware/calibration, panel waveforms and boot0/idme from **your own device/backups** as described in [THIRD-PARTY.md](THIRD-PARTY.md). Supply Wi-Fi configuration and SSH authorization/identity separately if needed. No images, APKs, root archives, credentials, private signing keys or proprietary firmware are distributed in this repository.
+
+## Quick start
+
+One host-only command downloads locked upstream inputs, verifies hashes and Linux signatures, applies patches and builds Linux, barebox, userspace, a user-signed WPA APK and the Alpine root:
+
+```sh
+python3 project/release.py --cache /external/source-cache --out /external/new-build --private-inputs /external/device-inputs
+```
+
+Add `--offline` to use an already verified cache. Add `--signing-key /external/your-key.pem` to reuse your own key; otherwise the build generates a key in the external output directory. Its public key is installed in `/etc/apk/keys`. Preserve this key for updates. The frozen Alpine index may no longer exist on the live mirror; retain the verified cache rather than silently upgrading versions.
+
+Deployment is a **separate manual operation**: Ctrl-C in barebox, or Down/reset → ROM, then USB barebox → RAM maintenance → back up and verify storage → write/verify boot1 and p1 → activate and reboot. Read [boot1 instructions](project/docs/BAREBOX-BOOT1.md) and [Alpine deployment](project/docs/ALPINE-ROOT.md) in full. Never format the currently mounted p1 root. No build command deploys to a device.
+
+## Maintenance and recovery
+
+The normal Alpine root continuously feeds the watchdog; RAM maintenance has a finite guard. Keep matching kernel/DTB/modules and a known-good RAM rescue package. Hold Down during reset for ROM rescue. Restore boot1 from your complete verified backup, or restore p1 from your own root backup in RAM; selecting original boot0 alone cannot restore the original OS. See [known issues](project/docs/KNOWN-ISSUES.md) and [RAM recovery](project/docs/RAM-BOOT.md).
+
+## Licenses and acknowledgements
+
+Kernel/barebox patches and derivative code: GPL-2.0-only. Original scripts/tools: GPL-2.0-or-later. Documentation: CC-BY-4.0. Individual upstream notices and file license expressions remain applicable. Full texts are in [LICENSES](LICENSES); see [copyright provenance](COPYRIGHT-PROVENANCE.md) and [third-party components](THIRD-PARTY.md). Outstanding attribution questions are marked “需人工确认” for review before publication.
+
+Thanks to Linux, barebox, Alpine, BusyBox and the other upstream maintainers, and to the Amazon/Lab126/Freescale original open-source code authors. This repository contains source, patches, recipes and build scripts only. Publication remains subject to user review.

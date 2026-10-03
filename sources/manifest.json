@@ -101,7 +101,7 @@
       "license": "GPL-2.0-only AND BSD-3-Clause",
       "sha256": "3be34e30b0830c71d690264ff433c7f8b0613c8ac8eeed71e49f6bcb6bc79772",
       "commit": "d8a8358a7207bd81d0c38dca2cf27a48bf411341",
-      "verification": "Official snapshot; source-tree equivalence recorded in release verification"
+      "verification": "Official v1.0 snapshot; all 24 file contents and modes equal legacy git archive"
     },
     {
       "name": "Alpine minirootfs",
