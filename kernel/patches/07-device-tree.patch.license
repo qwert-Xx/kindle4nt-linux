@@ -2,7 +2,7 @@ SPDX-FileCopyrightText: 2026 qwert-Xx
 SPDX-FileCopyrightText: Copyright 2011 Freescale Semiconductor, Inc.
 SPDX-FileCopyrightText: Copyright 2011 Linaro Ltd.
 SPDX-FileCopyrightText: Copyright 2013 Greg Ungerer <gerg@uclinux.org>
-SPDX-License-Identifier: GPL-2.0-only
+SPDX-License-Identifier: GPL-2.0-only AND BSD-2-Clause
 
 Target: arch/arm/boot/dts/nxp/imx/imx50-kindle-k4-common.dtsi
 hardware description/format based on Amazon's GPL-2.0 Kindle kernel source
