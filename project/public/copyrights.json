@@ -116,5 +116,9 @@
     "Copyright 2010 Yong Shen <yong.shen@linaro.org>",
     "Copyright 2012 Freescale Semiconductor, Inc.",
     "copyright notice and this permission notice appear in all copies."
+  ],
+  "rootfs/alpine/etc/rc.conf": [
+    "Copyright (c) 2007-2008, Roy Marples <roy@marples.name>",
+    "Copyright (c) 2007-2023, the OpenRC authors"
   ]
 }

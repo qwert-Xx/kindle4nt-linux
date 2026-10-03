@@ -92,12 +92,13 @@ def main():
         'debug 另按 kernel/debug-patches/series 应用。按构建指南执行 '
         '`make -C project images SOURCE=/path/to/linux INPUTS="$PRIVATE/inputs.json" OUT="$OUT/images"`。\n')
     (out/'LICENSES').mkdir()
-    for identifier in ('GPL-2.0-only', 'GPL-2.0-or-later', 'CC-BY-4.0'):
-        source = ROOT/'LICENSES'/('dual/CC-BY-4.0' if identifier == 'CC-BY-4.0' else 'preferred/GPL-2.0')
+    for identifier in ('GPL-2.0-only', 'GPL-2.0-or-later', 'CC-BY-4.0', 'BSD-2-Clause'):
+        source = ROOT/'LICENSES'/('dual/CC-BY-4.0' if identifier == 'CC-BY-4.0' else ('preferred/BSD-2-Clause' if identifier == 'BSD-2-Clause' else 'preferred/GPL-2.0'))
         shutil.copyfile(source, out/'LICENSES'/(identifier+'.txt'))
     shutil.copyfile(ROOT/'project/THIRD-PARTY.md',out/'THIRD-PARTY.md')
     shutil.copyfile(ROOT/'project/public/LICENSE-POLICY.md',out/'LICENSE-POLICY.md')
     notices = json.loads((ROOT/'project/public/copyrights.json').read_text())
+    licenses = json.loads((ROOT/'project/public/licenses.json').read_text())
     provenance = []
     (out/'REUSE.toml').write_text('version = 1\n\n[[annotations]]\npath = ["porting/barebox-emmc/defaultenv-v9/**"]\nprecedence = "aggregate"\nSPDX-FileCopyrightText = "2026 qwert-Xx"\nSPDX-License-Identifier = "GPL-2.0-or-later"\n')
     for target in sorted(out.rglob('*')):
@@ -108,10 +109,11 @@ def main():
             continue  # REUSE annotations keep packed environment bytes unchanged.
         identifier = 'CC-BY-4.0' if target.suffix == '.md' else 'GPL-2.0-or-later'
         if target.suffix == '.patch': identifier = 'GPL-2.0-only'
+        identifier = licenses.get(name, identifier)
         authors = ['2026 qwert-Xx'] + notices.get(name, [])
         pathlib.Path(str(target)+'.license').write_text(''.join('SPDX-FileCopyrightText: '+x+'\n' for x in authors)+'SPDX-License-Identifier: '+identifier+'\n')
         if len(authors) > 1:
-            provenance.append(dict(file=name, copyright_lines=authors[1:], basis='Retained public attribution and current source headers', status='retained; current export awaits owner review'))
+            provenance.append(dict(file=name, copyright_lines=authors[1:], basis='Retained public attribution, current source headers and upstream notices', status='retained; current export awaits owner review'))
     (out/'COPYRIGHT-PROVENANCE.json').write_text(json.dumps(provenance,ensure_ascii=False,indent=2)+'\n')
     (out/'COPYRIGHT-PROVENANCE.json.license').write_text('SPDX-FileCopyrightText: 2026 qwert-Xx\nSPDX-License-Identifier: CC-BY-4.0\n')
     (out/'COPYRIGHT-PROVENANCE.md').write_text('<!-- SPDX-License-Identifier: CC-BY-4.0 -->\n# Copyright provenance\n\nOriginal authors are retained in source headers and REUSE sidecars. Per-file notices are listed in COPYRIGHT-PROVENANCE.json and maintained in project/public/copyrights.json. Kernel and barebox patches retain upstream and stock-derived attribution. The boot1 plugin refers to the stock ROM interface; no stock image is distributed. Earlier owner-approved classifications remain retained where their files are exported. New source-header attribution and the current export await the owner review before pushing.\n')

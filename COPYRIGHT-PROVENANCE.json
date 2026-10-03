@@ -4,7 +4,7 @@
     "copyright_lines": [
       "Copyright (C) 2010 Amazon.com, Inc. All Rights Reserved."
     ],
-    "basis": "Retained public attribution and current source headers",
+    "basis": "Retained public attribution, current source headers and upstream notices",
     "status": "retained; current export awaits owner review"
   },
   {
@@ -28,7 +28,7 @@
       "Copyright 2012 Freescale Semiconductor, Inc.",
       "copyright notice and this permission notice appear in all copies."
     ],
-    "basis": "Retained public attribution and current source headers",
+    "basis": "Retained public attribution, current source headers and upstream notices",
     "status": "retained; current export awaits owner review"
   },
   {
@@ -44,7 +44,7 @@
       "Copyright 2011 Linaro Ltd.",
       "Copyright 2013 Greg Ungerer <gerg@uclinux.org>"
     ],
-    "basis": "Retained public attribution and current source headers",
+    "basis": "Retained public attribution, current source headers and upstream notices",
     "status": "retained; current export awaits owner review"
   },
   {
@@ -57,7 +57,7 @@
       "Copyright (C) 2013 Greg Ungerer <gerg@uclinux.org>",
       "Copyright 2013 Lucas Stach, Pengutronix <l.stach@pengutronix.de>"
     ],
-    "basis": "Retained public attribution and current source headers",
+    "basis": "Retained public attribution, current source headers and upstream notices",
     "status": "retained; current export awaits owner review"
   },
   {
@@ -84,7 +84,7 @@
       "Copyright 2020 NXP",
       "Stock Amazon Papyrus VCOM table (Copyright 2010-2011 Amazon Technologies)."
     ],
-    "basis": "Retained public attribution and current source headers",
+    "basis": "Retained public attribution, current source headers and upstream notices",
     "status": "retained; current export awaits owner review"
   },
   {
@@ -94,7 +94,7 @@
       "Copyright (C) 2012 Marek Vasut <marex@denx.de>",
       "Copyright 2012 Freescale Semiconductor, Inc."
     ],
-    "basis": "Retained public attribution and current source headers",
+    "basis": "Retained public attribution, current source headers and upstream notices",
     "status": "retained; current export awaits owner review"
   },
   {
@@ -109,7 +109,7 @@
       "Copyright 2006-2007 Pierre Ossman",
       "copyright notice and this permission notice appear in all copies."
     ],
-    "basis": "Retained public attribution and current source headers",
+    "basis": "Retained public attribution, current source headers and upstream notices",
     "status": "retained; current export awaits owner review"
   },
   {
@@ -124,7 +124,7 @@
       "Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.",
       "Copyright 2010-2012 Amazon Technologies, Inc. All Rights Reserved."
     ],
-    "basis": "Retained public attribution and current source headers",
+    "basis": "Retained public attribution, current source headers and upstream notices",
     "status": "retained; current export awaits owner review"
   },
   {
@@ -135,7 +135,7 @@
       "Copyright 2011 Linaro Ltd.",
       "Copyright 2013 Greg Ungerer <gerg@uclinux.org>"
     ],
-    "basis": "Retained public attribution and current source headers",
+    "basis": "Retained public attribution, current source headers and upstream notices",
     "status": "retained; current export awaits owner review"
   },
   {
@@ -145,7 +145,7 @@
       "Copyright 2011 Linaro Ltd.",
       "Copyright 2013 Greg Ungerer <gerg@uclinux.org>"
     ],
-    "basis": "Retained public attribution and current source headers",
+    "basis": "Retained public attribution, current source headers and upstream notices",
     "status": "retained; current export awaits owner review"
   },
   {
@@ -169,7 +169,16 @@
       "Copyright 2012 Freescale Semiconductor, Inc.",
       "copyright notice and this permission notice appear in all copies."
     ],
-    "basis": "Retained public attribution and current source headers",
+    "basis": "Retained public attribution, current source headers and upstream notices",
+    "status": "retained; current export awaits owner review"
+  },
+  {
+    "file": "rootfs/alpine/etc/rc.conf",
+    "copyright_lines": [
+      "Copyright (c) 2007-2008, Roy Marples <roy@marples.name>",
+      "Copyright (c) 2007-2023, the OpenRC authors"
+    ],
+    "basis": "Retained public attribution, current source headers and upstream notices",
     "status": "retained; current export awaits owner review"
   }
 ]
