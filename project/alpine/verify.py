@@ -30,11 +30,11 @@ def verify(out):
         elfs.append(str(p.relative_to(root)))
     assert not (root/'bin/wpa_supplicant').exists() and not (root/'bin/wpa_cli').exists()
     from build import installed
-    pkgs=installed(root);assert pkgs['wpa_supplicant']=='2.12-r0' and 'wpa_supplicant-openrc' not in pkgs
-    assert 'wpa_supplicant@k4' in (root/'etc/apk/world').read_text().splitlines()
-    assert '@k4 /var/lib/apk/k4' in (root/'etc/apk/repositories').read_text()
-    for name in ('wpa_supplicant','wpa_cli'):
-        assert (root/'sbin'/name).read_bytes()==(out/'busybox-source/bin'/name).read_bytes()
+    pkgs=installed(root);assert pkgs['wpa_supplicant']=='2.11-r4' and pkgs['wpa_supplicant-openrc']=='2.11-r4'
+    assert 'wpa_supplicant=2.11-r4' in (root/'etc/apk/world').read_text().splitlines()
+    assert '@k4' not in (root/'etc/apk/world').read_text()+(root/'etc/apk/repositories').read_text()
+    assert not (root/'var/lib/apk/k4').exists()
+    assert not (root/'etc/runlevels/default/wpa_supplicant').exists()
     assert '/sbin/wpa_supplicant' in (root/'bin/k4-wifi-connect').read_text()
     reference=out/'busybox-source'
     same=[]
@@ -84,7 +84,7 @@ def verify(out):
     assert (root/'root/.ssh/authorized_keys').stat().st_mode&0o777==0o600
     assert (root/'etc/dropbear/k4-hostkey').stat().st_mode&0o777==0o600
     checks={}
-    for name,args in [('busybox',['bin/busybox','--help']),('kmod',['bin/kmod','--version']),('openrc',['sbin/openrc','--version']),('dropbear',['usr/sbin/dropbear','-h']),('wpa-k4',['sbin/wpa_supplicant','-v']),('wpa-cli-k4',['sbin/wpa_cli','-v']),('iw',['usr/sbin/iw','--version']),('e2fsprogs',['sbin/e2fsck','-V']),('mount',['bin/mount','--version']),('hwclock',['sbin/hwclock','--help']),('ntpd',['bin/busybox','ntpd','--help'])]:
+    for name,args in [('busybox',['bin/busybox','--help']),('kmod',['bin/kmod','--version']),('openrc',['sbin/openrc','--version']),('dropbear',['usr/sbin/dropbear','-h']),('wpa-official',['sbin/wpa_supplicant','-v']),('wpa-cli-official',['sbin/wpa_cli','-v']),('iw',['usr/sbin/iw','--version']),('e2fsprogs',['sbin/e2fsck','-V']),('mount',['bin/mount','--version']),('hwclock',['sbin/hwclock','--help']),('ntpd',['bin/busybox','ntpd','--help'])]:
         # Some programs print help/version and deliberately return nonzero.
         r=subprocess.run([str(x) for x in qr+[resolve(root,args[0])]+args[1:]],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
         assert r.returncode in (0,1) and r.stdout and not re.search('Error loading|not found|Illegal instruction|qemu:',r.stdout),(name,r.stdout)
@@ -98,8 +98,8 @@ def verify(out):
         for l in sums:
             expected,n=l.split('  ',1);assert hashlib.sha256(t.extractfile(n).read()).hexdigest()==expected,n
         assert t.getmember('dev/console').ischr()
-    signatures=(out/'package-signatures.log').read_text();assert signatures.count(': OK')==73 and 'UNTRUSTED' not in signatures
-    report=dict(elf_count=len(elfs),dynamic_elf_count=len(dynamic),module_count=len(modules),abi='ARMv7 little-endian EABI5, hard-float userspace; musl dynamic or existing static K4 binaries',reference_equal_files=len(same),service_declarations=declarations,topological_order=order,service_validation='shell syntax and evaluated dependency graph; no PID1/OpenRC boot or hardware execution',qemu_smoke=checks,tar_files=len(members),signature_packages=73,package_index_validation=True,device_operations=False)
+    signatures=(out/'package-signatures.log').read_text();assert signatures.count(': OK')==74 and 'UNTRUSTED' not in signatures
+    report=dict(elf_count=len(elfs),dynamic_elf_count=len(dynamic),module_count=len(modules),abi='ARMv7 little-endian EABI5, hard-float userspace; musl dynamic or existing static K4 binaries',reference_equal_files=len(same),service_declarations=declarations,topological_order=order,service_validation='shell syntax and evaluated dependency graph; no PID1/OpenRC boot or hardware execution',qemu_smoke=checks,tar_files=len(members),signature_packages=74,package_index_validation=True,device_operations=False)
     (out/'verification.json').write_text(json.dumps(report,indent=2)+'\n');return report
 def verify_ram(directory):
     import gzip,stat

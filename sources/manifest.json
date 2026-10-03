@@ -39,11 +39,11 @@
     },
     {
       "name": "wpa_supplicant",
-      "file": "wpa_supplicant-2.12.tar.gz",
-      "url": "https://w1.fi/releases/wpa_supplicant-2.12.tar.gz",
-      "version": "2.12",
+      "file": "wpa_supplicant-2.11.tar.gz",
+      "url": "https://w1.fi/releases/wpa_supplicant-2.11.tar.gz",
+      "version": "2.11",
       "license": "BSD-3-Clause",
-      "sha256": "08e23937e16d0155e55cab2b51f51fbe10d80a1aa91c4e15442645059b737ef6"
+      "sha256": "912ea06f74e30a8e36fbb68064d6cdff218d8d591db0fc5d75dee6c81ac7fc0a"
     },
     {
       "name": "libnl",
@@ -864,6 +864,22 @@
       "license": "GPL-2.0-only",
       "sha256": "5bb397f66063efa349f6fd5cb3b68cd96f29edd0994e4ba5115cf0859a716bf0",
       "sha512": "c18a17c7651d344933deb327237576ba7d585d46201daa68586d6bb6dfbed662c203b278cf7d62e6e9cfcf5f2042a21fc37c9f473b914f97477dfb590fce82c6"
+    },
+    {
+      "name": "Alpine wpa_supplicant",
+      "file": "wpa_supplicant-2.11-r4.apk",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/wpa_supplicant-2.11-r4.apk",
+      "version": "2.11-r4",
+      "license": "BSD-3-Clause",
+      "sha256": "063eaa6b0c29ed0abc137f41ccd2472ed56832a348cbb93f5c1171a51f22de46"
+    },
+    {
+      "name": "Alpine wpa_supplicant-openrc",
+      "file": "wpa_supplicant-openrc-2.11-r4.apk",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/wpa_supplicant-openrc-2.11-r4.apk",
+      "version": "2.11-r4",
+      "license": "BSD-3-Clause",
+      "sha256": "9f85fa35392fc45f51bbd4681a92469539e957142e470ee44f8b044704d5b04e"
     }
   ]
 }

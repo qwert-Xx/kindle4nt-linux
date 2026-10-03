@@ -14,16 +14,8 @@ python3 "$repo/../../sources/fetch.py" --cache "$cache" --offline --name wpa_sup
 if [ ! -d "$out/work/libnl-3.12.0" ]; then
 	tar -xzf libnl-3.12.0.tar.gz -C "$out/work"
 fi
-if [ ! -d "$out/work/wpa_supplicant-2.12" ]; then
-	tar -xzf wpa_supplicant-2.12.tar.gz -C "$out/work"
-fi
-patch_file="$repo/wpa-aborted-scan-retry.patch"
-wpa_dir="$out/work/wpa_supplicant-2.12"
-if patch -d "$wpa_dir" -p1 --batch --forward --dry-run < "$patch_file" >/dev/null; then
-	patch -d "$wpa_dir" -p1 --batch --forward < "$patch_file"
-elif ! patch -d "$wpa_dir" -p1 --batch --reverse --dry-run < "$patch_file" >/dev/null; then
-	echo 'WPA aborted-scan patch does not match the work sources' >&2
-	exit 1
+if [ ! -d "$out/work/wpa_supplicant-2.11" ]; then
+	tar -xzf wpa_supplicant-2.11.tar.gz -C "$out/work"
 fi
 cd "$out/work/libnl-3.12.0"
 ./configure --host=arm-linux-gnueabihf --prefix="$out/prefix" \
@@ -31,7 +23,7 @@ cd "$out/work/libnl-3.12.0"
 	CFLAGS="-O2 -mno-unaligned-access $mapflags" > "$out/libnl-configure.log" 2>&1
 make -j8 > "$out/libnl-build.log" 2>&1
 make install > "$out/libnl-install.log" 2>&1
-cd "$out/work/wpa_supplicant-2.12/wpa_supplicant"
+cd "$out/work/wpa_supplicant-2.11/wpa_supplicant"
 cp "$repo/wpa.config" .config
 export PKG_CONFIG_LIBDIR="$out/prefix/lib/pkgconfig"
 make -j8 CC="${cross}gcc" EXTRA_CFLAGS="-O2 -mno-unaligned-access $mapflags" \

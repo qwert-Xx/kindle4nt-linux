@@ -33,7 +33,7 @@ One host-only command downloads locked upstream inputs, verifies hashes and Linu
 python3 project/release.py --cache /external/source-cache --out /external/new-build --private-inputs /external/device-inputs
 ```
 
-Add `--offline` to use an already verified cache. Add `--signing-key /external/your-key.pem` to reuse your own key; otherwise the build generates a key in the external output directory. Its public key is installed in `/etc/apk/keys`. Preserve this key for updates. The frozen Alpine index may no longer exist on the live mirror; retain the verified cache rather than silently upgrading versions.
+Add `--offline` to use an already verified cache. Alpine Wi-Fi uses official signed main 2.11-r4 packages; no user signing key is needed. The frozen Alpine index may no longer exist on the live mirror; retain the verified cache rather than silently upgrading versions.
 
 Deployment is a **separate manual operation**: Ctrl-C in barebox, or Down/reset → ROM, then USB barebox → RAM maintenance → back up and verify storage → write/verify boot1 and p1 → activate and reboot. Read [boot1 instructions](project/docs/BAREBOX-BOOT1.md) and [Alpine deployment](project/docs/ALPINE-ROOT.md) in full. Never format the currently mounted p1 root. No build command deploys to a device.
 

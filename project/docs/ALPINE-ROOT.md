@@ -1,30 +1,18 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
-# Alpine 3.24.2 armv7 默认根配方
+# Alpine 3.24.2 armv7 官方 Wi-Fi 根配方
 
-仅源码/配方。根 tar、私钥、AR6003 私有固件/校准、波形、Wi-Fi 凭据、SSH身份和设备备份不入 Git；构建时由用户从外部提供。官方锁定包、索引和工具见 project/alpine/packages.lock.json、PACKAGES.tsv；本地包来源见 wpa-static.lock.json。不得把构建用输入或输出提交。
+仅发布配方；固件、校准、波形、凭据、SSH身份和产物不入Git。官方 main 的 wpa_supplicant 和 wpa_supplicant-openrc 固定2.11-r4，APK/SHA见 packages.lock.json 与 PACKAGES.tsv。无需本地仓库、用户签名密钥或本地APK构建。K4服务使用 /sbin/wpa_supplicant 和 /sbin/wpa_cli，发行版Wi-Fi服务不启用。
 
-## 静态 2.12 本地 APK
-
-package_wpa.py 将外部已验证的静态 wpa_supplicant/wpa_cli 2.12（含扫描中止修复）封装为签名 2.12-r0，安装 /sbin；不装官方2.11或重复副本。源码/许可来源需随未来二进制分发履行。RSA256私钥仅外置，公钥已入库；当前锁对应现有公钥，自行生成新密钥须同步公开锁与来源记录，不绕过验签。
-
-```sh
-python3 project/alpine/package_wpa.py --bin-dir /absolute/static-wpa --copying /absolute/wpa-COPYING --key /absolute/private-key --apk /absolute/host-apk.static --out /absolute/new-k4-repository
-```
-
-根 repositories 使用 `@k4 /var/lib/apk/k4`，world 为 `wpa_supplicant@k4`，本地 APK 和 APKINDEX 均验签。test_k4_repository.py 用真实 apk 测试带标签保留K4、去标签负对照升级和坏包拒绝。不能将预签名包假称为自行源码重编结果。
-
-## 离线构建与复现
-
-所有命令以 kindle UID1000执行。download.py 取得锁定官方输入；已冻结索引会随上游更新，SHA不同不能当本次快照。build.py 不连设备，用 apk --no-network/--no-scripts 安装并审查生成服务。外部 BusyBox tar提供既有K4用户态和私有输入，内核/DTB/23模块必须与 kernel.lock.json 对齐。
+kindle UID1000、LF、纯离线组装。download.py取得锁定输入；build.py用官方签名索引和包、--no-network/--no-scripts安装。内核、方案A DTB和23模块须匹配 kernel.lock.json。BusyBox tar为外部私有输入。
 
 ```sh
 python3 project/alpine/download.py --out /absolute/cache
-python3 project/alpine/build.py --cache /absolute/cache --k4-repo /absolute/k4-repository --busybox-tar /absolute/busybox-root.tar.gz --busybox-sha 221468c1686b8cc6b671d22f500fcc97e039307a866ecbd1b19015bac6c04a74 --kernel /absolute/zImage --dtb /absolute/imx50-kindle-k4.dtb --modules /absolute/lib/modules --out /absolute/new-alpine-a
-# 同输入另建 new-alpine-b，再验证
+python3 project/alpine/build.py --cache /absolute/cache --busybox-tar /absolute/busybox-root.tar.gz --busybox-sha EXPECTED_SHA --kernel /absolute/zImage --dtb /absolute/imx50-kindle-k4.dtb --modules /absolute/lib/modules --out /absolute/new-alpine-a
+# 相同输入另建 new-alpine-b
 python3 project/alpine/verify.py --build /absolute/new-alpine-a --compare /absolute/new-alpine-b
 ```
 
-部署版 tar SHA256 `d81de7ef896e51d384e2ca4589a5fea1f08778c5a366246b4afa757f37507e37`，19,471,521 bytes。包含用户外部私有输入，其他用户自己的输入会得到不同tar；仅公开配方，不分发该tar。正式 zImage `5c666c72ad08914c1883b76d03bd5e1bcf40046f1a5155ee58229b1575419291`，方案 A DTB `8960edb8bdec2d216080b0f6dee682f38fd69b45f663062d539afc4a93bc0cdc`。
+扫描中止结论及既有实机证据见 WIFI-SCAN-ABORT.md；新离线产物和复现结果见 WIFI-211-OFFLINE-20261003.md。没有部署或推送，本次构建不是新增设备验收。
 
 ## 时间与原厂做法
 

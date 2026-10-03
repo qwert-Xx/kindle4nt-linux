@@ -33,7 +33,7 @@ def installed(root):
         d=dict(l.split(':',1) for l in b.splitlines() if ':' in l);result[d['P']]=d['V']
     return result
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--cache',type=pathlib.Path,required=True);ap.add_argument('--k4-repo',type=pathlib.Path,required=True);ap.add_argument('--busybox-tar',type=pathlib.Path);ap.add_argument('--busybox-sha');ap.add_argument('--k4-root',type=pathlib.Path);ap.add_argument('--public-key',type=pathlib.Path);ap.add_argument('--out',type=pathlib.Path,required=True);ap.add_argument('--kernel',type=pathlib.Path,required=True);ap.add_argument('--dtb',type=pathlib.Path,required=True);ap.add_argument('--modules',type=pathlib.Path,required=True);a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--cache',type=pathlib.Path,required=True);ap.add_argument('--busybox-tar',type=pathlib.Path);ap.add_argument('--busybox-sha');ap.add_argument('--k4-root',type=pathlib.Path);ap.add_argument('--out',type=pathlib.Path,required=True);ap.add_argument('--kernel',type=pathlib.Path,required=True);ap.add_argument('--dtb',type=pathlib.Path,required=True);ap.add_argument('--modules',type=pathlib.Path,required=True);a=ap.parse_args()
     a.out.mkdir(mode=0o700);out=a.out.resolve();cache=a.cache.resolve();root=out/'rootfs';root.mkdir()
     lock=json.loads((HERE/'packages.lock.json').read_text())
     def checked(name,d,key='sha256'):p=cache/name;assert sha(p,key)==d[key],name;return p
@@ -43,24 +43,17 @@ def main():
     if a.busybox_tar:assert sha(a.busybox_tar)==a.busybox_sha
     run(['tar','-xf',mini,'-C',root]);host=out/'host';host.mkdir();run(['tar','-xf',hostpkg,'-C',host]);keys=out/'hostkeys';keys.mkdir();run(['tar','-xf',hostmini,'-C',keys,'./etc/apk/keys'])
     apk=host/'sbin/apk.static'
-    local=a.k4_repo.resolve();lp=local/'armv7/wpa_supplicant-2.12-r0.apk'
-    if a.busybox_tar:
-        assert sha(lp)==lock['local_package']['apk_sha256']
-        assert sha(local/'armv7/APKINDEX.tar.gz')==lock['local_package']['index_sha256']
-    public_key=a.public_key or HERE/'k4-alpine.rsa.pub'
-    shutil.copy2(public_key,root/'etc/apk/keys'/public_key.name)
     run([apk,'--keys-dir',keys/'etc/apk/keys','verify',hostpkg],out/'host-apk-signature.log')
     repo=out/'repository/armv7';repo.mkdir(parents=True);shutil.copy2(cache/'APKINDEX-armv7.tar.gz',repo/'APKINDEX.tar.gz')
     for d in lock['packages']:(repo/d['file']).symlink_to(cache/d['file'])
-    repositories=out/'repositories';repositories.write_text(str(repo.parent)+'\n@k4 '+str(local)+'\n')
+    repositories=out/'repositories';repositories.write_text(str(repo.parent)+'\n')
     common=[apk,'--root',root,'--arch','armv7','--keys-dir',root/'etc/apk/keys','--repositories-file',repositories,'--no-network']
     # apk authenticates the index and checks each selected archive against it.
     (out/'fetched').mkdir()
-    run(common+['fetch','--recursive','--output',out/'fetched']+[d['name']+'='+d['version'] for d in lock['packages']]+['wpa_supplicant@k4'],out/'index-and-package-check.log')
-    run([apk,'--keys-dir',root/'etc/apk/keys','verify']+[repo/d['file'] for d in lock['packages']]+[lp],out/'package-signatures.log')
-    run(common+['--no-scripts','add','--usermode','--upgrade']+[d['name']+'='+d['version'] for d in lock['packages']]+['wpa_supplicant@k4'],out/'apk-install.log')
-    assert installed(root)==({d['name']:d['version'] for d in lock['packages']}|{'wpa_supplicant':'2.12-r0'})
-    shutil.copytree(local/'armv7',root/'var/lib/apk/k4/armv7',symlinks=False)
+    run(common+['fetch','--recursive','--output',out/'fetched']+[d['name']+'='+d['version'] for d in lock['packages']],out/'index-and-package-check.log')
+    run([apk,'--keys-dir',root/'etc/apk/keys','verify']+[repo/d['file'] for d in lock['packages']],out/'package-signatures.log')
+    run(common+['--no-scripts','add','--usermode','--upgrade']+[d['name']+'='+d['version'] for d in lock['packages']],out/'apk-install.log')
+    assert installed(root)==({d['name']:d['version'] for d in lock['packages']})
     qdir=out/'qemu';qdir.mkdir();deb=subprocess.Popen(['dpkg-deb','--fsys-tarfile',str(qdeb)],stdout=subprocess.PIPE)
     r=subprocess.run(['tar','-x','-C',str(qdir),'./usr/bin/qemu-arm-static'],stdin=deb.stdout);deb.stdout.close();assert r.returncode==0 and deb.wait()==0
     qemu=qdir/'usr/bin/qemu-arm-static';qr=[qemu,'-L',root]
@@ -148,7 +141,7 @@ def main():
         for n in names:link(root,'etc/runlevels/'+level+'/'+n,'/etc/init.d/'+n)
     write(root,'etc/rc.conf',(root/'etc/rc.conf').read_text()+'\nrc_parallel="NO"\nrc_sys=""\n')
     write(root,'etc/inittab','::sysinit:/bin/sh /etc/k4/mount-early\n::sysinit:/sbin/openrc sysinit\n::sysinit:/sbin/openrc boot\n::wait:/sbin/openrc default\nttyGS0::respawn:/bin/sh\n::ctrlaltdel:/bin/busybox reboot\n::shutdown:/sbin/openrc shutdown\n')
-    write(root,'etc/apk/repositories','https://dl-cdn.alpinelinux.org/alpine/v3.24/main\n@k4 /var/lib/apk/k4\n')
+    write(root,'etc/apk/repositories','https://dl-cdn.alpinelinux.org/alpine/v3.24/main\n')
     write(root,'etc/network/interfaces','auto lo\niface lo inet loopback\n# usb0 and wlan0 are configured by the existing K4 services.\n')
     link(root,'etc/resolv.conf','/run/resolv.conf')
     # APK lock inode is host state, not a deployment input.

@@ -9,7 +9,7 @@ Only project source, patches, recipes and build scripts are distributed. Upstrea
 | barebox | 2026.09.0 | GPL-2.0-only | [upstream](https://www.barebox.org/download/barebox-2026.09.0.tar.bz2) |
 | BusyBox | 1.31.1 | GPL-2.0-only | [upstream](https://busybox.net/downloads/busybox-1.31.1.tar.bz2) |
 | Dropbear | 2024.86 | MIT AND BSD-2-Clause | [upstream](https://matt.ucc.asn.au/dropbear/releases/dropbear-2024.86.tar.bz2) |
-| wpa_supplicant | 2.12 | BSD-3-Clause | [upstream](https://w1.fi/releases/wpa_supplicant-2.12.tar.gz) |
+| wpa_supplicant | 2.11 | BSD-3-Clause | [upstream](https://w1.fi/releases/wpa_supplicant-2.11.tar.gz) |
 | libnl | 3.12.0 | LGPL-2.1-only | [upstream](https://github.com/thom311/libnl/releases/download/libnl3_12_0/libnl-3.12.0.tar.gz) |
 | iw | 6.17 | ISC | [upstream](https://www.kernel.org/pub/software/network/iw/iw-6.17.tar.xz) |
 | wireless-regdb | 2026.09.03 | ISC | [upstream](https://www.kernel.org/pub/software/network/wireless-regdb/wireless-regdb-2026.09.03.tar.xz) |
@@ -92,6 +92,8 @@ Only project source, patches, recipes and build scripts are distributed. Upstrea
 | Alpine xz-libs | 5.8.4-r0 | GPL-2.0-or-later AND 0BSD AND Public-Domain AND LGPL-2.1-or-later | [upstream](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/xz-libs-5.8.4-r0.apk) |
 | Alpine zlib | 1.3.2-r0 | Zlib | [upstream](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/zlib-1.3.2-r0.apk) |
 | Alpine zstd-libs | 1.5.7-r2 | BSD-3-Clause OR GPL-2.0-or-later | [upstream](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/zstd-libs-1.5.7-r2.apk) |
+| Alpine wpa_supplicant | 2.11-r4 | BSD-3-Clause | [upstream](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/wpa_supplicant-2.11-r4.apk) |
+| Alpine wpa_supplicant-openrc | 2.11-r4 | BSD-3-Clause | [upstream](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/wpa_supplicant-openrc-2.11-r4.apk) |
 | Alpine signed index | frozen 3.24.2 package snapshot | Alpine package metadata | [upstream](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/APKINDEX.tar.gz) |
 | QEMU host user emulation | 8.2.2+ds-0ubuntu1.18 | GPL-2.0-only | [upstream](https://archive.ubuntu.com/ubuntu/pool/universe/q/qemu/qemu-user-static_8.2.2%2bds-0ubuntu1.18_amd64.deb) |
 
@@ -108,7 +110,7 @@ These files are not included, and this project does not grant redistribution rig
 - **boot0/idme**: read the complete eMMC boot0 area from your own existing backup (or in a separately authorized RAM maintenance session: `dd if=/dev/mmcblk2boot0 of=/tmp/boot0.bin bs=512`, after confirming the block-device identity). Copy it to the host and compare hashes, then supply `device-inputs/boot0.bin`. It contains device identity/idme: never commit or share it. The boot1 wrapper reads the original ROM header/entry reference; it does not publish this backup. Do not write boot0 to extract it.
 - **Wi-Fi/SSH configuration**: stage your own `etc/wpa_supplicant.conf`, `root/.ssh/authorized_keys` and optional `etc/dropbear/` identity. They are not project source. Hash/examine the external inputs locally and never commit credentials or private host keys.
 
-The K4 WPA APK is built from wpa_supplicant 2.12 + the public patch and libnl. Users generate or supply their own RSA signing key. The build installs that public key, verifies both signed APK/index, and pins `wpa_supplicant@k4`; our signing private key is never an input to the public workflow. A new signing key necessarily changes APK/index and root tar bytes.
+Alpine uses the official main wpa_supplicant 2.11-r4 APK and matching OpenRC split package, authenticated with Alpine keys. BusyBox maintenance and persistent roots build unmodified upstream 2.11 statically with libnl. No local WPA signing key or repository is required.
 
 Official Alpine minirootfs/APKs (including Alpine BusyBox 1.37.0) are package inputs authenticated with Alpine keys extracted from the hash-locked minirootfs. K4’s separate BusyBox 1.31.1 maintenance binaries are source-built. The package recipes and source URLs of Alpine packages are available from [Alpine aports](https://gitlab.alpinelinux.org/alpine/aports); the APK license metadata is recorded above. This workflow does not claim to rebuild every Alpine distribution package from source.
 

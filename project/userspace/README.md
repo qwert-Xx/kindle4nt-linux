@@ -8,7 +8,7 @@ python3 project/userspace/rebuild.py --cache-map /external/sources.json --out /e
 python3 project/userspace/test_compare.py
 ```
 
-版本：BusyBox1.31.1（启动与独立modutils各一配置），Dropbear2024.86，wpa_supplicant2.12+有界扫描重试补丁，libnl3.12.0，iw6.17，wireless-regdb2026.09.03。libnl静态库作为Wi-Fi构建依赖，不是单独运行文件。参数与日志见rebuild.py、wifi.sh；WPA只启nl80211/内部加密，不添加TLS/EAP/WPA3功能；Dropbear密码认证关闭。modutils不启blacklist，运行coldplug不使用-b。
+版本：BusyBox1.31.1（启动与独立modutils各一配置），Dropbear2024.86，wpa_supplicant2.11（上游源码，无扫描中止补丁），libnl3.12.0，iw6.17，wireless-regdb2026.09.03。libnl静态库作为Wi-Fi构建依赖，不是单独运行文件。参数与日志见rebuild.py、wifi.sh；WPA只启nl80211/内部加密，不添加TLS/EAP/WPA3功能；Dropbear密码认证关闭。modutils不启blacklist，运行coldplug不使用-b。
 
 启动BusyBox用归档锁定的 Linaro GCC4.9.4-2017.01 arm-linux-gnueabi（含配套libc/binutils），其余用 Ubuntu ARMhf GCC13.3.0-6ubuntu2~24.04.1、gcc交叉包13.3.0-6ubuntu2~24.04.1cross1、binutils2.42-4ubuntu2.10、libc6-dev-armhf-cross2.39-0ubuntu8cross1。配方严格核验compiler版本；完整包版本见证据，非同工具链不能沿用等价结论。构建依赖现有make/autoconf生成文件、pkg-config、openssl、Python3，不新建venv。
 

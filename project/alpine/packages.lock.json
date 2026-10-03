@@ -505,6 +505,20 @@
       "index_checksum": "Q1L6JtZ7YanvcQbH981Ex71FQXGlY="
     },
     {
+      "name": "wpa_supplicant",
+      "version": "2.11-r4",
+      "file": "wpa_supplicant-2.11-r4.apk",
+      "sha256": "063eaa6b0c29ed0abc137f41ccd2472ed56832a348cbb93f5c1171a51f22de46",
+      "index_checksum": "Q14E/D9VOVoEBxiGtf3EUX9v0ek7U="
+    },
+    {
+      "name": "wpa_supplicant-openrc",
+      "version": "2.11-r4",
+      "file": "wpa_supplicant-openrc-2.11-r4.apk",
+      "sha256": "9f85fa35392fc45f51bbd4681a92469539e957142e470ee44f8b044704d5b04e",
+      "index_checksum": "Q1AaiyNjKeZNbG4hCE/nRQ+ltHDfU="
+    },
+    {
       "name": "xz-libs",
       "version": "5.8.4-r0",
       "file": "xz-libs-5.8.4-r0.apk",
@@ -525,17 +539,5 @@
       "sha256": "15a00d79b69cb9b3ce7252dc35a370406623ebc96e8631e04f6d48c7421a55d4",
       "index_checksum": "Q1AjB9aut6kLCI4D8nv4/QgZiQhkE="
     }
-  ],
-  "local_package": {
-    "version": "2.12-r0",
-    "apk_sha256": "1a3731cf47a958c69ea2aff7ef975cc03ab648251969d5f69c6efd3c7f553ca3",
-    "index_sha256": "00e2bff6990f57b26f6fb1d0bbb5e9d61ca714c03ed134079091c8d10cc3d940",
-    "binary_sha256": {
-      "wpa_supplicant": "13662bd2e8c0b6239af9e8df8d646aa1def5e737d2a35b7bff2576ff33a57eb0",
-      "wpa_cli": "c0ba0d38c49676fd7be1c00d6ec86eb38fc1e1f0d3f58109b4369906b1d3ee5b"
-    },
-    "public_key_sha256": "1cfe5fe5f33d30baebdc72e720d12a4ee0a7bf808202ab552482361a534d1ef6",
-    "device_operations": false,
-    "path": "/var/lib/apk/k4"
-  }
+  ]
 }

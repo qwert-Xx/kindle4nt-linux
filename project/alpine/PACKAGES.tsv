@@ -68,7 +68,8 @@ util-linux-openrc	2.42.3-r1	a07a9ad10d989a83ceea755c113c5d068785dc2218bc896f9722
 utmps-libs	0.1.3.3-r0	0bd6aea148eff8c953f68d51d1f4d9914a0e6047acc38051a927c81ada5e3917	alpine-official
 uuidgen	2.42.3-r1	57c453ef96631d2d3bcd4404d8430140abc6cf2aa60db5f65eefb5f159dafe21	alpine-official
 wipefs	2.42.3-r1	bc3b579ac1d69f172f3ac8979d9b1c4a84fa3b1dbf581b2d2e86e704f12c41d3	alpine-official
-wpa_supplicant	2.12-r0	1a3731cf47a958c69ea2aff7ef975cc03ab648251969d5f69c6efd3c7f553ca3	k4-local
+wpa_supplicant	2.11-r4	063eaa6b0c29ed0abc137f41ccd2472ed56832a348cbb93f5c1171a51f22de46	alpine-official
+wpa_supplicant-openrc	2.11-r4	9f85fa35392fc45f51bbd4681a92469539e957142e470ee44f8b044704d5b04e	alpine-official
 xz-libs	5.8.4-r0	b784e85dfcf30cfc39ae2fdcae719a12f3de3b7a0ecfc7cfa77230626ec320f9	alpine-official
 zlib	1.3.2-r0	9ceb0ce727602c3acd7c8bf6ca02d7b019afc2b5ad81095684ecf18c2c48d8f2	alpine-official
 zstd-libs	1.5.7-r2	15a00d79b69cb9b3ce7252dc35a370406623ebc96e8631e04f6d48c7421a55d4	alpine-official
