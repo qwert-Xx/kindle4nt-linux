@@ -1,0 +1,25 @@
+#!/bin/sh
+# USB console is enabled by init/usbconsole before this boot script runs.
+echo "Press Ctrl-C on USB serial within 5 seconds for USB/YMODEM loading"
+if sleep 5; then
+    echo "USB wait expired: booting eMMC"
+else
+    echo "USB Ctrl-C received: entering USB host loader"
+    exit 1
+fi
+mkdir -p /mnt/emmc
+mount -t ext4 /dev/mmc2.0 /mnt/emmc || exit 1
+if [ ! -f "/mnt/emmc${global.k4.kernel}" ] || [ ! -f "/mnt/emmc${global.k4.dtb}" ]; then
+    echo "Kernel or DTB missing: entering USB host loader"
+    exit 1
+fi
+global -r 'linux.bootargs.*'
+global -r 'linux.mtdparts.*'
+global -r 'linux.blkdevparts.*'
+global.bootm.boot_atag=false
+global.bootm.appendroot=false
+global linux.bootargs.k4="console=ttymxc0,115200 root=/dev/mmcblk2p1 rw rootwait watchdog.open_timeout=120 imx2_wdt.nowayout=1 ath6kl_sdio.force_virtual_scatter=0 fbcon=map:1 logo.nologo"
+global.bootm.image="/mnt/emmc${global.k4.kernel}"
+global.bootm.oftree="/mnt/emmc${global.k4.dtb}"
+global.bootm.initrd=""
+# Standard boot script machinery invokes bootm after this script returns.

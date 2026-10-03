@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 # D01100 boot1 barebox
 
-这是独立 boot1 主题：上游 barebox v2026.09.0 + Kindle 板级修改。通用 MCI、MMC 与 watchdog 驱动不修改。v7 默认探测 non-removable eMMC，以 ext4 读取 p1 的 /boot/zImage 与 /boot/imx50-kindle-k4.dtb，无 initrd；不读 idme、不加载持久环境。按住高有效 GPIO1_20 “上”键进入 USB 串口/YMODEM RAM 上传。保留 MCI 写入能力，但没有默认存储写入动作。只覆盖 D01100/LPDDR1；不要套用于其它板型。
+这是独立 boot1 主题：上游 barebox v2026.09.0 + Kindle 板级修改。通用 MCI、MMC 与 watchdog 驱动不修改。v8 默认探测 non-removable eMMC，以 ext4 读取 p1 的 /boot/zImage 与 /boot/imx50-kindle-k4.dtb，无 initrd；不读 idme、不加载持久环境。USB串口 Ctrl-C 中断 sleep 5，进入 shell/YMODEM RAM 上传；不要复位前按上。保留 MCI 写入能力，但没有默认存储写入动作。只覆盖 D01100/LPDDR1；不要套用于其它板型。
 
 ## 构建配方
 
@@ -12,7 +12,7 @@ sh barebox/boot1/build.sh /absolute/barebox-git barebox/boot1/barebox.config /ab
 sha256sum /absolute/new-boot1-build/plugin/barebox-boot1-plugin-candidate.img
 ```
 
-脚本仅解包上游、修改板级源码、交叉编译和包装镜像，不连接设备。记录外部输入SHA、编译器版本和输出 audit.json/SHA256SUMS。可设 KBUILD_BUILD_TIMESTAMP/KBUILD_BUILD_VERSION 固定版本元数据。公共源码保留WDT半字诊断地址修正；v7 环境使用标准 emmc/host-ram boot 顺序、20次100ms上键采样。挂载、缺文件或 bootm 返回错误时回落主机加载；跳转后崩溃不保证回落。固定元数据可用 KBUILD_BUILD_TIMESTAMP="Fri Oct 2 20:48:05 CST 2026" 与 KBUILD_BUILD_VERSION=1。已部署的本机v7验证不自动覆盖任意外部输入重建候选。
+脚本仅解包上游、修改板级源码、交叉编译和包装镜像，不连接设备。记录外部输入SHA、编译器版本和输出 audit.json/SHA256SUMS。可设 KBUILD_BUILD_TIMESTAMP/KBUILD_BUILD_VERSION 固定版本元数据。公共源码保留WDT半字诊断地址修正；v8 环境使用标准 emmc/host-ram boot 顺序，sleep 5 等待 Ctrl-C。挂载、缺文件或 bootm 返回错误时回落主机加载；跳转后崩溃不保证回落。固定元数据可用 KBUILD_BUILD_TIMESTAMP="Fri Oct 2 20:48:05 CST 2026" 与 KBUILD_BUILD_VERSION=1。已部署的本机v8验证不自动覆盖任意外部输入重建候选。
 
 ## plugin/OCRAM 初始化
 
@@ -73,14 +73,10 @@ trap - EXIT
 
 ## 当前状态（2026-10-03，既有实机记录）
 
-boot1 barebox v7 + eMMC p1 ext4 BusyBox 根已部署并读回核验，EXT_CSD[179]=0x50；无需电脑上传内核即可自动启动。按住“上”在两秒采样窗口进入 USB/YMODEM 主机加载；按住“下”配合复位进入 ROM 恢复。ath6kl_core/sdio 为模块，根挂载后由标准 modalias coldplug 加载固件；WDI 原厂方案 A 为 ALT2/0x0c，正常态由 restart pinctrl 持有。
+boot1 barebox v8，EXT_CSD[179]=0x50，默认 eMMC p1 Alpine 3.24.2；BusyBox 根作为维护/备选。
+USB 串口发送 Ctrl-C（0x03）中断 boot/emmc 的 sleep 5 进入 shell，再 YMODEM 加载方案 A RAM 维护包（k4-maint-ram-20261003，900/30 expire-health）；不要复位前按上。5秒从脚本运行计起，Windows枚举可能缩短实际主机窗口，窗口末尾和电池独立冷启动待验。
+WDI 原厂方案 A 为 ALT2/0x0c，正常态由 restart pinctrl 持有。Alpine 正常根持续 watchdog 喂狗，无有限 RAM guard；静态 2.12 supplicant 由本地 @k4 APK 提供。
+Alpine 首次启动与3轮正常 reboot、两档 RTC STOP/内存保持/醒后刷新、NTP/SRTC正常关机读写和 HTTPS apk update 已有实机记录；长期运行、upgrade、第二台 K4 与物理电源轨仍未验。详 [Alpine 配方](ALPINE-ROOT.md) 与 [guard 对照](RAM-GUARD-COMPARISON.md)。发布前需用户许可审阅。
+本次只离线编辑、构建和扫描，未访问设备、未 push。默认根更新不意味着覆盖所有冷启动/耐久验收。
 
-正式 A 的 10 轮 reboot 健康检查全部通过（25.812–26.578 秒到 SSH），800/160MHz 两次 RTC STOP、16MiB 内存保持、4MiB 文件 sync 后 reboot 哈希保持均通过。看门狗停喂方案 A 48.047 秒、旧 DTB 对照 41.156 秒均自行经 v7 回 eMMC；旧对照未复现 ROM，不能认定 A 已唯一修复历史故障。两次采集总长各180秒，停喂后有效窗口仅167/171秒。
-
-USB 物理拔线/电池独立冷启动、长时耐久及电源轨仍未验证；RAM 维护 guard 到期掉 ROM 的历史根因未定。新版模块 RAM 维护根尚未重新实机验证。Alpine feat/alpine-root 仅列路线图，未实机验证，未纳入本草案正式内容。
-
-完整部署顺序与 p1 回退见 [eMMC 根](EMMC-ROOT.md)。上键 USB 加载 Linux RAM 后也可修改179回boot0或重写p1；boot0回退仅在已有原厂系统布局仍可用时有效。
-
-维护包可附带 barebox/boot1/set-partition-config-draft.sh 与 rollback-boot0-draft.sh，和静态 mmc 放在同一 RAM 目录；它们不会被构建脚本自动执行。
-
-公开v7配方已按固定元数据重建，完整镜像与部署版逐字节一致，SHA256 `dbbb7d9f83773cdbf88adc26b6c7f7115b55c6f91b404fe2c1a35956b4e8ebb1`。emmc-v7/host-ram-v7/usbconsole-v7使用同名 .license 旁注，构建仅复制脚本原字节；不得将许可注释插入环境脚本改变正式镜像。
+公开 v8 输出须与已部署镜像逐字节一致，SHA256 `b283f374a5fda6e7ba2c5c3b83ba9f67a569c1e63493d9ab4ea3b79febda0606`。emmc-v8/usbconsole-v8/host-ram-v7 使用 .license 旁注，不向编译环境脚本插入许可注释。plugin/132写+3检查及前4096字节保持v7。

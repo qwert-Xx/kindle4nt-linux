@@ -13,7 +13,15 @@ mnt=/tmp/k4-emmc-root
 [ -b "$part" ]
 [ "$($bb cat /sys/class/block/mmcblk2p1/start)" = 65536 ]
 [ "$($bb cat /sys/class/block/mmcblk2p1/size)" = 3760128 ]
-! $bb grep -q '^/dev/mmcblk2' /proc/mounts
+# Reject p1 even if mounted as /dev/root or by UUID.
+[ -r /proc/self/mountinfo ] && [ -r /proc/mounts ]
+$bb awk '$3 == "179:1" { exit 1 }' /proc/self/mountinfo
+if $bb grep -q '^/dev/mmcblk2' /proc/mounts; then
+    echo 'eMMC is mounted; refusing deployment' >&2
+    exit 1
+fi
+[ -f "$tools/mke2fs.conf" ] && [ -x "$tools/mke2fs" ]
+$bb tar -tzf "$archive" >/dev/null
 printf '%s  %s\n' "$expected" "$archive" | $bb sha256sum -c -
 $bb mkdir -p "$mnt"
 cleanup() {

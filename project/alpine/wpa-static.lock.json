@@ -1,0 +1,13 @@
+{
+  "pkgname": "wpa_supplicant",
+  "pkgver": "2.12-r0",
+  "pkgdesc": "K4 verified static wpa_supplicant with aborted scan retry patch",
+  "binary_sha256": {
+    "wpa_supplicant": "13662bd2e8c0b6239af9e8df8d646aa1def5e737d2a35b7bff2576ff33a57eb0",
+    "wpa_cli": "c0ba0d38c49676fd7be1c00d6ec86eb38fc1e1f0d3f58109b4369906b1d3ee5b"
+  },
+  "public_key_sha256": "1cfe5fe5f33d30baebdc72e720d12a4ee0a7bf808202ab552482361a534d1ef6",
+  "patch_sha256": "fd111bca5252decd7fcd662e443b3de6a5feafe3db187d1fc9ba36e62054e9c8",
+  "recipe": "project/userspace/wifi.sh",
+  "copying_sha256": "a87ac4e333d0f120408a9d814e40c3672cd27f365af89b4f2f6631f7a9338953"
+}

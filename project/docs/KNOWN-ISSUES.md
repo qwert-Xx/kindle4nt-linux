@@ -7,7 +7,7 @@
 - 诊断入口仅 debug；临时只读审计模块只在功能验收后显式加载。生产恢复机制与STOP OCRAM core不依赖诊断。模块名、release、目录必须匹配包，不能把同release当字节一致。
 - 阶段4两项待合并冷回归；无显示消费者profile用于真正panel provider卸载。本次方案A已执行6.6→6.6无initrd kexec，但不覆盖所有交接profile；RAM缺模块测试不等同 fresh-cold缺模块。
 - watchdog WDBG被barebox首写锁定为0属加载器差异；正式驱动告警继续注册，不能为对齐项禁用安全watchdog。
-- 原厂boot0回退、boot1一级barebox部署未执行。无触摸型号范围外，WPA2-PSK/CCMP之外认证、长期功耗/电气裕量/其它面板未承诺。
+- boot1 v8 已有部署记录；原厂boot0完整回退未演练。无触摸型号范围外，WPA2-PSK/CCMP之外认证、长期功耗/电气裕量/其它面板未承诺。
 - 公共项目尚为草稿，源码配方的逐字节重建缺口见对应证据，不把同版本或同ELF格式当语义等价证明。固件/波形/设备身份/凭据仅外部私有输入。
 
 - 阶段5 EPDC/PxP/Papyrus provider引用与module owner已离线验证，默认显示链仍内建；EPDC/PxP/fb候选模块无卸载入口（故障DMA/open fb生命周期），阶段5冷验须阶段4先通过。树外构建只证明同一内核ABI可链接，不证明热卸载或跨版本ABI。
@@ -21,8 +21,8 @@
 
 ## 当前状态（2026-10-03，既有实机记录）
 
-boot1 barebox v7 + eMMC p1 ext4 BusyBox 根已部署并读回核验，EXT_CSD[179]=0x50；无需电脑上传内核即可自动启动。按住“上”在两秒采样窗口进入 USB/YMODEM 主机加载；按住“下”配合复位进入 ROM 恢复。ath6kl_core/sdio 为模块，根挂载后由标准 modalias coldplug 加载固件；WDI 原厂方案 A 为 ALT2/0x0c，正常态由 restart pinctrl 持有。
-
-正式 A 的 10 轮 reboot 健康检查全部通过（25.812–26.578 秒到 SSH），800/160MHz 两次 RTC STOP、16MiB 内存保持、4MiB 文件 sync 后 reboot 哈希保持均通过。看门狗停喂方案 A 48.047 秒、旧 DTB 对照 41.156 秒均自行经 v7 回 eMMC；旧对照未复现 ROM，不能认定 A 已唯一修复历史故障。两次采集总长各180秒，停喂后有效窗口仅167/171秒。
-
-USB 物理拔线/电池独立冷启动、长时耐久及电源轨仍未验证；RAM 维护 guard 到期掉 ROM 的历史根因未定。新版模块 RAM 维护根尚未重新实机验证。Alpine feat/alpine-root 仅列路线图，未实机验证，未纳入本草案正式内容。
+boot1 barebox v8，EXT_CSD[179]=0x50，默认 eMMC p1 Alpine 3.24.2；BusyBox 根作为维护/备选。
+USB 串口发送 Ctrl-C（0x03）中断 boot/emmc 的 sleep 5 进入 shell，再 YMODEM 加载方案 A RAM 维护包（k4-maint-ram-20261003，900/30 expire-health）；不要复位前按上。5秒从脚本运行计起，Windows枚举可能缩短实际主机窗口，窗口末尾和电池独立冷启动待验。
+WDI 原厂方案 A 为 ALT2/0x0c，正常态由 restart pinctrl 持有。Alpine 正常根持续 watchdog 喂狗，无有限 RAM guard；静态 2.12 supplicant 由本地 @k4 APK 提供。
+Alpine 首次启动与3轮正常 reboot、两档 RTC STOP/内存保持/醒后刷新、NTP/SRTC正常关机读写和 HTTPS apk update 已有实机记录；长期运行、upgrade、第二台 K4 与物理电源轨仍未验。详 [Alpine 配方](ALPINE-ROOT.md) 与 [guard 对照](RAM-GUARD-COMPARISON.md)。发布前需用户许可审阅。
+本次只离线编辑、构建和扫描，未访问设备、未 push。默认根更新不意味着覆盖所有冷启动/耐久验收。

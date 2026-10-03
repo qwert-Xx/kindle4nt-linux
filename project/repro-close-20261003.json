@@ -1,0 +1,27 @@
+{
+  "device_operations": false,
+  "push": false,
+  "barebox_v8": {
+    "sha256": "b283f374a5fda6e7ba2c5c3b83ba9f67a569c1e63493d9ab4ea3b79febda0606",
+    "cmp_deployed_input": true,
+    "fresh_public_recipe_build": true,
+    "plugin_prefix_equal_v7": true
+  },
+  "alpine": {
+    "tar_sha256": "d81de7ef896e51d384e2ca4589a5fea1f08778c5a366246b4afa757f37507e37",
+    "cmp_deployed_tar": true,
+    "signature_packages": 73,
+    "elf_count": 312,
+    "dynamic_dependencies": 199,
+    "modules": 23,
+    "external_private_inputs": true,
+    "tagged_keeps_k4": true,
+    "untagged_control_upgrades": true,
+    "corrupt_apk_rejected": true
+  },
+  "host_tests_pass": 18,
+  "maintenance_double_package_byte_equal": true,
+  "maintenance_bundle_sha256": "495978a500f4f9cb76bee38e0b955fe2a469f3b9e59d6a58b04b9dcd5dcca0d5",
+  "kernel_rebuild_this_turn": false,
+  "kernel_note": "Existing public patch build equality retained; kernel patch series unchanged this turn."
+}

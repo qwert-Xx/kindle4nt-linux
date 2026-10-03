@@ -25,8 +25,8 @@ printf '\nCONFIG_MCI_STARTUP_NONREMOVABLE=y
 CONFIG_CMD_SLEEP=y\nCONFIG_WATCHDOG_POLLER=y\n' >> "$out/build/.config"
 sed -i '/^CONFIG_MCI_STARTUP_NONE=/d; /^# CONFIG_MCI_STARTUP_NONREMOVABLE is not set/d; /^# CONFIG_CMD_SLEEP is not set/d' "$out/build/.config"
 printf '# CONFIG_MCI_STARTUP_NONE is not set\n' >> "$out/build/.config"
-cp "$here/usbconsole-v7" "$out/source/arch/arm/boards/kindle-mx50/defaultenv-kindle-mx50/init/usbconsole"
-cp "$here/emmc-v7" "$out/source/arch/arm/boards/kindle-mx50/defaultenv-kindle-mx50/boot/emmc"
+cp "$here/usbconsole-v8" "$out/source/arch/arm/boards/kindle-mx50/defaultenv-kindle-mx50/init/usbconsole"
+cp "$here/emmc-v8" "$out/source/arch/arm/boards/kindle-mx50/defaultenv-kindle-mx50/boot/emmc"
 cp "$here/host-ram-v7" "$out/source/arch/arm/boards/kindle-mx50/defaultenv-kindle-mx50/boot/host-ram"
 make -C "$out/source" O="$out/build" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- olddefconfig
 make -C "$out/source" O="$out/build" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- -j8

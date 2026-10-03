@@ -1,0 +1,8 @@
+#!/bin/sh
+# Compiled environment only; no persistent eMMC environment.
+global.autoboot=boot
+global.boot.default="emmc host-ram"
+global k4.kernel=/boot/zImage
+global k4.dtb=/boot/imx50-kindle-k4.dtb
+usbserial || exit 1
+echo "K4 BOOT1 v8: press USB serial Ctrl-C within 5 seconds for USB/YMODEM loading"

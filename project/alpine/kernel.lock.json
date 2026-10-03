@@ -1,0 +1,30 @@
+{
+  "reference": "refactor/k4-modularization@11184ce40; EMMC-DEPLOY-STABILITY-20261003.md and ALPINE-RAM-TRIAL-20261003.md",
+  "zImage": "5c666c72ad08914c1883b76d03bd5e1bcf40046f1a5155ee58229b1575419291",
+  "dtb": "8960edb8bdec2d216080b0f6dee682f38fd69b45f663062d539afc4a93bc0cdc",
+  "modules": {
+    "kernel/drivers/dma/imx-sdma.ko": "157e1cf8029c5d2e63f0012d08bea13687a9f3a46e9f3f05ee1d4253094eb8df",
+    "kernel/drivers/input/keyboard/gpio_keys.ko": "bec2b584d2ee7dee8626e7ede147472450a6d0267500b64062eb4df0a118ae32",
+    "kernel/drivers/irqchip/irq-imx-mu-msi.ko": "45cdd825ad859bee068aa562dadd02a4bd39d79aaf6108a605e9f3d9bfda836c",
+    "kernel/drivers/misc/k4-accessory-inputs.ko": "b3ef96ee944c32111b33ad7a29adc2a4bc200064092f55f5d7904dda0cc45d68",
+    "kernel/drivers/net/wireless/ath/ath6kl/ath6kl_core.ko": "d53e80d7b9fc6671352b2df20f7a9eb6e939d2bfaab9ad5e3d97d0f8c9dc7a42",
+    "kernel/drivers/net/wireless/ath/ath6kl/ath6kl_sdio.ko": "44e0d70776b40051eaf16c00481d451a1271fbfe31f7b708bee05455928708a8",
+    "kernel/drivers/nvmem/k4-panel-flash.ko": "5b688290813672ceb7883dfc5cb85e998f73ede70b6d28edc846195009571f8a",
+    "kernel/drivers/usb/class/cdc-acm.ko": "b92a1784b9392fb30c87cdbda74552440e4fe0c598f02e965bb1eba05c9f7c6e",
+    "kernel/drivers/usb/gadget/function/usb_f_obex.ko": "8b38cac4ac69c268cd1fcd29186af962139898e61c14657baa7202cac197086e",
+    "kernel/drivers/usb/gadget/function/usb_f_serial.ko": "34487a9a9fe65ddf569b502c6d249b364bc58ea9b029e29ddc7cd133868f7d65",
+    "kernel/drivers/usb/gadget/legacy/g_ether.ko": "cdd0b9c05382d398f07a42c27c4cd0c6afd6937951249e35cdcfc5197f875b72",
+    "kernel/drivers/usb/gadget/legacy/g_serial.ko": "5290005e664f4cbf8a8f11c06c3d122cd5c351513626b650e7d986b44f050d80",
+    "kernel/drivers/usb/serial/ftdi_sio.ko": "155cc834a78e23eedf931b2c8ede8bf93ce2b3b5d99cccb1f0f07ad5d35e131a",
+    "kernel/drivers/usb/serial/option.ko": "6a1a65ca445b380396f98f9412381cbd4f8368d53b9aebfaa4f581349f6f7c3f",
+    "kernel/drivers/usb/serial/usb_wwan.ko": "011daeff923d34d6348b294528af57204e4743a0d7dde7a97b5bb97850b8c41e",
+    "kernel/drivers/usb/serial/usbserial.ko": "33bc929800ae812483a5ab137bf57c00a33155f66199ec093f00566d3b48bfe5",
+    "kernel/fs/binfmt_misc.ko": "a56347497741bcdb2def0daac5123b732ca675a7bbaa0dd91568b8336f785fea",
+    "kernel/fs/fat/msdos.ko": "45fdec96eb69322912e734835f36a0cd9678092a718d8cca72b063592eec6f2e",
+    "kernel/fs/isofs/isofs.ko": "026e6da72ea15dbb7bace7fb105fc137a8cb1ca1e79e69749f67dc68b3bd5b38",
+    "kernel/fs/nls/nls_iso8859-15.ko": "cbabef2d23a5e01d10a8e10df6a8ef92b687a0ce0c0def597d70ed93f412a724",
+    "kernel/fs/udf/udf.ko": "51e572cce73c860c73b734e7d79e8f119e7c1f9d5b0315c1b00f95bd5dca9f32",
+    "kernel/lib/crc7.ko": "f550298e631bb18127e43bab9ef546a13ef2a99f5c78f87b86d83d868e5a0fa5",
+    "kernel/lib/libcrc32c.ko": "f53825d18c9a2ea268631805647689b865200561032dfa6d967a7fb6d95fd80b"
+  }
+}
