@@ -21,7 +21,7 @@ Only **D01100** is supported. Evidence comes from one device; broader hardware v
 
 ## Prepare
 
-Use a Linux build host (reference: Ubuntu 24.04, Python 3.12, ARM hard-float GCC 13.3 / binutils 2.42). Install make, GCC host tools, flex, bison, bc, libssl-dev, pkg-config, patch, tar, xz, curl, GnuPG, openssl, kmod and the ARM cross compiler. The manifest also pins the old Linaro compiler required for the BusyBox maintenance build. Run as an ordinary user; the existing Alpine recipe requires UID 1000. See [source inputs](sources/README.md) and [build details](project/docs/BUILD.md).
+Use a Linux build host (reference: Ubuntu 24.04, Python 3.12, ARM hard-float GCC 13.3 / binutils 2.42). Install make, GCC host tools, flex, bison, bc, libssl-dev, pkg-config, patch, tar, xz, curl, GnuPG, openssl, kmod and the ARM cross compiler. The manifest also pins the old Linaro compiler required for the BusyBox maintenance build. Run as an ordinary user (this validation used the kindle account, UID 1000). See [source inputs](sources/README.md) and [build details](project/docs/BUILD.md).
 
 Keep an external cache, external build directory and external private-input directory. Extract firmware/calibration, panel waveforms and boot0/idme from **your own device/backups** as described in [THIRD-PARTY.md](THIRD-PARTY.md). Supply Wi-Fi configuration and SSH authorization/identity separately if needed. No images, APKs, root archives, credentials, private signing keys or proprietary firmware are distributed in this repository.
 

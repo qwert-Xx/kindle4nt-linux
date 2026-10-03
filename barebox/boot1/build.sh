@@ -1,8 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-or-later
-# Offline only. All generated files must live in this worktree.
+# Host-only build; generated files are written to the supplied output.
 set -eu
-[ "$(id -un)" = kindle ] || exit 1
 [ "$#" = 5 ] || { echo "usage: $0 source-cache frozen-usb-config usb-image new-output stock-boot0-reference" >&2; exit 2; }
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 root=$(git -C "$here" rev-parse --show-toplevel)

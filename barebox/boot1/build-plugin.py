@@ -43,7 +43,6 @@ def check(image,usb,raw,stock,table_offsets):
   image_payload_sha256=hashlib.sha256(image[4096:4096+len(payload)]).hexdigest(),
   payload_equal=True,no_k4_boot0_literal=True)
 def build(raw,usb,out):
- assert pwd.getpwuid(os.getuid()).pw_name=='kindle'
  stock=STOCK.read_bytes()
  _,d=legacy.parse(raw); _,ud=legacy.parse(usb); assert d==ud
  rows=legacy.decode(d); encoded=compact(rows)

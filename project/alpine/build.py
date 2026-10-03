@@ -34,7 +34,7 @@ def installed(root):
     return result
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--cache',type=pathlib.Path,required=True);ap.add_argument('--k4-repo',type=pathlib.Path,required=True);ap.add_argument('--busybox-tar',type=pathlib.Path);ap.add_argument('--busybox-sha');ap.add_argument('--k4-root',type=pathlib.Path);ap.add_argument('--public-key',type=pathlib.Path);ap.add_argument('--out',type=pathlib.Path,required=True);ap.add_argument('--kernel',type=pathlib.Path,required=True);ap.add_argument('--dtb',type=pathlib.Path,required=True);ap.add_argument('--modules',type=pathlib.Path,required=True);a=ap.parse_args()
-    assert os.getuid()==1000,'run as kindle';a.out.mkdir(mode=0o700);out=a.out.resolve();cache=a.cache.resolve();root=out/'rootfs';root.mkdir()
+    a.out.mkdir(mode=0o700);out=a.out.resolve();cache=a.cache.resolve();root=out/'rootfs';root.mkdir()
     lock=json.loads((HERE/'packages.lock.json').read_text())
     def checked(name,d,key='sha256'):p=cache/name;assert sha(p,key)==d[key],name;return p
     mini=checked(lock['minirootfs']['file'],lock['minirootfs']);hostpkg=checked(lock['host_apk']['file'],lock['host_apk']);hostmini=checked(lock['host_mini']['file'],lock['host_mini']);qdeb=checked(lock['qemu']['file'],lock['qemu'],'sha512')

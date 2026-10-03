@@ -15,6 +15,7 @@ def audit(repo):
    expression=expression.decode().removesuffix('-->').strip()
    for token in re.findall(r'[A-Za-z0-9.+-]+',expression):
     if token in ('AND','OR','WITH'):continue
+    token={'GPL-2.0+':'GPL-2.0-or-later','GPL-2.0':'GPL-2.0-only'}.get(token,token)
     if not any((repo/'LICENSES'/(token+suffix)).exists() for suffix in ('.txt','')):license_missing.append({'file':name,'license':token})
  patterns={'private_key':rb'-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----','local_path':rb'(?:/home/(?!user(?:/|\b)|example(?:/|\b))[^\s/\"\']+|[CD]:\\(?:Users|MyWork)\\[^\s\"\']+)','mac':rb'(?i)(?<![a-z0-9])(?:[0-9a-f]{2}:){5}[0-9a-f]{2}(?![a-z0-9])','credential':rb'(?im)^\+?\s*(?:ssid|psk|password|secret|serial_number)\s*=\s*[\"\'][^\"\'\n]{2,}[\"\']'}
  findings=[];crlf=[];binaries=[];count=0

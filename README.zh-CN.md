@@ -21,7 +21,7 @@
 
 ## 准备
 
-参考主机为 Ubuntu 24.04、Python 3.12、ARM hard-float GCC 13.3 / binutils 2.42。准备 make、主机编译工具、flex、bison、bc、libssl-dev、pkg-config、patch、tar、xz、curl、GnuPG、openssl、kmod 与 ARM 交叉编译器。维护 BusyBox 使用清单锁定的旧 Linaro 工具链。使用普通用户，现有 Alpine 配方要求 UID 1000。详见[源码输入](sources/README.md)和[构建说明](project/docs/BUILD.md)。
+参考主机为 Ubuntu 24.04、Python 3.12、ARM hard-float GCC 13.3 / binutils 2.42。准备 make、主机编译工具、flex、bison、bc、libssl-dev、pkg-config、patch、tar、xz、curl、GnuPG、openssl、kmod 与 ARM 交叉编译器。维护 BusyBox 使用清单锁定的旧 Linaro 工具链。使用普通用户；本轮验证使用 kindle 用户（UID 1000）。详见[源码输入](sources/README.md)和[构建说明](project/docs/BUILD.md)。
 
 缓存、构建输出和私有输入均置于仓库外。按照 [THIRD-PARTY.md](THIRD-PARTY.md) 从自有设备/备份提取 AR6003 固件/校准、面板波形及 boot0/idme；无线配置、SSH 授权与主机身份另行提供。仓库不发布任何镜像、APK、根 tar、凭据、私钥或专有固件。
 
