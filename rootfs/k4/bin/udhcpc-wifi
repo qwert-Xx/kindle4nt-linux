@@ -1,0 +1,42 @@
+#!/bin/busybox sh
+# Private initramfs: one DHCP-owned interface and resolver.
+set -eu
+umask 077
+BB=/bin/busybox
+[ "${interface:-}" = wlan0 ] || exit 1
+ready=/tmp/k4-wifi-ready
+# Block roots may keep resolver state in a volatile runtime filesystem.
+resolver=${K4_DHCP_RESOLV_FILE:-/etc/resolv.conf}
+clear_routes() {
+	while $BB route del default dev wlan0 2>/dev/null; do :; done
+}
+case "${1:-}" in
+	deconfig|nak)
+		$BB rm -f "$ready"
+		clear_routes
+		$BB ifconfig wlan0 0.0.0.0
+		: > "$resolver"
+		echo "K4_WIFI_DHCP_EVENT $1" > /dev/kmsg
+		;;
+	bound|renew)
+		$BB rm -f "$ready"
+		$BB ifconfig wlan0 "$ip" netmask "$subnet" up
+		clear_routes
+		set -- ${router:-}
+		if [ "$#" -gt 0 ]; then
+			$BB route add default gw "$1" dev wlan0
+		fi
+		: > "$resolver.new"
+		for server in ${dns:-}; do
+			echo "nameserver $server" >> "$resolver.new"
+		done
+		$BB mv "$resolver.new" "$resolver"
+		sequence=$($BB cat /var/run/k4-dhcp-sequence 2>/dev/null || echo 0)
+		sequence=$((sequence + 1))
+		echo "$sequence" > /var/run/k4-dhcp-sequence
+		if [ "$($BB cat /sys/class/net/wlan0/carrier 2>/dev/null || echo 0)" = 1 ]; then
+			echo "$sequence" > "$ready"
+		fi
+		echo "K4_WIFI_DHCP_BOUND sequence=$sequence lease=${lease:-unknown}" > /dev/kmsg
+		;;
+esac

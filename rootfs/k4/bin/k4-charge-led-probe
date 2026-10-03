@@ -1,0 +1,116 @@
+#!/bin/sh
+# Guarded 240 mA request plus automatic LEDs, manual amber bits, PM/rebind.
+# Existing charger protections decide whether current may flow; no bypass.
+set -eu
+BB=/bin/busybox
+green=/sys/class/leds/k4:green:status
+amber=/sys/class/leds/k4:amber:charge-source
+gate=/sys/class/leds/k4:charging
+gate_on=$($BB cat "$gate/max_brightness")
+p=/sys/bus/platform/devices/k4-mc13892-charger
+m=/sys/bus/platform/devices/k4-mc13892-charge-monitor
+g=/sys/kernel/config/usb_gadget/k4_composite_probe
+udc=$($BB cat "$g/UDC")
+cleanup() {
+	if [ -z "$($BB cat "$g/UDC")" ]; then echo "$udc" > "$g/UDC"; fi
+	for led in "$green" "$gate" "$amber"; do
+		echo none > "$led/trigger"
+		echo 0 > "$led/brightness"
+	done
+}
+finish() { echo 0 > "$p/control"; cleanup; }
+trap finish EXIT
+trap 'exit 1' INT TERM
+[ "$($BB cat "$p/control")" = 0 ]
+[ "$($BB cat /sys/block/mmcblk2/ro)" = 1 ]
+[ -e /sys/kernel/debug/gpio ] || $BB mount -t debugfs debugfs /sys/kernel/debug
+before=$($BB cat "$m/charger0_raw")
+check() {
+	$BB sleep 1
+	readback=$($BB cat "$m/charger0_raw")
+	green_reg=$($BB sed -n 's/^ledctl1=//p' "$m/rail_registers_raw")
+	echo "green=$($BB cat "$green/brightness") gate=$($BB cat "$gate/brightness") amber=$($BB cat "$amber/brightness") charger0=$readback ledctl1=$green_reg"
+	[ "$($BB cat "$green/brightness")" = "$1" ]
+	[ "$($BB cat "$gate/brightness")" = "$2" ]
+	[ "$($BB cat "$amber/brightness")" = "$3" ]
+	[ "$(( (readback >> 18) & 1 ))" = "$3" ]
+	[ "$((green_reg & 0xffe))" = "$((0xe00 | ($1 << 3)))" ]
+	[ "$((readback & ~0x40078))" = "$((before & ~0x40078))" ]
+	$BB grep -E 'gpio-2[[:space:]]' /sys/kernel/debug/gpio
+	if [ "$2" = 0 ]; then level=hi; else level=lo; fi
+	$BB grep -E 'gpio-2[[:space:]]' /sys/kernel/debug/gpio | $BB grep -q "out $level"
+}
+auto_triggers() {
+	echo k4-charge-full > "$green/trigger"
+	echo k4-charge-active > "$amber/trigger"
+	echo k4-charge-active > "$gate/trigger"
+	$BB sleep 3
+}
+auto_check() {
+	$BB sleep 6
+	$BB cat "$p/state" > /tmp/k4-led-charge-state
+	$BB cat /tmp/k4-led-charge-state
+	$BB grep -q 'error=0 write_error=0 fault=0' /tmp/k4-led-charge-state
+	if $BB grep -q 'reason=full ' /tmp/k4-led-charge-state; then
+		check 63 0 0
+		[ "$($BB cat "$m/charge_current_code")" = 0 ]
+	elif $BB grep -q 'reason=eligible ' /tmp/k4-led-charge-state; then
+		[ "$($BB cat "$m/charge_current_code")" = 2 ]
+		current=$($BB sed -n 's/.* current_ua=\([-0-9]*\).*/\1/p' /tmp/k4-led-charge-state)
+		if [ "$current" -gt 0 ]; then check 0 "$gate_on" 1; else check 0 0 0; fi
+	else
+		echo K4_LED_UNEXPECTED_CHARGE_STATE
+		exit 1
+	fi
+}
+$BB cat "$p/state"
+auto_triggers
+echo 240000 > /sys/class/power_supply/k4-charger/constant_charge_current_max
+echo 1 > "$p/control"
+auto_check
+echo K4_LED_AUTO_CHARGE_STATE
+echo 0 > "$p/control"
+cleanup
+[ "$($BB cat "$m/charge_current_code")" = 0 ]
+manual_before=$($BB cat "$m/charger0_raw")
+echo 1 > "$amber/brightness"
+echo "$gate_on" > "$gate/brightness"
+check 0 "$gate_on" 1
+[ "$($BB cat "$m/charge_current_code")" = 0 ]
+manual_on=$($BB cat "$m/charger0_raw")
+[ "$((manual_on & ~0x40000))" = "$((manual_before & ~0x40000))" ]
+$BB grep -E 'gpio-2[[:space:]]' /sys/kernel/debug/gpio | $BB grep -q 'out lo'
+cleanup
+check 0 0 0
+$BB grep -E 'gpio-2[[:space:]]' /sys/kernel/debug/gpio | $BB grep -q 'out hi'
+echo K4_LED_AMBER_BITS_PASS
+auto_triggers
+echo 1 > "$p/control"
+auto_check
+echo '' > "$g/UDC"
+$BB sleep 3
+check 0 0 0
+[ "$($BB cat "$m/charge_current_code")" = 0 ]
+$BB cat "$p/state"
+echo K4_LED_NO_USB_BUDGET_OFF
+echo "$udc" > "$g/UDC"
+n=0
+while [ "$($BB cat /sys/class/udc/ci_hdrc.0/state)" != configured ]; do
+	n=$((n + 1)); [ "$n" -lt 20 ]; $BB sleep 1
+done
+auto_check
+/bin/sh /bin/k4-pm-s2idle-probe
+auto_check
+$BB cat "$p/state" /sys/kernel/debug/suspend_stats
+/bin/sh /bin/k4-wifi-connect --resume
+$BB ping -I wlan0 -c 2 -W 3 192.168.210.1
+[ "$($BB cat /sys/block/mmcblk2/ro)" = 1 ]
+hash0=$($BB dd if=/dev/mmcblk2 bs=1048576 count=1 2>/dev/null | $BB sha256sum)
+hash16=$($BB dd if=/dev/mmcblk2 bs=1048576 skip=16 count=1 2>/dev/null | $BB sha256sum)
+echo "$hash0"; echo "$hash16"
+[ "${hash0%% *}" = c6f7f713bb57aad2203df61ffc348103848e41dea9451ae4b86c98ddd6862265 ]
+[ "${hash16%% *}" = 4613632586282e084c1e148d63be1ee6d800f14d6691e9dc1d5628d3921e5a18 ]
+finish
+check 0 0 0
+[ "$($BB cat "$m/charge_current_code")" = 0 ]
+echo K4_CHARGE_LED_AUTO_PM_PASS

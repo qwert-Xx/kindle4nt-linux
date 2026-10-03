@@ -12,7 +12,7 @@ def main():
  assert v.out.resolve().is_relative_to(HERE.parents[1]/'out'), 'output must stay in this worktree/out'
  v.out.mkdir(parents=True,exist_ok=False);dest=v.out/'source';dest.mkdir()
  with tarfile.open(v.source) as archive:archive.extractall(dest,filter='data')
- src=dest/'mmc-utils-1.0';bundle=v.out/'maintenance';bundle.mkdir()
+ src=next(p for p in dest.iterdir() if p.is_dir());bundle=v.out/'maintenance';bundle.mkdir()
  compiler=subprocess.check_output(['arm-linux-gnueabihf-gcc','--version'],text=True).splitlines()[0]
  with (v.out/'build.log').open('w') as log:
   subprocess.run(['make','-j8','C=0','CC=arm-linux-gnueabihf-gcc','GIT_VERSION="v1.0"','CFLAGS=-O2 -mno-unaligned-access','LDFLAGS=-static'],cwd=src,stdout=log,stderr=subprocess.STDOUT,check=True)

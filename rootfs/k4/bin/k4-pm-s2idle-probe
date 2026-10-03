@@ -1,0 +1,43 @@
+#!/bin/sh
+# Run detached from USB SSH; all artifacts stay in RAM.
+set -eu
+BB=/bin/busybox
+for node in /sys/block/mmcblk*/ro; do
+	test "$($BB cat "$node")" = 1
+done
+old_async=$($BB cat /sys/power/pm_async)
+old_print=$($BB cat /sys/power/pm_print_times)
+trace_enable=/sys/module/k4_pm_trace/parameters/enabled
+test -e "$trace_enable"
+test "$($BB cat "$trace_enable")" = N
+cleanup() {
+	echo N > "$trace_enable"
+	echo "$old_async" > /sys/power/pm_async
+	echo "$old_print" > /sys/power/pm_print_times
+}
+trap cleanup EXIT
+trap 'exit 1' INT TERM
+test -e /sys/kernel/debug/wakeup_sources ||
+	$BB mount -t debugfs debugfs /sys/kernel/debug
+dir=/tmp/k4-pm-s2idle
+$BB mkdir -p "$dir"
+$BB cat /sys/kernel/debug/wakeup_sources > "$dir/wakeup-before"
+$BB cat /proc/interrupts > "$dir/irqs-before"
+echo 0 > /sys/power/pm_async
+echo 1 > /sys/power/pm_print_times
+/bin/k4-bootmark K4_PM_S2IDLE_BEGIN
+echo K4_PM_S2IDLE_BEGIN > /dev/kmsg
+echo Y > "$trace_enable"
+result=0
+/bin/k4-rtc-alarm-probe --s2idle > "$dir/rtc-result" 2>&1 || result=$?
+echo N > "$trace_enable"
+/bin/k4-bootmark "K4_PM_S2IDLE_RETURN rc=$result"
+echo "K4_PM_S2IDLE_RETURN rc=$result" > /dev/kmsg
+cleanup
+trap - EXIT
+$BB cat /sys/kernel/debug/wakeup_sources > "$dir/wakeup-after"
+$BB cat /proc/interrupts > "$dir/irqs-after"
+$BB dmesg > "$dir/dmesg"
+$BB cat "$dir/rtc-result"
+$BB cat /sys/power/pm_wakeup_irq > "$dir/wakeup-irq" 2>/dev/null || true
+exit "$result"

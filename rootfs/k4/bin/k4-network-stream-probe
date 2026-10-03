@@ -1,0 +1,76 @@
+#!/bin/sh
+# Host drives four 64 MiB streams before and four after RTC STOP.
+set -eu
+bb=/bin/busybox
+snapshot() {
+    echo "SNAPSHOT phase=$1"
+    for dev in usb0 wlan0; do
+        for field in rx_bytes tx_bytes rx_errors tx_errors rx_dropped tx_dropped; do
+            echo "$dev $field $($bb cat /sys/class/net/$dev/statistics/$field)"
+        done
+    done
+    $bb cat /proc/uptime
+    /bin/wpa_cli -i wlan0 status | $bb grep -E '^(wpa_state|ip_address|key_mgmt|pairwise_cipher|group_cipher)='
+}
+healthy() {
+    test "$($bb cat /sys/block/mmcblk2/ro)" = 1
+    if $bb grep -q /dev/mmcblk /proc/mounts; then exit 1; fi
+    test "$($bb cat /proc/sys/kernel/tainted)" = 0
+    test "$($bb cat /sys/class/udc/ci_hdrc.0/state)" = configured
+    /bin/wpa_cli -i wlan0 status | $bb grep -q '^wpa_state=COMPLETED$'
+}
+case "${1:-}" in
+start)
+    healthy
+    test ! -e /tmp/network-stream.pid
+    /bin/sh /bin/k4-watchdog-probe 600 expire
+    snapshot before > /tmp/network-stream-before
+    $bb cat /tmp/network-stream-before
+    for dev in usb0 wlan0; do
+        for field in rx_bytes tx_bytes; do
+            $bb cat /sys/class/net/$dev/statistics/$field > /tmp/network-$dev-$field
+        done
+    done
+    $bb cat /var/run/k4-wpa.pid /var/run/k4-udhcpc.pid > /tmp/network-service-pids
+    $bb nohup /bin/k4-network-stream 0.0.0.0 16667 8 500 > /tmp/network-stream.log 2>&1 </dev/null &
+    echo $! > /tmp/network-stream.pid
+    $bb sleep 1
+    $bb grep '^STREAM_READY ' /tmp/network-stream.log
+    ;;
+pm)
+    test "$($bb grep -c '^STREAM_PASS ' /tmp/network-stream.log)" = 4
+    kill -0 "$($bb cat /tmp/network-stream.pid)"
+    snapshot pre_stop
+    /bin/k4-dual-rtc --mem
+    snapshot post_stop
+    ;;
+finish)
+    healthy
+    $bb cat /tmp/network-stream.log
+    $bb grep -q '^NETWORK_STREAM_PASS sessions=8$' /tmp/network-stream.log
+    test "$($bb grep -c '^STREAM_PASS ' /tmp/network-stream.log)" = 8
+    snapshot finished
+    for dev in usb0 wlan0; do
+        for field in rx_bytes tx_bytes; do
+            now=$($bb cat /sys/class/net/$dev/statistics/$field)
+            old=$($bb cat /tmp/network-$dev-$field)
+            delta=$((now-old))
+            echo "PATH_BYTES device=$dev field=$field delta=$delta"
+            test "$delta" -ge 134217728
+        done
+    done
+    $bb cat /var/run/k4-wpa.pid /var/run/k4-udhcpc.pid > /tmp/network-service-pids-after
+    $bb cmp /tmp/network-service-pids /tmp/network-service-pids-after
+    test "$($bb cat /sys/power/suspend_stats/success)" = 1
+    test "$($bb cat /sys/power/suspend_stats/fail)" = 0
+    $bb ping -c 2 -W 2 192.168.210.1
+    h0=$($bb dd if=/dev/mmcblk2 bs=1048576 count=1 2>/dev/null | $bb sha256sum)
+    h16=$($bb dd if=/dev/mmcblk2 bs=1048576 skip=16 count=1 2>/dev/null | $bb sha256sum)
+    echo "$h0"
+    echo "$h16"
+    test "${h0%% *}" = c6f7f713bb57aad2203df61ffc348103848e41dea9451ae4b86c98ddd6862265
+    test "${h16%% *}" = 4613632586282e084c1e148d63be1ee6d800f14d6691e9dc1d5628d3921e5a18
+    echo K4_NETWORK_STREAM_STOP_PASS
+    ;;
+*) exit 2 ;;
+esac

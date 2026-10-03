@@ -1,0 +1,55 @@
+#!/bin/sh
+# Joint RAM validation: associated Wi-Fi, two OPPs and SRTC s2idle wake.
+set -eu
+BB=/bin/busybox
+cpufreq=/sys/devices/system/cpu/cpu0/cpufreq
+count=0
+until [ -e /tmp/k4-wifi-ready ]; do
+	count=$((count + 1))
+	[ "$count" -lt 40 ] || exit 1
+	$BB sleep 1
+done
+test "$($BB cat /sys/block/mmcblk2/ro)" = 1
+test -e /sys/kernel/debug/clk/pll1_sw/clk_rate ||
+	$BB mount -t debugfs debugfs /sys/kernel/debug
+sw1=
+for node in /sys/class/regulator/*; do
+	if [ "$($BB cat "$node/name")" = k4-cpu-sw1 ]; then sw1=$node; fi
+done
+test -n "$sw1"
+cleanup() {
+	echo userspace > "$cpufreq/scaling_governor"
+	echo 800000 > "$cpufreq/scaling_setspeed"
+}
+trap cleanup EXIT
+trap 'exit 1' INT TERM
+check_opp() {
+	test "$($BB cat "$cpufreq/cpuinfo_cur_freq")" = "$1"
+	test "$($BB cat "$sw1/microvolts")" = "$2"
+	test "$($BB cat /sys/kernel/debug/clk/pll1_sw/clk_rate)" = 800000000
+	echo "OPP_OK frequency_khz=$1 sw1_uv=$2 pll1_hz=800000000"
+}
+ping_gateway() {
+	gateway=$($BB route -n | $BB awk '$1 == "0.0.0.0" && $8 == "wlan0" { print $2; exit }')
+	test -n "$gateway"
+	$BB ping -I wlan0 -c 3 -W 2 "$gateway"
+}
+echo userspace > "$cpufreq/scaling_governor"
+echo 800000 > "$cpufreq/scaling_setspeed"
+check_opp 800000 1050000
+ping_gateway
+echo 160000 > "$cpufreq/scaling_setspeed"
+check_opp 160000 850000
+ping_gateway
+/bin/sh /bin/k4-pm-s2idle-probe
+check_opp 160000 850000
+/bin/sh /bin/k4-wifi-connect --resume
+ping_gateway
+echo 800000 > "$cpufreq/scaling_setspeed"
+check_opp 800000 1050000
+ping_gateway
+test "$($BB cat /sys/block/mmcblk2/ro)" = 1
+echo K4_WIFI_DVFS_S2IDLE_PASS
+echo K4_WIFI_DVFS_S2IDLE_PASS > /dev/kmsg
+cleanup
+trap - EXIT

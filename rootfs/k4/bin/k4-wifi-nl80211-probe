@@ -1,0 +1,24 @@
+#!/bin/sh
+# Explicit RAM-only validation; never prints network credentials or SSIDs.
+set -eu
+BB=/bin/busybox
+[ "$($BB cat /etc/k4-wifi-driver)" = nl80211 ]
+/bin/sh /bin/k4-wifi-connect start
+/bin/wpa_supplicant -v
+/bin/iw --version
+[ "$(/bin/wpa_cli -i wlan0 ping)" = PONG ]
+status() {
+	/bin/wpa_cli -i wlan0 status > /tmp/k4-nl80211-status
+	$BB grep -q '^wpa_state=COMPLETED$' /tmp/k4-nl80211-status
+	$BB grep -E '^(wpa_state|key_mgmt|pairwise_cipher|group_cipher|freq|ip_address)=' /tmp/k4-nl80211-status
+}
+status
+# Kernel reg_reload_regdb() validates both format and required PKCS#7 signature.
+# Reload the current domain, without selecting a country or overriding EEPROM.
+/bin/iw reg reload
+echo K4_SIGNED_REGDB_RELOAD_PASS
+/bin/iw reg get
+$BB sha256sum /lib/firmware/regulatory.db /lib/firmware/regulatory.db.p7s
+/bin/sh /bin/k4-wifi-lease-probe
+status
+echo K4_NL80211_REGDB_PM_PASS

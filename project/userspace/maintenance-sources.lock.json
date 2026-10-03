@@ -3,6 +3,7 @@
     "version": "v1.0",
     "commit": "d8a8358a7207bd81d0c38dca2cf27a48bf411341",
     "upstream": "https://git.kernel.org/pub/scm/utils/mmc/mmc-utils.git",
-    "sha256": "39e6a89e06b53f99816f110af6743d1adc82220b26c51b0c3fd0a11ccf4206c2"
+    "sha256": "3be34e30b0830c71d690264ff433c7f8b0613c8ac8eeed71e49f6bcb6bc79772",
+    "url": "https://git.kernel.org/pub/scm/utils/mmc/mmc-utils.git/snapshot/mmc-utils-v1.0.tar.gz"
   }
 }

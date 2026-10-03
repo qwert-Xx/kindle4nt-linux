@@ -1,15 +1,19 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-or-later
-# Usage: build.sh UPSTREAM_GIT CONFIG NEW_OUTPUT [ZQ_FRAGMENT]; no device/storage operations.
+# Usage: build.sh SOURCE_CACHE CONFIG NEW_OUTPUT [ZQ_FRAGMENT]; no device/storage operations.
 set -eu
-[ "$#" = 3 ] || [ "$#" = 4 ] || { echo "usage: $0 barebox-git config new-output [zq-fragment]" >&2; exit 2; }
+[ "$#" = 3 ] || [ "$#" = 4 ] || { echo "usage: $0 source-cache config new-output [zq-fragment]" >&2; exit 2; }
 source=$1
 config=$2
 out=$3
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 [ ! -e "$out" ] || { echo "output already exists" >&2; exit 1; }
 mkdir -p "$out/source" "$out/build"
-git -c safe.directory="$source" -C "$source" archive v2026.09.0 | tar -x -C "$out/source"
+python3 "$here/../../sources/fetch.py" --cache "$1" --offline --name barebox --extract "$out/source"
+mv "$out/source/barebox-2026.09.0/"* "$out/source/"
+# Include upstream dotfiles when flattening the archive.
+for entry in "$out/source/barebox-2026.09.0/".[!.]*; do [ ! -e "$entry" ] || mv "$entry" "$out/source/"; done
+rmdir "$out/source/barebox-2026.09.0"
 (cd "$out/source" && patch -p1 < "$here/integration.patch")
 cp "$here/zqcal.c" "$here/zqcal-sram.S" "$here/zqcal-config.h" "$here/early-trace.c" "$out/source/arch/arm/boards/kindle-mx50/"
 # Distinguish upstream/runtime and per-device DCD breadcrumbs; remnants

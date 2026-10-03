@@ -1,0 +1,137 @@
+#!/bin/sh
+# Explicit OCRAM/WAIT test, optional manual DDR self-refresh round trip.
+set -eu
+bb=/bin/busybox
+p=/sys/bus/platform/devices/53fd4000.ocram-probe
+c=/sys/devices/system/cpu/cpufreq/policy0
+trace=/sys/module/k4_pm_trace/parameters/enabled
+test -w "$p/run"
+test "$($bb cat "$trace")" = N
+test "$($bb cat /sys/block/mmcblk2/ro)" = 1
+/bin/sh /bin/k4-watchdog-probe 120 expire
+old_governor=$($bb cat "$c/scaling_governor")
+old_freq=$($bb cat "$c/scaling_cur_freq")
+button=/sys/bus/platform/devices/k4-mc13892-power-button
+if test "${K4_OCRAM_BUTTON:-0}" = 1; then
+	test -r "$button/state"
+	old_button_wakeup=$($bb cat "$button/power/wakeup")
+fi
+cleanup() {
+	echo N > "$trace"
+	if test "${K4_OCRAM_BUTTON:-0}" = 1; then
+		echo "$old_button_wakeup" > "$button/power/wakeup"
+	fi
+	if test "${K4_OCRAM_CACHE:-0}" = 1; then
+		echo cancel > "$p/cache"
+	fi
+	echo "$old_freq" > "$c/scaling_setspeed"
+	echo "$old_governor" > "$c/scaling_governor"
+}
+trap cleanup EXIT
+trap 'exit 1' INT TERM
+echo userspace > "$c/scaling_governor"
+expected=0
+cache_expected=0
+for freq in 800000 160000; do
+	if test "${K4_OCRAM_BUTTON:-0}" = 1; then
+		if test "$freq" = 800000; then
+			echo enabled > "$button/power/wakeup"
+		else
+			echo disabled > "$button/power/wakeup"
+		fi
+		$bb cat "$button/state" "$button/power/wakeup"
+	fi
+	echo "$freq" > "$c/scaling_setspeed"
+	test "$($bb cat "$c/scaling_cur_freq")" = "$freq"
+	for phase in before after; do
+		if test "$phase" = after; then
+			if test "${K4_OCRAM_CACHE:-0}" = 1; then
+				if test "${K4_OCRAM_STOP:-0}" = 1; then
+					# PM.begin prepares SRAM automatically for mem/deep.
+					echo deep > /sys/power/mem_sleep
+				elif test "${K4_OCRAM_PLL_WAIT:-0}" = 1; then
+					echo arm-pll-wait > "$p/cache"
+				elif test "${K4_OCRAM_SELFREFRESH_WAIT:-0}" = 1; then
+					echo arm-selfrefresh-wait > "$p/cache"
+				elif test "${K4_OCRAM_SELFREFRESH:-0}" = 1; then
+					echo arm-selfrefresh > "$p/cache"
+				elif test "${K4_OCRAM_TABLES:-0}" = 1; then
+					echo arm-tables > "$p/cache"
+				else
+					echo arm > "$p/cache"
+				fi
+				/bin/k4-bootmark "K4_CACHE_ARMED freq=$freq"
+				echo Y > "$trace"
+			fi
+			if test "${K4_OCRAM_STOP:-0}" = 1; then
+				if test "${K4_OCRAM_VFP:-0}" = 1; then
+					/bin/k4-rtc-standby-probe --mem-vfp
+				else
+					/bin/k4-rtc-standby-probe --mem
+				fi
+			else
+				/bin/k4-rtc-standby-probe --standby
+			fi
+			echo N > "$trace"
+			if test "${K4_OCRAM_BUTTON:-0}" = 1; then
+				$bb cat "$button/state"
+				$bb grep -q 'suspended=0 pending=0 .*wake_armed=0 arms=1 disarms=1' "$button/state"
+				$bb grep -q 'read_errors=0' "$button/state"
+			fi
+			if test "${K4_OCRAM_CACHE:-0}" = 1; then
+				cache_expected=$((cache_expected+1))
+				$bb cat "$p/cache"
+				$bb grep -q "armed=0 runs=$cache_expected error=0" "$p/cache"
+				if test "${K4_OCRAM_TABLES:-0}" = 1; then
+					$bb grep -q 'tables=1 ' "$p/cache"
+				fi
+				if test "${K4_OCRAM_SELFREFRESH:-0}" = 1 || test "${K4_OCRAM_SELFREFRESH_WAIT:-0}" = 1; then
+					$bb grep -q 'selfrefresh=1 status=0 stage=4 ddr_checked=65536 dwell=4096' "$p/cache"
+				fi
+				if test "${K4_OCRAM_SELFREFRESH_WAIT:-0}" = 1 || test "${K4_OCRAM_PLL_WAIT:-0}" = 1; then
+					$bb grep -q 'sr_wait=1 wfi_return=1 ' "$p/cache"
+				fi
+				if test "${K4_OCRAM_PLL_WAIT:-0}" = 1; then
+					$bb grep -q 'pll_wait=1 status=0 stage=4 ' "$p/cache"
+				fi
+				/bin/k4-bootmark "K4_CACHE_RETURN runs=$cache_expected"
+				if test "${K4_OCRAM_SRPG:-0}" = 1; then
+					$bb cat /sys/bus/platform/devices/63fa0000.power-controller/state
+					$bb grep -q "srpg=1 power_cycles=$cache_expected .*cleared=00000000,00000000 after=00000001,00000001" /sys/bus/platform/devices/63fa0000.power-controller/state
+				fi
+				if test "${K4_OCRAM_OSC:-0}" = 1; then
+					$bb cat /sys/bus/platform/devices/63fa0000.power-controller/state
+					$bb grep -q "mode=stop attempts=$cache_expected wfi_returns=$cache_expected error=0" /sys/bus/platform/devices/63fa0000.power-controller/state
+					$bb grep -q 'osc=1 cycles=256 ' /sys/bus/platform/devices/63fa0000.power-controller/state
+				fi
+				if test "${K4_OCRAM_VSTBY:-0}" = 1; then
+					$bb cat /sys/bus/platform/devices/63fa0000.power-controller/pmic_standby
+					$bb grep -q "armed=0 pending=0 prepares=$cache_expected restores=$cache_expected error=0 restore_error=0" /sys/bus/platform/devices/63fa0000.power-controller/pmic_standby
+					$bb grep -q 'error=0 vstby=1' /sys/bus/platform/devices/63fa0000.power-controller/state
+				fi
+			fi
+		fi
+		/bin/k4-bootmark "K4_OCRAM_BEGIN freq=$freq phase=$phase"
+		echo Y > "$trace"
+		echo run > "$p/run"
+		echo N > "$trace"
+		expected=$((expected+4))
+		$bb cat "$p/state"
+		$bb grep -q "runs=$expected error=0" "$p/state"
+		/bin/k4-bootmark "K4_OCRAM_RETURN runs=$expected"
+	done
+	test "$($bb cat "$c/scaling_cur_freq")" = "$freq"
+	$bb sleep 4
+	$bb ping -c 2 -W 2 192.168.210.1
+	test "$($bb cat /sys/class/udc/ci_hdrc.0/state)" = configured
+done
+cleanup
+trap - EXIT
+test "$($bb cat /sys/block/mmcblk2/ro)" = 1
+hash0=$($bb dd if=/dev/mmcblk2 bs=1048576 count=1 2>/dev/null | $bb sha256sum)
+hash16=$($bb dd if=/dev/mmcblk2 bs=1048576 skip=16 count=1 2>/dev/null | $bb sha256sum)
+echo "$hash0"
+echo "$hash16"
+test "${hash0%% *}" = c6f7f713bb57aad2203df61ffc348103848e41dea9451ae4b86c98ddd6862265
+test "${hash16%% *}" = 4613632586282e084c1e148d63be1ee6d800f14d6691e9dc1d5628d3921e5a18
+echo K4_OCRAM_EXEC_STACK_WAIT_PASS

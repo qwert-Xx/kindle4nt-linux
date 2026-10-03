@@ -33,21 +33,22 @@ def installed(root):
         d=dict(l.split(':',1) for l in b.splitlines() if ':' in l);result[d['P']]=d['V']
     return result
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--cache',type=pathlib.Path,required=True);ap.add_argument('--k4-repo',type=pathlib.Path,required=True);ap.add_argument('--busybox-tar',type=pathlib.Path,required=True);ap.add_argument('--busybox-sha',required=True);ap.add_argument('--out',type=pathlib.Path,required=True);ap.add_argument('--kernel',type=pathlib.Path,required=True);ap.add_argument('--dtb',type=pathlib.Path,required=True);ap.add_argument('--modules',type=pathlib.Path,required=True);a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--cache',type=pathlib.Path,required=True);ap.add_argument('--k4-repo',type=pathlib.Path,required=True);ap.add_argument('--busybox-tar',type=pathlib.Path);ap.add_argument('--busybox-sha');ap.add_argument('--k4-root',type=pathlib.Path);ap.add_argument('--public-key',type=pathlib.Path);ap.add_argument('--out',type=pathlib.Path,required=True);ap.add_argument('--kernel',type=pathlib.Path,required=True);ap.add_argument('--dtb',type=pathlib.Path,required=True);ap.add_argument('--modules',type=pathlib.Path,required=True);a=ap.parse_args()
     assert os.getuid()==1000,'run as kindle';a.out.mkdir(mode=0o700);out=a.out.resolve();cache=a.cache.resolve();root=out/'rootfs';root.mkdir()
     lock=json.loads((HERE/'packages.lock.json').read_text())
     def checked(name,d,key='sha256'):p=cache/name;assert sha(p,key)==d[key],name;return p
     mini=checked(lock['minirootfs']['file'],lock['minirootfs']);hostpkg=checked(lock['host_apk']['file'],lock['host_apk']);hostmini=checked(lock['host_mini']['file'],lock['host_mini']);qdeb=checked(lock['qemu']['file'],lock['qemu'],'sha512')
     for d in lock['packages']:checked(d['file'],d)
     assert sha(cache/'APKINDEX-armv7.tar.gz')==lock['index_sha256']
-    assert sha(a.busybox_tar)==a.busybox_sha
+    if a.busybox_tar:assert sha(a.busybox_tar)==a.busybox_sha
     run(['tar','-xf',mini,'-C',root]);host=out/'host';host.mkdir();run(['tar','-xf',hostpkg,'-C',host]);keys=out/'hostkeys';keys.mkdir();run(['tar','-xf',hostmini,'-C',keys,'./etc/apk/keys'])
     apk=host/'sbin/apk.static'
     local=a.k4_repo.resolve();lp=local/'armv7/wpa_supplicant-2.12-r0.apk'
-    assert sha(lp)==lock['local_package']['apk_sha256']
-    assert sha(local/'armv7/APKINDEX.tar.gz')==lock['local_package']['index_sha256']
-    assert sha(HERE/'k4-alpine.rsa.pub')==lock['local_package']['public_key_sha256']
-    shutil.copy2(HERE/'k4-alpine.rsa.pub',root/'etc/apk/keys/k4-alpine.rsa.pub')
+    if a.busybox_tar:
+        assert sha(lp)==lock['local_package']['apk_sha256']
+        assert sha(local/'armv7/APKINDEX.tar.gz')==lock['local_package']['index_sha256']
+    public_key=a.public_key or HERE/'k4-alpine.rsa.pub'
+    shutil.copy2(public_key,root/'etc/apk/keys'/public_key.name)
     run([apk,'--keys-dir',keys/'etc/apk/keys','verify',hostpkg],out/'host-apk-signature.log')
     repo=out/'repository/armv7';repo.mkdir(parents=True);shutil.copy2(cache/'APKINDEX-armv7.tar.gz',repo/'APKINDEX.tar.gz')
     for d in lock['packages']:(repo/d['file']).symlink_to(cache/d['file'])
@@ -86,7 +87,11 @@ def main():
         while (certdir/(h+'.'+str(i))).is_symlink():i+=1
         link(root,'etc/ssl/certs/'+h+'.'+str(i),pem)
     # OpenRC legacy migration post-install has no rcS.d/rcL.d on minirootfs.
-    private=out/'busybox-source';private.mkdir();run(['tar','-xf',a.busybox_tar,'-C',private,'--exclude=dev/*'])
+    private=out/'busybox-source'
+    if a.busybox_tar:
+        private.mkdir();run(['tar','-xf',a.busybox_tar,'-C',private,'--exclude=dev/*'])
+    else:
+        shutil.copytree(a.k4_root,private,symlinks=True)
     kernel_lock=json.loads((HERE/'kernel.lock.json').read_text())
     assert sha(a.kernel)==kernel_lock['zImage']
     assert sha(a.dtb)==kernel_lock['dtb']
@@ -98,6 +103,9 @@ def main():
     for directory in ('lib/firmware','root/.ssh','etc/dropbear'):
         shutil.copytree(private/directory,root/directory,dirs_exist_ok=True,symlinks=True)
     shutil.copytree(a.modules,root/'lib/modules',symlinks=True)
+    if not a.busybox_tar:
+        for name in ('build','source'):
+            (root/'lib/modules'/RELEASE/name).unlink(missing_ok=True)
     (root/'boot').mkdir()
     shutil.copy2(a.kernel,root/'boot/zImage')
     shutil.copy2(a.dtb,root/'boot/imx50-kindle-k4.dtb')
@@ -151,7 +159,7 @@ def main():
     archive(root,out/'rootfs.tar.gz')
     (out/'rootfs.tar.gz').chmod(0o600)
     shutil.copy2(HERE.parent/'tools/deploy-emmc-root',out/'deploy-alpine-root')
-    report=dict(kernel_release=RELEASE,packages=installed(root),busybox_tar_sha256=a.busybox_sha,kernel_reference=kernel_lock['reference'],kernel_sha256=sha(a.kernel),dtb_sha256=sha(a.dtb),module_count=len(actual),k4_copied=copied,device_operations=False,rootfs_sha256=sha(out/'rootfs.tar.gz'),rootfs_bytes=(out/'rootfs.tar.gz').stat().st_size)
+    report=dict(kernel_release=RELEASE,packages=installed(root),busybox_tar_sha256=a.busybox_sha,source_built_k4=not bool(a.busybox_tar),kernel_reference=kernel_lock['reference'],kernel_sha256=sha(a.kernel),dtb_sha256=sha(a.dtb),module_count=len(actual),k4_copied=copied,device_operations=False,rootfs_sha256=sha(out/'rootfs.tar.gz'),rootfs_bytes=(out/'rootfs.tar.gz').stat().st_size)
     (out/'build-report.json').write_text(json.dumps(report,indent=2)+'\n')
     print(json.dumps({k:v for k,v in report.items() if k not in ('packages','k4_copied')}))
 if __name__=='__main__':main()

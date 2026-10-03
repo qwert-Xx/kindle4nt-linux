@@ -1,0 +1,57 @@
+#!/bin/sh
+# Load existing software/dependency modules in RAM, then restore an empty set.
+set -eu
+bb=/bin/busybox
+mod=/bin/busybox-modutils
+release=$($bb uname -r)
+test -r "/lib/modules/$release/modules.dep"
+test -z "$($bb cat /proc/modules)" || { echo 'Modules already loaded; refusing to disturb them'; exit 1; }
+test "$($bb cat /sys/block/mmcblk2/ro)" = 1
+if $bb grep -q '/dev/mmcblk' /proc/mounts; then exit 1; fi
+# This device-only USB image must not have external host USB devices to bind.
+for usb in /sys/bus/usb/devices/*/idVendor; do
+	[ ! -e "$usb" ] || { echo 'Unexpected USB host device'; exit 1; }
+done
+/bin/sh /bin/k4-watchdog-probe 120 expire
+cleanup() {
+	$mod modprobe -r option 2>/dev/null || true
+	$mod modprobe -r usb_wwan 2>/dev/null || true
+	$mod modprobe -r usbserial 2>/dev/null || true
+	$mod modprobe -r crc7 2>/dev/null || true
+}
+trap cleanup EXIT
+trap 'exit 1' INT TERM
+$bb uname -a
+$bb cat /proc/sys/kernel/tainted
+before=$($bb cat /proc/sys/kernel/tainted)
+for round in 1 2; do
+	$mod modprobe crc7
+	$bb grep '^crc7 ' /proc/modules
+	$mod modprobe -r crc7
+	$mod modprobe option
+	for name in option usb_wwan usbserial; do
+		$bb grep "^$name " /proc/modules
+	done
+	# A dependency still held by option must refuse removal.
+	if $mod rmmod usb_wwan; then echo 'Dependency incorrectly unloaded'; exit 1; fi
+	test -d /sys/module/usb_wwan
+	$mod modprobe -r option
+	cleanup
+	test -z "$($bb cat /proc/modules)"
+	echo "MODULE_LOAD_UNLOAD_PASS round=$round"
+	if [ "$round" = 1 ]; then /bin/k4-rtc-standby-probe --s2idle; fi
+done
+test "$($bb cat /proc/sys/kernel/tainted)" = "$before"
+if $mod modprobe k4_intentionally_missing_module; then exit 1; fi
+test -z "$($bb cat /proc/modules)"
+$bb sleep 4
+$bb ping -c 2 -W 2 192.168.210.1
+test "$($bb cat /sys/class/udc/ci_hdrc.0/state)" = configured
+test "$($bb cat /sys/block/mmcblk2/ro)" = 1
+h0=$($bb dd if=/dev/mmcblk2 bs=1048576 count=1 2>/dev/null | $bb sha256sum)
+h16=$($bb dd if=/dev/mmcblk2 bs=1048576 skip=16 count=1 2>/dev/null | $bb sha256sum)
+echo "$h0"
+echo "$h16"
+test "${h0%% *}" = c6f7f713bb57aad2203df61ffc348103848e41dea9451ae4b86c98ddd6862265
+test "${h16%% *}" = 4613632586282e084c1e148d63be1ee6d800f14d6691e9dc1d5628d3921e5a18
+echo K4_MODULES_RAM_PASS

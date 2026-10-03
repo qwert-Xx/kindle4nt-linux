@@ -1,0 +1,36 @@
+{
+  "k4-dual-rtc": [
+    "dual-rtc-probe.c",
+    []
+  ],
+  "k4-fb-probe": [
+    "fb-probe.c",
+    []
+  ],
+  "k4-input-probe": [
+    "input-probe.c",
+    []
+  ],
+  "k4-network-stream": [
+    "network-stream-probe.c",
+    []
+  ],
+  "k4-pmic-rtc-alarm": [
+    "rtc-alarm-probe.c",
+    [
+      "-DK4_PMIC_RTC"
+    ]
+  ],
+  "k4-rtc-alarm-probe": [
+    "rtc-alarm-probe.c",
+    []
+  ],
+  "k4-rtc-standby-probe": [
+    "rtc-alarm-probe.c",
+    [
+      "-DK4_VFP_PROBE",
+      "-marm",
+      "-mfpu=neon"
+    ]
+  ]
+}

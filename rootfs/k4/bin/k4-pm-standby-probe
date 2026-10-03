@@ -1,0 +1,64 @@
+#!/bin/sh
+# Explicit WAIT/RTC/OPP RAM test. Run detached from the USB SSH connection.
+set -eu
+bb=/bin/busybox
+p=/sys/bus/platform/devices/63fa0000.power-controller
+c=/sys/devices/system/cpu/cpufreq/policy0
+trace=/sys/module/k4_pm_trace/parameters/enabled
+$bb grep -q standby /sys/power/state
+test -r "$p/state"
+test "$($bb cat /sys/block/mmcblk2/ro)" = 1
+test "$($bb cat "$trace")" = N
+/bin/sh /bin/k4-watchdog-probe 120 expire
+test -e /sys/kernel/debug/wakeup_sources ||
+	$bb mount -t debugfs debugfs /sys/kernel/debug
+old_async=$($bb cat /sys/power/pm_async)
+old_print=$($bb cat /sys/power/pm_print_times)
+old_governor=$($bb cat "$c/scaling_governor")
+old_freq=$($bb cat "$c/scaling_cur_freq")
+cleanup() {
+	echo N > "$trace"
+	echo "$old_async" > /sys/power/pm_async
+	echo "$old_print" > /sys/power/pm_print_times
+	echo "$old_freq" > "$c/scaling_setspeed"
+	echo "$old_governor" > "$c/scaling_governor"
+}
+trap cleanup EXIT
+trap 'exit 1' INT TERM
+echo userspace > "$c/scaling_governor"
+echo 0 > /sys/power/pm_async
+echo 1 > /sys/power/pm_print_times
+round=0
+for freq in 800000 160000; do
+	round=$((round+1))
+	echo "$freq" > "$c/scaling_setspeed"
+	test "$($bb cat "$c/scaling_cur_freq")" = "$freq"
+	echo "STANDBY_ROUND=$round frequency=$freq"
+	$bb cat /sys/power/state /sys/power/mem_sleep "$p/state"
+	/bin/k4-bootmark "K4_STANDBY_BEGIN round=$round"
+	echo Y > "$trace"
+	result=0
+	/bin/k4-rtc-standby-probe --standby || result=$?
+	echo N > "$trace"
+	/bin/k4-bootmark "K4_STANDBY_RETURN round=$round rc=$result"
+	test "$result" = 0
+	$bb cat "$p/state" /sys/kernel/debug/suspend_stats
+	$bb grep -q "attempts=$round wfi_returns=$round error=0" "$p/state"
+	before=$($bb sed -n 's/^before=//p' "$p/state")
+	after=$($bb sed -n 's/^after=//p' "$p/state")
+	test "$before" = "$after"
+	test "$($bb cat "$c/scaling_cur_freq")" = "$freq"
+	$bb sleep 4
+	$bb ping -c 2 -W 2 192.168.210.1
+	test "$($bb cat /sys/class/udc/ci_hdrc.0/state)" = configured
+done
+cleanup
+trap - EXIT
+test "$($bb cat /sys/block/mmcblk2/ro)" = 1
+hash0=$($bb dd if=/dev/mmcblk2 bs=1048576 count=1 2>/dev/null | $bb sha256sum)
+hash16=$($bb dd if=/dev/mmcblk2 bs=1048576 skip=16 count=1 2>/dev/null | $bb sha256sum)
+echo "$hash0"
+echo "$hash16"
+test "${hash0%% *}" = c6f7f713bb57aad2203df61ffc348103848e41dea9451ae4b86c98ddd6862265
+test "${hash16%% *}" = 4613632586282e084c1e148d63be1ee6d800f14d6691e9dc1d5628d3921e5a18
+echo K4_STANDBY_RTC_DVFS_PASS

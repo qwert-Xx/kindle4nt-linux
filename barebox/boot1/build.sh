@@ -1,15 +1,19 @@
 #!/bin/sh
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Offline only. All generated files must live in this worktree.
 set -eu
 [ "$(id -un)" = kindle ] || exit 1
-[ "$#" = 5 ] || { echo "usage: $0 upstream-git frozen-usb-config usb-image new-output stock-boot0-reference" >&2; exit 2; }
+[ "$#" = 5 ] || { echo "usage: $0 source-cache frozen-usb-config usb-image new-output stock-boot0-reference" >&2; exit 2; }
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 root=$(git -C "$here" rev-parse --show-toplevel)
 out=$(realpath -m "$4")
 [ ! -e "$out" ] || exit 1
 mkdir -p "$out/source" "$out/build"
-git -C "$1" archive v2026.09.0 | tar -x -C "$out/source"
+python3 "$here/../../sources/fetch.py" --cache "$1" --offline --name barebox --extract "$out/source"
+mv "$out/source/barebox-2026.09.0/"* "$out/source/"
+# Include upstream dotfiles when flattening the archive.
+for entry in "$out/source/barebox-2026.09.0/".[!.]*; do [ ! -e "$entry" ] || mv "$entry" "$out/source/"; done
+rmdir "$out/source/barebox-2026.09.0"
 cp "$2" "$out/build/.config"
 chmod u+w "$out/build/.config"
 python3 "$here/prepare.py" "$out/source"

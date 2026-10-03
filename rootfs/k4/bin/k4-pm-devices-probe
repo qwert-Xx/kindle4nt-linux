@@ -1,0 +1,42 @@
+#!/bin/sh
+# Exercise normal device PM callbacks with the kernel's bounded PM test.
+# This does not enter system sleep or test late/noirq callbacks.
+set -eu
+BB=/bin/busybox
+test "$($BB cat /sys/power/pm_test)" = '[none] core processors platform devices freezer'
+for node in /sys/block/mmcblk*/ro; do
+	test "$($BB cat "$node")" = 1
+done
+old_async=$($BB cat /sys/power/pm_async)
+old_print=$($BB cat /sys/power/pm_print_times)
+trace_enable=/sys/module/k4_pm_trace/parameters/enabled
+cleanup() {
+	echo none > /sys/power/pm_test
+	echo "$old_async" > /sys/power/pm_async
+	echo "$old_print" > /sys/power/pm_print_times
+	if [ -e "$trace_enable" ]; then echo N > "$trace_enable"; fi
+}
+trap cleanup EXIT
+trap 'exit 1' INT TERM
+echo devices > /sys/power/pm_test
+echo 1 > /sys/power/pm_print_times
+# Serialize callbacks so the last unmatched RAM entry identifies one device.
+echo 0 > /sys/power/pm_async
+$BB mkdir -p /tmp/k4-pm-devices
+$BB cat /sys/power/suspend_stats/* > /tmp/k4-pm-devices/stats-before 2>/dev/null || true
+$BB cat /proc/interrupts > /tmp/k4-pm-devices/irqs-before
+/bin/k4-bootmark K4_PM_DEVICES_BEGIN
+echo K4_PM_DEVICES_BEGIN > /dev/kmsg
+if [ -e "$trace_enable" ]; then echo Y > "$trace_enable"; fi
+result=0
+echo freeze > /sys/power/state || result=$?
+if [ -e "$trace_enable" ]; then echo N > "$trace_enable"; fi
+/bin/k4-bootmark "K4_PM_DEVICES_RETURN rc=$result"
+echo "K4_PM_DEVICES_RETURN rc=$result" > /dev/kmsg
+cleanup
+trap - EXIT
+$BB dmesg > /tmp/k4-pm-devices/dmesg
+$BB cat /proc/interrupts > /tmp/k4-pm-devices/irqs-after
+$BB cat /sys/power/suspend_stats/* > /tmp/k4-pm-devices/stats-after 2>/dev/null || true
+$BB tail -65 /tmp/k4-pm-devices/dmesg
+exit "$result"

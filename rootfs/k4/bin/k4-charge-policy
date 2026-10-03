@@ -1,0 +1,43 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Explicit root startup/shutdown policy; the kernel owns all ongoing protection.
+set -eu
+bb=/bin/busybox
+p=/sys/bus/platform/devices/k4-mc13892-charger
+s=/sys/class/power_supply/k4-charger
+[ "$#" -ge 1 ] && [ "$#" -le 2 ]
+action=$1
+case "$action" in
+ start)
+  if [ "$#" = 2 ];then ua=$2;else ua=$($bb cat /etc/k4-charge-current-ua);fi
+  case "$ua" in ''|*[!0-9]*) echo CHARGE_POLICY_INVALID_CURRENT >&2;exit 2;; esac
+  [ "$ua" -le 2147483647 ] || exit 2
+  n=0
+  while [ ! -w "$p/control" ] || [ ! -w "$s/constant_charge_current_max" ];do
+   n=$((n+1));[ "$n" -le 30 ] || { echo CHARGE_POLICY_NOT_READY >&2;exit 1; }
+   $bb sleep 1
+  done
+  cleanup() {
+   if ! printf '0\n' > "$p/control";then echo CHARGE_POLICY_STOP_FAILED >&2;fi
+  }
+  trap cleanup EXIT
+  trap 'exit 1' INT TERM HUP
+  printf '%s\n' "$ua" > "$s/constant_charge_current_max"
+  printf '1\n' > "$p/control"
+  [ "$($bb cat "$p/control")" = 1 ]
+  $bb cat "$p/state"
+  trap - EXIT INT TERM HUP
+  echo CHARGE_POLICY_STARTED
+  ;;
+ stop)
+  [ "$#" = 1 ]
+  [ -e "$p/control" ] || { echo CHARGE_POLICY_NOT_PRESENT >&2;exit 1; }
+  if [ -e "$p/control" ];then
+   printf '0\n' > "$p/control"
+   [ "$($bb cat "$p/control")" = 0 ]
+   $bb cat "$p/state"
+  fi
+  echo CHARGE_POLICY_STOPPED
+  ;;
+ *) exit 2;;
+esac

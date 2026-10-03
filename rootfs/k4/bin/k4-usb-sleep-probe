@@ -1,0 +1,60 @@
+#!/bin/sh
+set -eu
+bb=/bin/busybox
+parent=/sys/bus/platform/devices/53f80000.usb
+child=
+for p in "$parent"/ci_hdrc.*; do [ ! -d "$p" ] || child=$p; done
+test -n "$child"
+test -f "$parent/power/wakeup"
+test -f "$child/power/wakeup"
+rail=/sys/bus/platform/devices/k4-mc13892-charge-monitor/rail_registers_raw
+test "$($bb cat /sys/block/mmcblk2/ro)" = 1
+/bin/sh /bin/k4-watchdog-probe 240 expire
+cpu=/sys/devices/system/cpu/cpufreq/policy0
+governor=$($bb cat "$cpu/scaling_governor")
+print_times=$($bb cat /sys/power/pm_print_times)
+parent_wake=$($bb cat "$parent/power/wakeup")
+child_wake=$($bb cat "$child/power/wakeup")
+cleanup() {
+    echo none >/sys/power/pm_test
+    echo "$parent_wake" >"$parent/power/wakeup"
+    echo "$child_wake" >"$child/power/wakeup"
+    echo "$governor" >"$cpu/scaling_governor"
+    echo "$print_times" >/sys/power/pm_print_times
+}
+trap cleanup EXIT
+trap 'exit 1' INT TERM
+# Compare complete rail snapshots at the same OPP, including SW1 voltage.
+echo performance >"$cpu/scaling_governor"
+test "$($bb cat "$cpu/scaling_cur_freq")" = "$($bb cat "$cpu/cpuinfo_max_freq")"
+$bb cat "$rail" >/tmp/usb-sleep-rails-before
+echo 1 >/sys/power/pm_print_times
+# Device-stage tests return without entering STOP. Check wake retention first.
+for wake in enabled disabled; do
+    echo "$wake" >"$parent/power/wakeup"
+    echo "$wake" >"$child/power/wakeup"
+    echo devices >/sys/power/pm_test
+    echo mem >/sys/power/state
+    echo USB_SLEEP_DEVICES_PASS_WAKE_$wake
+done
+echo none >/sys/power/pm_test
+for mode in --s2idle --mem; do
+    /bin/k4-dual-rtc "$mode"
+    $bb sleep 5
+    test "$($bb cat /sys/class/udc/ci_hdrc.0/state)" = configured
+    $bb ping -c 2 -W 2 192.168.210.1
+done
+$bb cat "$rail" >/tmp/usb-sleep-rails-after
+$bb cmp /tmp/usb-sleep-rails-before /tmp/usb-sleep-rails-after
+test "$($bb cat /proc/sys/kernel/tainted)" = 0
+test "$($bb cat /sys/block/mmcblk2/ro)" = 1
+! $bb grep -q '/dev/mmcblk' /proc/mounts
+h0=$($bb dd if=/dev/mmcblk2 bs=1048576 count=1 2>/dev/null | $bb sha256sum)
+h16=$($bb dd if=/dev/mmcblk2 bs=1048576 skip=16 count=1 2>/dev/null | $bb sha256sum)
+echo "$h0"
+echo "$h16"
+test "${h0%% *}" = c6f7f713bb57aad2203df61ffc348103848e41dea9451ae4b86c98ddd6862265
+test "${h16%% *}" = 4613632586282e084c1e148d63be1ee6d800f14d6691e9dc1d5628d3921e5a18
+$bb cat /sys/power/suspend_stats/success /sys/power/suspend_stats/fail
+$bb dmesg | $bb grep 'PHY supply vote'
+echo K4_USB_SLEEP_PASS

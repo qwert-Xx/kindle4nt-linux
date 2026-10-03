@@ -1,0 +1,81 @@
+#!/bin/sh
+# RAM-only Wi-Fi service and readiness interface. All logs remain private.
+set -eu
+umask 077
+BB=/bin/busybox
+mode=${1:-start}
+case "$mode" in start|--resume|--service) ;; *) exit 2 ;; esac
+ready=/tmp/k4-wifi-ready
+request=/var/run/k4-wifi-renew
+dhcp_pidfile=/var/run/k4-udhcpc.pid
+driver=$($BB cat /etc/k4-wifi-driver 2>/dev/null || echo wext)
+case "$driver" in wext|nl80211) ;; *) echo K4_WIFI_INVALID_DRIVER; exit 2 ;; esac
+
+if [ "$mode" != --service ]; then
+	if [ "$mode" = start ]; then
+		/bin/sh /bin/k4-wifi-connect --service >> /tmp/k4-wifi-service.log 2>&1 < /dev/null &
+	else
+		$BB touch "$request"
+	fi
+	count=0
+	while [ -e "$request" ] || [ ! -s "$ready" ] ||
+	      [ "$($BB cat /sys/class/net/wlan0/carrier 2>/dev/null || echo 0)" != 1 ]; do
+		count=$((count + 1))
+		[ "$count" -lt 40 ] || { echo K4_WIFI_READY_TIMEOUT; exit 1; }
+		$BB sleep 1
+	done
+	echo K4_WIFI_CONNECTED
+	exit 0
+fi
+
+# Kernel releases this lock on exit; children must not inherit fd 9.
+exec 9>/var/run/k4-wifi.lock
+$BB flock -n 9 || exit 0
+test -s /etc/wpa_supplicant.conf
+echo $$ > /var/run/k4-wifi-service.pid
+echo "K4_WIFI_DRIVER=$driver"
+wpa=0
+dhcp=0
+previous=-1
+alive() { [ "$1" -gt 0 ] && kill -0 "$1" 2>/dev/null; }
+cleanup() {
+	trap - EXIT
+	if alive "$dhcp"; then kill -TERM "$dhcp"; wait "$dhcp" || true; fi
+	if alive "$wpa"; then kill -TERM "$wpa"; wait "$wpa" || true; fi
+	interface=wlan0 /bin/sh /bin/udhcpc-wifi deconfig
+	$BB rm -f /var/run/k4-wifi-service.pid /var/run/k4-wpa.pid "$dhcp_pidfile"
+}
+trap cleanup EXIT
+trap 'exit 0' INT TERM
+while :; do
+	if ! alive "$wpa"; then
+		$BB rm -f "$ready"
+		$BB ifconfig wlan0 up
+		/bin/wpa_supplicant -D "$driver" -i wlan0 -c /etc/wpa_supplicant.conf > /tmp/k4-wpa.log 2>&1 9>&- &
+		wpa=$!
+		echo "$wpa" > /var/run/k4-wpa.pid
+		previous=-1
+	fi
+	if ! alive "$dhcp"; then
+		$BB rm -f "$ready" "$dhcp_pidfile"
+		# No -q/-n: retain timers and retry after temporary DHCP failure.
+		$BB udhcpc -f -R -i wlan0 -s /bin/udhcpc-wifi -p "$dhcp_pidfile" -t 4 -T 3 -A 5 > /tmp/k4-udhcpc.log 2>&1 9>&- &
+		dhcp=$!
+		previous=-1
+	fi
+	# udhcpc installs signal handlers before writing this pidfile.
+	if [ "$($BB cat "$dhcp_pidfile" 2>/dev/null || echo 0)" = "$dhcp" ]; then
+		carrier=$($BB cat /sys/class/net/wlan0/carrier 2>/dev/null || echo 0)
+		if [ "$carrier" != "$previous" ] || [ -e "$request" ]; then
+			$BB rm -f "$ready"
+			if [ "$carrier" = 1 ]; then
+				kill -USR1 "$dhcp" 2>/dev/null || true
+				$BB rm -f "$request"
+			fi
+			# A transient link loss does not invalidate a DHCP lease. Keep
+			# address/timers until expiry or NAK; renew after carrier returns.
+			previous=$carrier
+		fi
+	fi
+	$BB sleep 1
+done

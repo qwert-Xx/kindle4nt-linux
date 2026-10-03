@@ -1,0 +1,36 @@
+#!/bin/sh
+# Healthy PxP lifecycle before/after real STOP; hardware faults remain host tests.
+set -eu
+bb=/bin/busybox
+p=/sys/bus/platform/devices/pxp-client-test
+cpu=/sys/devices/system/cpu/cpufreq/policy0
+test "$($bb cat /sys/block/mmcblk2/ro)" = 1
+if $bb grep -q /dev/mmcblk /proc/mounts; then exit 1; fi
+/bin/sh /bin/k4-watchdog-probe 300 expire
+previous=$($bb cat "$cpu/scaling_governor")
+trap 'echo "$previous" > "$cpu/scaling_governor"' EXIT
+trap 'exit 1' INT TERM
+echo performance > "$cpu/scaling_governor"
+run() {
+    echo large > "$p/run"
+    $bb cat "$p/result"
+    $bb grep -q '^attempted=1 result=0 frames=12 pixels=4324864 max_error=' "$p/result"
+    $bb grep -q 'retained=0 fault=0 clocks_retained=0 park_error=0$' "$p/result"
+}
+run
+/bin/k4-dual-rtc --mem
+run
+$bb grep -q 'completed=24 irqs=24 allocations=2 releases=2' "$p/result"
+test "$($bb cat /sys/power/suspend_stats/success)" = 1
+test "$($bb cat /sys/power/suspend_stats/fail)" = 0
+test "$($bb cat /sys/class/udc/ci_hdrc.0/state)" = configured
+$bb ping -c 2 -W 2 192.168.210.1
+test "$($bb cat /proc/sys/kernel/tainted)" = 0
+test "$($bb cat /sys/block/mmcblk2/ro)" = 1
+h0=$($bb dd if=/dev/mmcblk2 bs=1048576 count=1 2>/dev/null | $bb sha256sum)
+h16=$($bb dd if=/dev/mmcblk2 bs=1048576 skip=16 count=1 2>/dev/null | $bb sha256sum)
+echo "$h0"
+echo "$h16"
+test "${h0%% *}" = c6f7f713bb57aad2203df61ffc348103848e41dea9451ae4b86c98ddd6862265
+test "${h16%% *}" = 4613632586282e084c1e148d63be1ee6d800f14d6691e9dc1d5628d3921e5a18
+echo K4_PXP_PARK_STOP_PASS

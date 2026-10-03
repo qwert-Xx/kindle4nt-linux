@@ -1,0 +1,61 @@
+#!/bin/sh
+# Coldplug unbound SPI devices through standard module aliases. No display I/O.
+set -eu
+bb=${K4_SPI_COLDPLUG_BB:-/bin/busybox}
+case "$#" in
+	0) spi_dir=/sys/bus/spi/devices; modprobe=/sbin/modprobe ;;
+	2) spi_dir=$1; modprobe=$2 ;;
+	*) echo 'Usage: k4-spi-coldplug [SPI_SYSFS_DIRECTORY MODPROBE_PROGRAM]' >&2; exit 2 ;;
+esac
+if [ ! -d "$spi_dir" ] || [ ! -x "$modprobe" ]; then
+	echo SPI_MODULES_PREREQUISITE_MISSING
+	exit 2
+fi
+attempted=0
+loaded=0
+skipped=0
+failed=0
+for node in "$spi_dir"/*; do
+	[ -d "$node" ] || continue
+	if [ -e "$node/driver" ]; then
+		skipped=$((skipped + 1))
+		continue
+	fi
+	if [ ! -r "$node/modalias" ]; then
+		echo "SPI_MODULE_ALIAS_MISSING $node"
+		failed=$((failed + 1))
+		continue
+	fi
+	alias=$("$bb" cat "$node/modalias")
+	case "$alias" in
+		spi:*) name=${alias#spi:} ;;
+		*) name= ;;
+	esac
+	case "$name" in
+		''|*[!a-zA-Z0-9_.-]*)
+			echo "SPI_MODULE_ALIAS_INVALID $node"
+			failed=$((failed + 1))
+			continue ;;
+	esac
+	attempted=$((attempted + 1))
+	echo "SPI_MODULE_REQUEST $node $alias"
+	# Each userspace request has a deadline; kernel watchdog remains the fallback
+	# for uninterruptible kernel faults. This script never feeds or opens it.
+	if "$bb" timeout 10 "$modprobe" "$alias"; then
+		if [ -e "$node/driver" ]; then
+			loaded=$((loaded + 1))
+			echo "SPI_MODULE_BOUND $node"
+		else
+			failed=$((failed + 1))
+			echo "SPI_MODULE_BIND_FAILED $node"
+		fi
+	else
+		failed=$((failed + 1))
+		echo "SPI_MODULE_LOAD_FAILED $node"
+	fi
+done
+if [ "$failed" -ne 0 ]; then
+	echo "SPI_MODULES_FAILED attempted=$attempted loaded=$loaded skipped=$skipped failed=$failed"
+	exit 1
+fi
+echo "SPI_MODULES_READY attempted=$attempted loaded=$loaded skipped=$skipped"

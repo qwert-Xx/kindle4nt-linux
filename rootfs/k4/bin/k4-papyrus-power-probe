@@ -1,0 +1,73 @@
+#!/bin/busybox sh
+# After host approval of initial pin takeover. "cycle" additionally enables HV.
+set -eu
+BB=/bin/busybox
+mode=${1:-baseline}
+case "$mode" in baseline|cycle|awake-cycle) ;; *) exit 2 ;; esac
+p=/sys/bus/i2c/devices/1-0048
+t=/sys/bus/platform/devices/papyrus-power-test
+/bin/sh /bin/k4-watchdog-probe 120 expire
+cleanup() {
+	ret=$?
+	echo N > /sys/module/k4_pm_trace/parameters/enabled
+	if [ "$ret" != 0 ] && [ -w "$t/run" ]; then
+		echo release > "$t/run" || true
+	fi
+}
+trap cleanup EXIT
+trap 'exit 1' INT TERM
+if [ ! -e "$p/acquisition_state" ] || [ ! -w "$t/run" ]; then
+    echo 'Papyrus supplier or test consumer did not bind'
+    exit 1
+fi
+$BB uname -a
+h=
+for candidate in /sys/class/hwmon/hwmon*; do
+    if [ "$($BB cat "$candidate/name")" = k4_papyrus ]; then h=$candidate; fi
+done
+[ -n "$h" ]
+check() {
+    $BB cat "$h/temp1_input" "$p/acquisition_state" "$p/rail_state" "$t/result"
+    $BB grep -q 'awake=1 display=0 vcom=0 power_error=0 shutdown_error=0$' "$p/acquisition_state"
+    $BB grep -q 'display_held=0 vcom_held=0 ' "$t/result"
+}
+cycle() {
+    echo Y > /sys/module/k4_pm_trace/parameters/enabled
+    if echo cycle > "$t/run"; then ret=0; else ret=$?; fi
+    echo N > /sys/module/k4_pm_trace/parameters/enabled
+    $BB cat "$t/result" "$p/acquisition_state"
+    if [ "$ret" != 0 ]; then echo release > "$t/run" || true; exit "$ret"; fi
+}
+check
+echo N > /sys/module/k4_pm_trace/parameters/enabled
+if [ "$mode" = cycle ] || [ "$mode" = awake-cycle ]; then cycle; check; fi
+if [ "$mode" != awake-cycle ]; then
+    /bin/sh /bin/k4-pm-s2idle-probe
+    check
+fi
+if [ "$mode" = cycle ]; then
+    cycle
+    check
+    $BB grep -q '^result=0 cycles=2 ' "$t/result"
+elif [ "$mode" = awake-cycle ]; then
+    $BB grep -q '^result=0 cycles=1 ' "$t/result"
+else
+    $BB grep -q '^result=-61 cycles=0 ' "$t/result"
+fi
+/bin/sh /bin/k4-wifi-connect --resume
+$BB cat /sys/power/suspend_stats/success /sys/power/suspend_stats/fail
+expected_suspend=1
+[ "$mode" != awake-cycle ] || expected_suspend=0
+[ "$($BB cat /sys/power/suspend_stats/success)" = "$expected_suspend" ]
+[ "$($BB cat /sys/power/suspend_stats/fail)" = 0 ]
+[ "$($BB cat /sys/class/udc/ci_hdrc.0/state)" = configured ]
+$BB ping -c 2 -W 2 192.168.210.1
+if $BB grep -q '/dev/mmcblk' /proc/mounts; then exit 1; fi
+for b in /sys/class/block/mmcblk*; do [ "$($BB cat "$b/ro")" = 1 ]; done
+hash0=$($BB dd if=/dev/mmcblk2 bs=1048576 count=1 2>/dev/null | $BB sha256sum)
+hash16=$($BB dd if=/dev/mmcblk2 bs=1048576 skip=16 count=1 2>/dev/null | $BB sha256sum)
+echo "$hash0"
+echo "$hash16"
+[ "${hash0%% *}" = c6f7f713bb57aad2203df61ffc348103848e41dea9451ae4b86c98ddd6862265 ]
+[ "${hash16%% *}" = 4613632586282e084c1e148d63be1ee6d800f14d6691e9dc1d5628d3921e5a18 ]
+echo PAPYRUS_POWER_PASS mode="$mode"
