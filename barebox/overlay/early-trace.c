@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: GPL-2.0-only
 /* ROM RAM diagnostic only: breadcrumbs in the zqcal-reserved OCRAM gap. */
 #include <common.h>
 #include "zqcal-trace.h"

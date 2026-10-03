@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
+/* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef K4_ZQCAL_CONFIG_H
 #define K4_ZQCAL_CONFIG_H
 /* The shipped LPDDR1 SPL uses +1 fields, despite the RM's M1 labels. */

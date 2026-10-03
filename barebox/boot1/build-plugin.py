@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Stock-sized i.MX50 ROM plugin; offline only."""
 import hashlib,importlib.util,json,os,pwd,struct,subprocess,sys
 from pathlib import Path

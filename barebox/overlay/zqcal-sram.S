@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
+/* SPDX-License-Identifier: GPL-2.0-only */
 /* K4 NT only. Cache traversal derived from ocram-imx50-cache.S and the original
  * mx50_suspend.S (Copyright 2010-2012 Amazon.com, Inc.).
  * Calibration search matches boot0 SPL f80085a4, LPDDR1 argument 1.

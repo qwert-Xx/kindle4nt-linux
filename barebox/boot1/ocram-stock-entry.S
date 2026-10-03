@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
+/* SPDX-License-Identifier: GPL-2.0-only */
 /* Stock ROM stack/return ABI, frozen USB register sequence in compact records. */
 .syntax unified
 .arm

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: GPL-2.0-only
 /* ROM-loaded Kindle 4 NT diagnostic; never writes persistent storage. */
 #include <common.h>
 #include <command.h>

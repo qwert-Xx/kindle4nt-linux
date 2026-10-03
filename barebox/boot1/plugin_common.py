@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Offline wrapper of the already built barebox PBL; no device access."""
 import hashlib,json,struct,subprocess,sys,os,pwd
 from pathlib import Path
