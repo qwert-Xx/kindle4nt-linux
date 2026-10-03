@@ -22,13 +22,13 @@ python3 project/userspace/maintenance.py --source /absolute/mmc-utils-1.0.tar.gz
 先准备完整主机备份和“下+复位→ROM→USB加载Linux RAM”恢复链，确认容量、枚举与剩余 guard 时间。既有 RAM 维护根保持存储只读，部署脚本显式临时解除后恢复。当前布局 p1 起始65536、大小3760128扇区；不改 MBR/前32MiB/boot0。这里 /dev/mmcblk2 是已验证枚举，换设备必须重新确认。root tar 与维护包先在 RAM 校验SHA。
 
 1. `project/tools/deploy-emmc-root`：静态 mke2fs 格式化 p1 → mount → 解包 tar → sync → umount → 只读重挂载，以 /etc/k4-rootfs.sha256 校验全部文件 → 恢复主设备/p1只读。调用 `/bin/busybox sh deploy-emmc-root rootfs.tar.gz <SHA256> maintenance-directory`。挂载点在 /tmp；脚本不写 boot区、不延长有限 guard。
-2. 按 [boot1说明](BAREBOX-BOOT1.md) 备份完整 boot1，写入离线核验的 v7 镜像，保留尾部并完整读回比较，恢复 force_ro 与 blockdev RO。不要写 boot0。
+2. 按 [boot1说明](BAREBOX-BOOT1.md) 备份完整 boot1，写入离线核验的 v8 镜像，保留尾部并完整读回比较，恢复 force_ro 与 blockdev RO。不要写 boot0。
 3. 最后单独激活：主设备暂时 setrw，`mmc extcsd write 179 0x50 /dev/mmcblk2`，重新 extcsd read 核对0x50，setro。不改 BOOT_BUS_WIDTH、fuse 或永久保护。
-4. 正常 reboot 观察 v7 自动读取 /boot/zImage 与 /boot/imx50-kindle-k4.dtb，root=/dev/mmcblk2p1 rw rootwait；核对模块/固件、显示、网络、看门狗与文件SHA。保留已知可用 kernel/DTB 的 .prev；模块也须与 kernel 完整匹配。
+4. 正常 reboot 观察 v8 自动读取 /boot/zImage 与 /boot/imx50-kindle-k4.dtb，root=/dev/mmcblk2p1 rw rootwait；核对模块/固件、显示、网络、看门狗与文件SHA。保留已知可用 kernel/DTB 的 .prev；模块也须与 kernel 完整匹配。
 
 ## 回退
 
-按住“下”配合复位进入 ROM，再由主机 USB 加载已验证 barebox/Linux RAM；或在 v7 两秒采样窗口按住“上”，进入 USB/YMODEM 主机加载，显式上传 kernel/DTB/RAM根并 bootm。Linux RAM 中用标准 mmc 修改179（0x48选择boot0），核对并恢复RO；p1已被替换时，改179本身不会恢复原厂root，须用备份重写p1或修复新的p1内容。不得把改179当作自动完整回滚。完整 boot1 读回流程见链接，不靠 guard 超时进行部署恢复。
+按住“下”配合复位进入 ROM，再由主机 USB 加载已验证 barebox/Linux RAM；或向 v8 USB 串口发送 Ctrl-C 中断5秒窗口，进入 shell/YMODEM 主机加载，显式上传 kernel/DTB/RAM根并 bootm。Linux RAM 中用标准 mmc 修改179（0x48选择boot0），核对并恢复RO；p1已被替换时，改179本身不会恢复原厂root，须用备份重写p1或修复新的p1内容。不得把改179当作自动完整回滚。完整 boot1 读回流程见链接，不靠 guard 超时进行部署恢复。
 
 ## 验证范围
 

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # K4 local package: wrap the already validated static 2.12 build.
-# Binary inputs come from porting/build-wifi-userspace.sh; no musl recompilation.
+# Binary inputs come from project/userspace/wifi.sh; no musl recompilation.
 pkgname=wpa_supplicant
 pkgver=2.12
 pkgrel=0 # K4 local package revision, source selected by @k4 repository tag.
