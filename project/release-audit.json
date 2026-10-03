@@ -1,0 +1,57 @@
+{
+  "refs": [
+    "refs/heads/draft/public"
+  ],
+  "remotes": [],
+  "reachable_blobs": 282,
+  "findings": [
+    {
+      "oid": "ee548d51aed375adeac4390d6676e2b8f5ba21aa",
+      "file": "project/audit_public.py",
+      "object_type": "blob",
+      "category": "local_path",
+      "line": 7
+    },
+    {
+      "oid": "0861a51040d0d3617e9abc9f28c8709d4d042899",
+      "file": "project/audit_release.py",
+      "object_type": "blob",
+      "category": "local_path",
+      "line": 20
+    },
+    {
+      "oid": "a53f33cdf73c9698567ff212012a614390b960ff",
+      "file": "rootfs/k4/etc/init.d/rcS.k4-base",
+      "object_type": "blob",
+      "category": "mac",
+      "line": 48
+    },
+    {
+      "oid": "a53f33cdf73c9698567ff212012a614390b960ff",
+      "file": "rootfs/k4/etc/init.d/rcS.k4-base",
+      "object_type": "blob",
+      "category": "mac",
+      "line": 49
+    },
+    {
+      "oid": "be022bfc43f5122f97e7b13fb43d715f65a31808",
+      "file": "project/audit_release.py",
+      "object_type": "blob",
+      "category": "local_path",
+      "line": 19
+    }
+  ],
+  "crlf": [],
+  "binary_or_private_files": [],
+  "missing_spdx": [],
+  "missing_copyright": [],
+  "missing_license_texts": [],
+  "unexpected_identities": [],
+  "manual_copyright_review_required": true,
+  "audited_commit": "98f6a75cb0d79f7687ca372fb140e17dda6fef96",
+  "reviewed_findings": [
+    "Scanner regex literals in audit_public.py and audit_release.py",
+    "Fixed locally administered USB gadget address defaults in rcS.k4-base; not extracted device MACs"
+  ],
+  "unresolved_privacy_findings": []
+}

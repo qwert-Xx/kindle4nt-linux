@@ -155,19 +155,96 @@
     },
     "busybox": {
       "sha256": "e8aa8eaa1d243ab87f25d20e62d940f01a68d68db572db65ba331145b3886f5d",
-      "two_clean_builds_byte_equal": true
+      "two_clean_builds_byte_equal": true,
+      "deployed_busybox_base_comparison": {
+        "byte_identical": false,
+        "only_build_id_diff": true,
+        "normalized_sha256": "c0767d51f76378ab4307545fe43cc125446ceb3e84fc8068afd303e94674731d",
+        "build_id_ranges": [
+          [
+            292,
+            20
+          ]
+        ],
+        "differing_offsets": [
+          292,
+          293,
+          294,
+          295,
+          296,
+          297,
+          298,
+          299,
+          300,
+          301,
+          302,
+          303,
+          304,
+          305,
+          306,
+          307,
+          308,
+          309,
+          310,
+          311
+        ],
+        "differing_offset_count": 20,
+        "same_length": true
+      }
     },
     "busybox-modutils": {
       "sha256": "542d193b18327c441730ede55d4e3981489fd01e2ac7bf89b25ccedfbc39fcc4",
-      "two_clean_builds_byte_equal": true
+      "two_clean_builds_byte_equal": true,
+      "deployed_busybox_base_comparison": {
+        "byte_identical": true,
+        "only_build_id_diff": false,
+        "normalized_sha256": "0060236001d3f00617da7f39d9fecebbc0e922a45cff8316a636fe0b5e603162",
+        "build_id_ranges": [
+          [
+            292,
+            20
+          ]
+        ],
+        "differing_offsets": [],
+        "differing_offset_count": 0,
+        "same_length": true
+      }
     },
     "dropbear": {
       "sha256": "0c65b871683e5441d79a18bcc31cf4be1bc899dcc94b5f8a7ff6b768b3383333",
-      "two_clean_builds_byte_equal": true
+      "two_clean_builds_byte_equal": true,
+      "deployed_busybox_base_comparison": {
+        "byte_identical": true,
+        "only_build_id_diff": false,
+        "normalized_sha256": "7b6d368e991efb1090704ccb18728f351942409c464fd2a35cd3c0a1256d912b",
+        "build_id_ranges": [
+          [
+            292,
+            20
+          ]
+        ],
+        "differing_offsets": [],
+        "differing_offset_count": 0,
+        "same_length": true
+      }
     },
     "dropbearkey": {
       "sha256": "32956f88ed1b01d3f862cdf273cb9beece4f0e175f1f4a418e19cc04b166ee25",
-      "two_clean_builds_byte_equal": true
+      "two_clean_builds_byte_equal": true,
+      "deployed_busybox_base_comparison": {
+        "byte_identical": true,
+        "only_build_id_diff": false,
+        "normalized_sha256": "1f875e313d892e945aab61669dd39a9085bf8a0bf724dc114a7c4ecbd688d2aa",
+        "build_id_ranges": [
+          [
+            292,
+            20
+          ]
+        ],
+        "differing_offsets": [],
+        "differing_offset_count": 0,
+        "same_length": true
+      }
     },
     "regulatory.db": {
       "sha256": "7e236caecd939c8ec98be4870bf30422f28ffef2565a38aaaa2d9ddabd0c2641",
@@ -225,7 +302,7 @@
     ],
     "output_root_sha256": "33b02a68e32a83392a24eb98f90301b0ec6730770b5103b10073d58a49009fb4",
     "known_limits": [
-      "Reference host UID 1000/toolchain prerequisites; official Alpine packages are locked authenticated APK inputs, not rebuilt aports",
+      "Reference Ubuntu toolchain prerequisites; official Alpine packages are locked authenticated APK inputs, not rebuilt aports",
       "No PID1/OpenRC or device test on new source-root bytes",
       "Different user/private keys or device firmware yield different hashes; do not compare them to the reference source-root hash"
     ]
@@ -236,7 +313,7 @@
     "list": "COPYRIGHT-PROVENANCE.md"
   },
   "history": {
-    "commits_rewritten": 21,
+    "commits_rewritten": 22,
     "identity": "qwert-Xx <128706845+qwert-Xx@users.noreply.github.com>",
     "pre_rewrite_bundle_external": true,
     "old_identity_refs_retained": false
