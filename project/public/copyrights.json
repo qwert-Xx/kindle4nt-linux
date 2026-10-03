@@ -120,5 +120,9 @@
   "rootfs/alpine/etc/rc.conf": [
     "Copyright (c) 2007-2008, Roy Marples <roy@marples.name>",
     "Copyright (c) 2007-2023, the OpenRC authors"
+  ],
+  "porting/barebox-emmc/board.patch": [
+    "2007 Sascha Hauer, Pengutronix",
+    "2017 Alexander Kurz <akurz@blala.de>"
   ]
 }

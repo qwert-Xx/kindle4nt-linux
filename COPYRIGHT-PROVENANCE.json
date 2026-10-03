@@ -149,6 +149,15 @@
     "status": "retained; current export awaits owner review"
   },
   {
+    "file": "porting/barebox-emmc/board.patch",
+    "copyright_lines": [
+      "2007 Sascha Hauer, Pengutronix",
+      "2017 Alexander Kurz <akurz@blala.de>"
+    ],
+    "basis": "Retained public attribution, current source headers and upstream notices",
+    "status": "retained; current export awaits owner review"
+  },
+  {
     "file": "project/debug-patches/02-k4-trace-hooks.patch",
     "copyright_lines": [
       "Copyright (C) 1991, 1992  Linus Torvalds",
