@@ -17,7 +17,7 @@ Only **D01100** is supported. Evidence comes from one device; broader hardware v
 | Display and suspend | first refresh, RTC STOP at both CPU operating points, retained memory and refresh after resume | physical rail/power measurement, long sleep and many cycles |
 | Network and time | WPA2-PSK/CCMP, DHCP, USB console/SSH, NTP and normal shutdown SRTC writeback, HTTPS apk update | other Wi-Fi modes, physical unplug/replug, apk upgrade |
 | Recovery | Down/reset ROM path and RAM maintenance workflow; v8 serial Ctrl-C interruption | five-second window end and host enumeration timing; historical RAM guard-to-ROM cause unresolved |
-| Release builds | see [current host validation](project/docs/RELEASE-VALIDATION.md) | source builds with a user key/private inputs have different root hashes; no new hardware acceptance |
+| Release builds | see [current host validation](project/docs/RELEASE-VALIDATION.md) | source builds with private inputs have different root hashes; no new hardware acceptance |
 
 ## Prepare
 
@@ -25,9 +25,13 @@ Use a Linux build host (reference: Ubuntu 24.04, Python 3.12, ARM hard-float GCC
 
 Keep an external cache, external build directory and external private-input directory. Extract firmware/calibration, panel waveforms and boot0/idme from **your own device/backups** as described in [THIRD-PARTY.md](THIRD-PARTY.md). Supply Wi-Fi configuration and SSH authorization/identity separately if needed. No images, APKs, root archives, credentials, private signing keys or proprietary firmware are distributed in this repository.
 
+## Alpine networking
+
+Official wpa_supplicant 2.11-r4 and wpa_cli OpenRC services, networking and ifupdown-ng own networking. WPACLI_OPTS enables Alpine default wpa_cli.sh to notify DHCP on connection changes. wlan0 uses DHCP; usb0 is static 169.254.212.2/16. conf.d dependencies follow K4 coldplug. Stage private credentials externally as device-inputs/etc/wpa_supplicant.conf; the root installs them at /etc/wpa_supplicant/wpa_supplicant.conf with mode 600. Only Alpine removes the K4 Wi-Fi supervisor; BusyBox maintenance roots keep it. [Configuration, existing device results and offline comparison](project/docs/ALPINE-STANDARD-NETWORK-OFFLINE-20261003.md).
+
 ## Quick start
 
-One host-only command downloads locked upstream inputs, verifies hashes and Linux signatures, applies patches and builds Linux, barebox, userspace, a user-signed WPA APK and the Alpine root:
+One host-only command downloads locked upstream inputs, verifies hashes and Linux signatures, applies patches and builds Linux, barebox, userspace and the Alpine root with official signed WPA APKs:
 
 ```sh
 python3 project/release.py --cache /external/source-cache --out /external/new-build --private-inputs /external/device-inputs

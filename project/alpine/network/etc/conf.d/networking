@@ -1,0 +1,2 @@
+rc_need='k4-coldplug wpa_supplicant'
+rc_after='wpa_supplicant'

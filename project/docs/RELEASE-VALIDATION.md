@@ -1,4 +1,9 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
+# Current standard networking validation
+
+Official Alpine OpenRC networking is now the recipe default. See [77-package verification, two identical roots and recorded device configuration comparison](ALPINE-STANDARD-NETWORK-OFFLINE-20261003.md). This offline work does not access or redeploy the device. Earlier results below describe historical roots.
+
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
 # Current Wi-Fi 2.11 offline validation
 
 The current recipe uses official Alpine main 2.11-r4 and unmodified upstream 2.11 for BusyBox roots. Local WPA packaging/signing has been removed. See [new artifacts and verification](WIFI-211-OFFLINE-20261003.md). Prior reproduction results below describe superseded inputs and are retained as historical evidence.

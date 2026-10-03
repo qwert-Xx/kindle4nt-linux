@@ -17,7 +17,7 @@
 | 显示与待机 | 首次刷新、两档 CPU 的 RTC STOP、内存保持及醒后刷新 | 实体电源轨/功耗、长时及大量循环 |
 | 网络与时间 | WPA2-PSK/CCMP、DHCP、USB 串口/SSH、NTP、正常关机 SRTC 回写与 HTTPS apk update | 其他无线模式、实体拔插、apk upgrade |
 | 恢复 | 下键/复位 ROM 与 RAM 维护路径、v8 串口 Ctrl-C | 五秒窗口末尾和主机枚举时序；历史 RAM guard 到 ROM 根因未定 |
-| 公开构建 | [本轮主机结果](project/docs/RELEASE-VALIDATION.md) | 用户自己的密钥/私有输入会改变根 tar 哈希，不等于新增硬件验收 |
+| 公开构建 | [本轮主机结果](project/docs/RELEASE-VALIDATION.md) | 用户自己的私有输入会改变根 tar 哈希，不等于新增硬件验收 |
 
 ## 准备
 
@@ -25,15 +25,19 @@
 
 缓存、构建输出和私有输入均置于仓库外。按照 [THIRD-PARTY.md](THIRD-PARTY.md) 从自有设备/备份提取 AR6003 固件/校准、面板波形及 boot0/idme；无线配置、SSH 授权与主机身份另行提供。仓库不发布任何镜像、APK、根 tar、凭据、私钥或专有固件。
 
+## Alpine 标准网络
+
+启用官方wpa_supplicant 2.11-r4、wpa_cli、networking与ifupdown-ng；WPACLI_OPTS使用Alpine默认wpa_cli.sh，在连接变化时通知DHCP。wlan0 DHCP、usb0静态169.254.212.2/16，conf.d依赖K4 coldplug。外置device-inputs/etc/wpa_supplicant.conf写入根默认子目录/etc/wpa_supplicant/wpa_supplicant.conf（600），凭据不入Git。仅Alpine删除K4 Wi-Fi supervisor，BusyBox维护根保持。[配置、既有设备验证和离线比对](project/docs/ALPINE-STANDARD-NETWORK-OFFLINE-20261003.md)。
+
 ## 快速开始
 
-一条主机构建命令：下载清单输入、校验哈希与 Linux 签名、应用补丁，构建 Linux、barebox、用户态、用户自己签名的 WPA APK 与 Alpine 根：
+一条主机构建命令：下载清单输入、校验哈希与 Linux 签名、应用补丁，构建 Linux、barebox、用户态、官方签名 WPA APK 与 Alpine 根：
 
 ```sh
 python3 project/release.py --cache /external/source-cache --out /external/new-build --private-inputs /external/device-inputs
 ```
 
-已有核验缓存时增加 `--offline`。可用 `--signing-key /external/your-key.pem` 指定自己的密钥；否则在外部输出目录生成，公钥安装至根的 `/etc/apk/keys`。保存密钥以便后续更新。冻结 Alpine 索引可能已被镜像更新；应保留核验缓存，不静默换版本。
+已有核验缓存时增加 `--offline`。Wi-Fi 使用官方main 2.11-r4，无需用户签名密钥。冻结 Alpine 索引可能已被镜像更新；应保留核验缓存，不静默换版本。
 
 部署必须另行手动操作：Ctrl-C 或下键复位进入 ROM → USB barebox → RAM 维护 → 完整备份并核验 → 写入/读回核验 boot1 与 p1 → 激活并重启。先完整阅读 [boot1](project/docs/BAREBOX-BOOT1.md) 与 [Alpine 部署](project/docs/ALPINE-ROOT.md)，绝不能格式化当前正在运行的 p1。构建命令不部署。
 

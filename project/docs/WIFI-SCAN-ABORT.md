@@ -1,4 +1,9 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
+## 标准网络服务与官方2.11已验证
+
+设备证据7f106e6c3：官方OpenRC supplicant/wpa_cli + networking/ifupdown-ng，五轮明确中止自动恢复、20挂起0失败、10次DHCP释放与重取租，PID不变。默认wpa_cli.sh向标准DHCP客户端发USR1/USR2，不新增扫描补丁或钩子；接口及离线配方见ALPINE-STANDARD-NETWORK-OFFLINE-20261003.md。仅Alpine服务替换，BusyBox保持K4原服务。
+
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
 # 扫描中止结论：采用官方 wpa_supplicant 2.11
 
 2026-10-03 用户决定直接采用 2.11 并彻底移除扫描中止补丁及其专用测试，不设观察期。

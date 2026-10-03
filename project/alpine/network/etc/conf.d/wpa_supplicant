@@ -1,0 +1,5 @@
+wpa_supplicant_args='-D nl80211'
+wpa_supplicant_if='wlan0'
+wpa_supplicant_conf='/etc/wpa_supplicant/wpa_supplicant.conf'
+wpa_supplicant_dbus=no
+rc_need='k4-coldplug hwclock'

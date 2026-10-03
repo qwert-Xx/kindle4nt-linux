@@ -1,7 +1,12 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
+# 当前网络配方：Alpine标准服务
+
+当前根与证据以 [标准网络交付](ALPINE-STANDARD-NETWORK-OFFLINE-20261003.md) 为准；下面旧交付SHA为历史记录。
+
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
 # Alpine 3.24.2 armv7 官方 Wi-Fi 根配方
 
-仅发布配方；固件、校准、波形、凭据、SSH身份和产物不入Git。官方 main 的 wpa_supplicant 和 wpa_supplicant-openrc 固定2.11-r4，APK/SHA见 packages.lock.json 与 PACKAGES.tsv。无需本地仓库、用户签名密钥或本地APK构建。K4服务使用 /sbin/wpa_supplicant 和 /sbin/wpa_cli，发行版Wi-Fi服务不启用。
+仅发布配方；固件、校准、波形、凭据、SSH身份和产物不入Git。官方 main 的 wpa_supplicant 和 wpa_supplicant-openrc 固定2.11-r4，APK/SHA见 packages.lock.json 与 PACKAGES.tsv。无需本地仓库、用户签名密钥或本地APK构建。使用官方OpenRC wpa_supplicant、wpa_cli与networking/ifupdown-ng；WPACLI_OPTS启用默认动作脚本。配置、依赖及验证见 ALPINE-STANDARD-NETWORK-OFFLINE-20261003.md。凭据放默认子目录，600；仅Alpine根删除K4 Wi-Fi supervisor，BusyBox根保持。
 
 kindle UID1000、LF、纯离线组装。download.py取得锁定输入；build.py用官方签名索引和包、--no-network/--no-scripts安装。内核、方案A DTB和23模块须匹配 kernel.lock.json。BusyBox tar为外部私有输入。
 

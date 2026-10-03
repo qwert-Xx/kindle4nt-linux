@@ -78,6 +78,13 @@
       "index_checksum": "Q1lH+7YkNDOTdHSljL0RL9zk/GXYo="
     },
     {
+      "name": "bridge",
+      "version": "1.5-r5",
+      "file": "bridge-1.5-r5.apk",
+      "sha256": "fe1081588fc302357cbda1a4bbe87d417a18f785ee9c9fdf81bbba8b18301490",
+      "index_checksum": "Q1JP/I3sCBL+7xUKrJRKgIHhNKRVU="
+    },
+    {
       "name": "busybox",
       "version": "1.37.0-r31",
       "file": "busybox-1.37.0-r31.apk",
@@ -188,6 +195,20 @@
       "file": "hexdump-2.42.3-r1.apk",
       "sha256": "de9201a4cca39165a159f87f773f885a0dc1867ee6f1570a50334485a356e6f3",
       "index_checksum": "Q1QwhjCWc0yRi+/+adanENR8Z9Ubk="
+    },
+    {
+      "name": "ifupdown-ng",
+      "version": "0.13.0-r0",
+      "file": "ifupdown-ng-0.13.0-r0.apk",
+      "sha256": "38e9b98b3ec3e6f65f929fd3e00719fb730f1de7999eb99d444b6ad6797d8c64",
+      "index_checksum": "Q1aqqJWVGz0+t6MklFX/YcD1QsMLc="
+    },
+    {
+      "name": "ifupdown-ng-wifi",
+      "version": "0.13.0-r0",
+      "file": "ifupdown-ng-wifi-0.13.0-r0.apk",
+      "sha256": "9c910c83d15f13f6e633959cbd26eb10da871556e857d915609977b47ded14f3",
+      "index_checksum": "Q1XbnJMOPqAxxmSiMW1aBosdtmNoY="
     },
     {
       "name": "iw",

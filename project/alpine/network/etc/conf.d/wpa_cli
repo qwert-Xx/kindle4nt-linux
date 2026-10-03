@@ -1,0 +1,2 @@
+WPACLI_OPTS='-i wlan0 -a /etc/wpa_supplicant/wpa_cli.sh'
+rc_need='networking'

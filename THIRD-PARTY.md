@@ -94,6 +94,9 @@ Only project source, patches, recipes and build scripts are distributed. Upstrea
 | Alpine zstd-libs | 1.5.7-r2 | BSD-3-Clause OR GPL-2.0-or-later | [upstream](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/zstd-libs-1.5.7-r2.apk) |
 | Alpine wpa_supplicant | 2.11-r4 | BSD-3-Clause | [upstream](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/wpa_supplicant-2.11-r4.apk) |
 | Alpine wpa_supplicant-openrc | 2.11-r4 | BSD-3-Clause | [upstream](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/wpa_supplicant-openrc-2.11-r4.apk) |
+| Alpine bridge | 1.5-r5 | GPL-2.0-or-later | [upstream](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/bridge-1.5-r5.apk) |
+| Alpine ifupdown-ng | 0.13.0-r0 | ISC | [upstream](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/ifupdown-ng-0.13.0-r0.apk) |
+| Alpine ifupdown-ng-wifi | 0.13.0-r0 | ISC | [upstream](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/ifupdown-ng-wifi-0.13.0-r0.apk) |
 | Alpine signed index | frozen 3.24.2 package snapshot | Alpine package metadata | [upstream](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/APKINDEX.tar.gz) |
 | QEMU host user emulation | 8.2.2+ds-0ubuntu1.18 | GPL-2.0-only | [upstream](https://archive.ubuntu.com/ubuntu/pool/universe/q/qemu/qemu-user-static_8.2.2%2bds-0ubuntu1.18_amd64.deb) |
 

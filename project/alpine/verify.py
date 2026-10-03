@@ -35,7 +35,19 @@ def verify(out):
     assert '@k4' not in (root/'etc/apk/world').read_text()+(root/'etc/apk/repositories').read_text()
     assert not (root/'var/lib/apk/k4').exists()
     assert not (root/'etc/runlevels/default/wpa_supplicant').exists()
-    assert '/sbin/wpa_supplicant' in (root/'bin/k4-wifi-connect').read_text()
+    for n in ('bin/k4-wifi-connect','bin/udhcpc-wifi','etc/init.d/k4-wifi','etc/runlevels/default/k4-wifi','etc/wpa_supplicant.conf'):
+        assert not (root/n).exists() and not (root/n).is_symlink(),n
+    assert (root/'etc/wpa_supplicant/wpa_supplicant.conf').stat().st_mode&0o777==0o600
+    assert 'wifi)' not in (root/'bin/k4-userspace-service').read_text()
+    assert 'K4_DHCP_RESOLV_FILE' not in (root/'bin/k4-userspace-service').read_text()
+    assert 'ifconfig usb0' not in (root/'etc/k4/platform-start').read_text()
+    for n in ('ifup','ifdown','ifquery'):
+        assert (root/'sbin'/n).readlink()==pathlib.Path('ifupdown')
+    for p in (pathlib.Path(__file__).parent/'network').rglob('*'):
+        if p.is_file() and not p.name.endswith('.license'):
+            assert p.read_bytes()==(root/p.relative_to(pathlib.Path(__file__).parent/'network')).read_bytes()
+    for level,n in [('boot','wpa_supplicant'),('boot','networking'),('default','wpa_cli')]:
+        assert (root/'etc/runlevels'/level/n).readlink()==pathlib.Path('/etc/init.d/'+n)
     reference=out/'busybox-source'
     same=[]
     for base in ('lib/firmware','root/.ssh','etc/dropbear'):
@@ -61,12 +73,13 @@ def verify(out):
     run(['sh','-n',out/'deploy-alpine-root'])
     for p in (root/'bin').glob('k4-*'):
         if p.is_file() and p.read_bytes()[:2]==b'#!':run(['sh','-n',p])
-    services=['k4-filesystems','k4-platform','k4-coldplug','k4-usb-ssh','k4-wifi','killprocs','mount-ro','hwclock','k4-ntpd'];graph={n:set() for n in services};declarations={}
+    services=['k4-filesystems','k4-platform','k4-coldplug','k4-usb-ssh','wpa_supplicant','networking','wpa_cli','killprocs','mount-ro','hwclock','k4-ntpd','localmount','hostname','root','fsck','modules'];graph={n:set() for n in services};declarations={}
     # Source declarations only in a host shell, never call service start/stop.
     for n in services:
         p=root/'etc/init.d'/n;run(['sh','-n',p])
-        script='for op in need before after use want provide; do eval "$op() { echo $op \"\\$@\"; }"; done\nkeyword() { :; }\n. "$1"\ndepend\n'
-        text=run(['sh','-c',script,'deps',p]);declarations[n]=text.splitlines()
+        conf=root/'etc/conf.d'/n
+        script=('set -a; . \"$2\"; set +a\n' if conf.exists() else '')+'for op in need before after use want provide; do eval "$op() { echo $op \"\\$@\"; }"; done\nkeyword() { :; }\n. "$1"\ndepend\nfor target in $rc_need; do echo need $target; done\nfor target in $rc_after; do echo after $target; done\n'
+        text=run(['sh','-c',script,'deps',p,conf]);declarations[n]=text.splitlines()
         for l in text.splitlines():
             op,*targets=l.split()
             for target in targets:
@@ -77,12 +90,16 @@ def verify(out):
     order=[]
     while len(order)<len(graph):
         ready=sorted(n for n,deps in graph.items() if n not in order and deps<=set(order));assert ready,graph;order.extend(ready)
-    startup=['k4-filesystems','k4-platform','k4-coldplug','k4-usb-ssh','k4-wifi']
-    for a,b in zip(startup[:3],startup[1:3]):assert order.index(a)<order.index(b)
-    assert 'k4-coldplug' in graph['k4-usb-ssh'] and 'k4-coldplug' in graph['k4-wifi']
+    startup=['k4-filesystems','k4-platform','k4-coldplug','wpa_supplicant','networking','wpa_cli']
+    for a,b in zip(startup,startup[1:]):assert order.index(a)<order.index(b)
+    assert 'networking' in graph['k4-usb-ssh']
+    assert {'networking','wpa_cli','hwclock'}<=graph['k4-ntpd']
+    assert {'localmount','hostname','wpa_supplicant','k4-coldplug'}<=graph['networking']
     assert ' -s -r ' in (root/'bin/k4-userspace-service').read_text()
     assert (root/'root/.ssh/authorized_keys').stat().st_mode&0o777==0o600
     assert (root/'etc/dropbear/k4-hostkey').stat().st_mode&0o777==0o600
+    interfaces=run(qr+[root/'sbin/ifquery','-i',root/'etc/network/interfaces','--list','-a']).splitlines()
+    assert interfaces==['lo','usb0','wlan0']
     checks={}
     for name,args in [('busybox',['bin/busybox','--help']),('kmod',['bin/kmod','--version']),('openrc',['sbin/openrc','--version']),('dropbear',['usr/sbin/dropbear','-h']),('wpa-official',['sbin/wpa_supplicant','-v']),('wpa-cli-official',['sbin/wpa_cli','-v']),('iw',['usr/sbin/iw','--version']),('e2fsprogs',['sbin/e2fsck','-V']),('mount',['bin/mount','--version']),('hwclock',['sbin/hwclock','--help']),('ntpd',['bin/busybox','ntpd','--help'])]:
         # Some programs print help/version and deliberately return nonzero.
@@ -98,8 +115,8 @@ def verify(out):
         for l in sums:
             expected,n=l.split('  ',1);assert hashlib.sha256(t.extractfile(n).read()).hexdigest()==expected,n
         assert t.getmember('dev/console').ischr()
-    signatures=(out/'package-signatures.log').read_text();assert signatures.count(': OK')==74 and 'UNTRUSTED' not in signatures
-    report=dict(elf_count=len(elfs),dynamic_elf_count=len(dynamic),module_count=len(modules),abi='ARMv7 little-endian EABI5, hard-float userspace; musl dynamic or existing static K4 binaries',reference_equal_files=len(same),service_declarations=declarations,topological_order=order,service_validation='shell syntax and evaluated dependency graph; no PID1/OpenRC boot or hardware execution',qemu_smoke=checks,tar_files=len(members),signature_packages=74,package_index_validation=True,device_operations=False)
+    signatures=(out/'package-signatures.log').read_text();assert signatures.count(': OK')==77 and 'UNTRUSTED' not in signatures
+    report=dict(elf_count=len(elfs),dynamic_elf_count=len(dynamic),module_count=len(modules),abi='ARMv7 little-endian EABI5, hard-float userspace; musl dynamic or existing static K4 binaries',reference_equal_files=len(same),service_declarations=declarations,topological_order=order,service_validation='shell syntax and evaluated dependency graph; no PID1/OpenRC boot or hardware execution',qemu_smoke=checks,tar_files=len(members),signature_packages=77,package_index_validation=True,device_operations=False)
     (out/'verification.json').write_text(json.dumps(report,indent=2)+'\n');return report
 def verify_ram(directory):
     import gzip,stat

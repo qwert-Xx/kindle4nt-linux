@@ -880,6 +880,30 @@
       "version": "2.11-r4",
       "license": "BSD-3-Clause",
       "sha256": "9f85fa35392fc45f51bbd4681a92469539e957142e470ee44f8b044704d5b04e"
+    },
+    {
+      "name": "Alpine bridge",
+      "file": "bridge-1.5-r5.apk",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/bridge-1.5-r5.apk",
+      "version": "1.5-r5",
+      "license": "GPL-2.0-or-later",
+      "sha256": "fe1081588fc302357cbda1a4bbe87d417a18f785ee9c9fdf81bbba8b18301490"
+    },
+    {
+      "name": "Alpine ifupdown-ng",
+      "file": "ifupdown-ng-0.13.0-r0.apk",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/ifupdown-ng-0.13.0-r0.apk",
+      "version": "0.13.0-r0",
+      "license": "ISC",
+      "sha256": "38e9b98b3ec3e6f65f929fd3e00719fb730f1de7999eb99d444b6ad6797d8c64"
+    },
+    {
+      "name": "Alpine ifupdown-ng-wifi",
+      "file": "ifupdown-ng-wifi-0.13.0-r0.apk",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/ifupdown-ng-wifi-0.13.0-r0.apk",
+      "version": "0.13.0-r0",
+      "license": "ISC",
+      "sha256": "9c910c83d15f13f6e633959cbd26eb10da871556e857d915609977b47ded14f3"
     }
   ]
 }
