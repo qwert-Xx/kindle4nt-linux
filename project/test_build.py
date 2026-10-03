@@ -77,9 +77,6 @@ class BuildModes(unittest.TestCase):
         elf[18:20] = (40).to_bytes(2, 'little')
         self.module = bytes(elf) + b'vermagic=' + self.RELEASE.encode() + b' SMP\0'
         self.dtb = b'fixture dtb'
-        self.lock = {'zImage': self.sha(self.kernel), 'dtb': self.sha(self.dtb),
-                     'modules': {'kernel/fixture.ko': self.sha(self.module)},
-                     'toolchain': {'compiler': 'release gcc', 'linker': 'release ld'}}
         self.commands = []
 
     @staticmethod
@@ -107,17 +104,10 @@ class BuildModes(unittest.TestCase):
         return b.subprocess.CompletedProcess(command, 0)
 
     def invoke(self, *arguments):
-        original_read = pathlib.Path.read_text
-        release_lock = pathlib.Path(b.__file__).parent / 'alpine/kernel.lock.json'
-
-        def read_text(path, *args, **kwargs):
-            return json.dumps(self.lock) if path == release_lock else original_read(path, *args, **kwargs)
-
         with mock.patch.object(b, 'SOURCE', self.source), \
                 mock.patch.object(sys, 'argv', ['build.py', '--out', str(self.out), *arguments]), \
                 mock.patch.object(b.subprocess, 'run', side_effect=self.fake_run), \
                 mock.patch.object(b, 'toolchain', return_value='ordinary gcc') as compiler, \
-                mock.patch.object(pathlib.Path, 'read_text', read_text), \
                 contextlib.redirect_stdout(io.StringIO()) as stdout:
             b.main()
         return json.loads((self.out / 'build-report.json').read_text()), compiler, stdout.getvalue()
@@ -127,8 +117,7 @@ class BuildModes(unittest.TestCase):
         fragment.write_text('CONFIG_ATH6KL_DEBUG=y\n')
         report, compiler, _ = self.invoke('--config', str(fragment))
         self.assertEqual(report['mode'], 'source')
-        self.assertFalse(report['release_verified'])
-        compiler.assert_called_once_with('arm-linux-gnueabihf-', None)
+        compiler.assert_called_once_with('arm-linux-gnueabihf-')
         self.assertTrue(any('zImage' in command for command in self.commands))
         self.assertIn('CONFIG_ATH6KL_DEBUG=y\n', (self.out / '.config').read_text())
         self.assertNotIn('CONFIG_K4_DIAGNOSTICS=y', (self.out / '.config').read_text())
@@ -154,24 +143,9 @@ class BuildModes(unittest.TestCase):
         self.assertEqual(report['kernel_release'], self.RELEASE)
         self.assertEqual(report['artifacts']['zImage'], self.sha(self.kernel))
         self.assertEqual(len(report['modules']), 1)
-        self.assertFalse(report['release_verified'])
         self.assertEqual(self.commands, [])
         compiler.assert_not_called()
 
-    def test_reproduce_explicitly_checks_toolchain_and_artifact_lock(self):
-        report, compiler, stdout = self.invoke('--mode', 'reproduce')
-        compiler.assert_called_once_with('arm-linux-gnueabihf-', self.lock['toolchain'])
-        self.assertTrue(report['release_verified'])
-        self.assertIn('VERIFY_RELEASE_OK ' + self.RELEASE + ' modules=1', stdout)
-
-    def test_release_mismatch_is_rejected_only_when_requested(self):
-        self.lock['zImage'] = '0' * 64
-        report, compiler, _ = self.invoke('--mode', 'source')
-        self.assertFalse(report['release_verified'])
-        compiler.assert_called_once_with('arm-linux-gnueabihf-', None)
-        for arguments in (('--mode', 'reproduce'), ('--verify-release',)):
-            with self.subTest(arguments=arguments), self.assertRaisesRegex(ValueError, 'release hash mismatch'):
-                self.invoke(*arguments)
 
 
 if __name__ == '__main__':

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Host-only source reconstruction. No device commands or runtime installation."""
-import argparse,hashlib,json,os,pathlib,shutil,subprocess,tarfile,re
+import argparse,hashlib,json,os,pathlib,shutil,subprocess,tarfile
 from build_support import output, toolchain
 import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]/"sources"))
@@ -18,16 +18,12 @@ def extract(name,target):
         with tarfile.open(CACHE/name) as t:
             t.extractall(target,filter='data')
     return next(p for p in target.iterdir() if p.is_dir())
-def busybox(name,cross,stamp):
+def busybox(name,cross):
     src=extract('busybox-1.31.1.tar.bz2',OUT/name)
     shutil.copyfile(HERE/(name+'.config'),src/'.config')
     cmd=['make','ARCH=arm','CROSS_COMPILE='+cross]
     run(cmd+['oldconfig'],src)
     run(cmd+['prepare'],src)
-    h=src/'include/autoconf.h'
-    text=h.read_text(); text,n=re.subn(r'#define AUTOCONF_TIMESTAMP .*','#define AUTOCONF_TIMESTAMP "'+stamp+'"',text)
-    if n!=1: raise ValueError('BusyBox timestamp macro absent')
-    h.write_text(text)
     run(cmd+['-j8'],src)
     shutil.copyfile(src/'busybox',BIN/('busybox' if name=='busybox' else 'busybox-modutils'))
     if name == 'busybox':
@@ -37,12 +33,12 @@ def busybox(name,cross,stamp):
 def main():
     global OUT,CACHE,BIN
     a=argparse.ArgumentParser();a.add_argument('--cache',type=pathlib.Path,default=pathlib.Path.home()/'.cache/k4/sources');a.add_argument('--offline',action='store_true');a.add_argument('--out',default=os.environ.get('OUT',str(HERE.parents[1]/'out/userspace')))
-    a.add_argument('--clean',action='store_true');a.add_argument('--verify-release',action='store_true')
+    a.add_argument('--clean',action='store_true')
     a.add_argument('--busybox-cross-compile', help='override the compiler prefix for legacy BusyBox')
-    a.add_argument('--components',default='busybox,modutils,dropbear,wifi,regdb');a.add_argument('--reference',help='read-only accepted inner/bin')
+    a.add_argument('--components',default='busybox,modutils,dropbear,wifi,regdb')
     v=a.parse_args();OUT=pathlib.Path(v.out).resolve()
     CACHE=v.cache.resolve()
-    OUT=output(OUT,[HERE,CACHE]+([v.reference] if v.reference else []),v.clean)
+    OUT=output(OUT,[HERE,CACHE],v.clean)
     CACHE.mkdir(parents=True,exist_ok=True);BIN=OUT/'bin';BIN.mkdir(exist_ok=True)
     lock=json.loads((HERE/'sources.lock.json').read_text())
     components=v.components.split(',')
@@ -51,8 +47,7 @@ def main():
     if 'busybox' in components and not v.busybox_cross_compile:names.add('gcc-linaro-4.9.4-2017.01-x86_64_arm-linux-gnueabi.tar.xz')
     for name in sorted(names):
         checked(CACHE,dict(lock[name],file=name),v.offline)
-    expected=json.loads((HERE/'toolchain.lock.json').read_text()) if v.verify_release else None
-    compiler=toolchain(expected=expected)
+    compiler=toolchain()
     for c in components:
         if c=='busybox':
             # BusyBox 1.31.1 needs the legacy libc/kernel headers in this
@@ -61,11 +56,8 @@ def main():
             if cross is None:
                 tc=extract('gcc-linaro-4.9.4-2017.01-x86_64_arm-linux-gnueabi.tar.xz',OUT/'linaro')
                 cross=str(tc/'bin/arm-linux-gnueabi-')
-            if v.verify_release:
-                version=subprocess.check_output([cross+'gcc','--version'],text=True).splitlines()[0]
-                if version!=expected['busybox_compiler']:raise ValueError('release BusyBox toolchain mismatch: '+version)
-            busybox(c,cross,'2026-09-24 23:41:16 CST')
-        elif c=='modutils':busybox(c,'arm-linux-gnueabihf-','2026-09-27 21:26:22 CST')
+            busybox(c,cross)
+        elif c=='modutils':busybox(c,'arm-linux-gnueabihf-')
         elif c=='dropbear':
             src=extract('dropbear-2024.86.tar.bz2',OUT/'dropbear');env=dict(os.environ,CFLAGS='-O2 -mno-unaligned-access',LDFLAGS='-static')
             run(['./configure','--host=arm-linux-gnueabihf','--disable-zlib','--disable-syslog'],src,env)
@@ -79,19 +71,13 @@ def main():
         elif c=='regdb':
             src=extract('wireless-regdb-2026.09.03.tar.xz',OUT/'regdb')
             run(['python3','db2fw.py',str(BIN/'regulatory.db'),'db.txt'],src)
-            if sha(BIN/'regulatory.db')!=sha(src/'regulatory.db'):raise ValueError('regdb differs from release')
             shutil.copyfile(src/'regulatory.db.p7s',BIN/'regulatory.db.p7s')
             run(['openssl','cms','-verify','-binary','-inform','DER','-in',str(BIN/'regulatory.db.p7s'),'-content',str(BIN/'regulatory.db'),'-certfile',str(src/'wens.x509.pem'),'-noverify','-out',str(OUT/'verified.db')],src)
         else:raise ValueError('unknown component '+c)
     results={}
     for f in sorted(BIN.iterdir()):
         item={'rebuilt_sha256':sha(f)}
-        if v.reference:
-            ref=pathlib.Path(v.reference)/f.name
-            if ref.is_file():item.update(reference_sha256=sha(ref),byte_identical=sha(f)==sha(ref))
         results[f.name]=item
-    if v.verify_release and any(not item.get('byte_identical',False) for item in results.values()):
-        raise ValueError('release verification needs matching --reference binaries')
     report={'toolchain':compiler,'results':results}
     if (OUT/'busybox.links').is_file(): report['busybox_links']={'sha256':sha(OUT/'busybox.links')}
     (OUT/'report.json').write_text(json.dumps(report,indent=2)+'\n')

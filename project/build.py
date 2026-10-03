@@ -23,10 +23,9 @@ def main():
     ap.add_argument('--source', help='external Linux source directory')
     ap.add_argument('--out', default=os.environ.get('OUT', str(SOURCE/'out/kernel')))
     ap.add_argument('--clean', action='store_true', help='remove output before building')
-    ap.add_argument('--mode', choices=('source','prebuilt','reproduce'), default='source')
+    ap.add_argument('--mode', choices=('source','prebuilt'), default='source')
     ap.add_argument('--preset', choices=('production','debug','lifecycle'), help='default configuration preset')
     ap.add_argument('--config', help='configuration fragment applied after the preset')
-    ap.add_argument('--verify-release', action='store_true', help='compare built kernel, DTB and modules with the release lock')
     ap.add_argument('--jobs', type=int, default=8)
     ap.add_argument('--check-only', action='store_true')
     a = ap.parse_args()
@@ -54,7 +53,7 @@ def main():
     config=d['inputs'].get('config',{}).get('resolved',str(pathlib.Path(__file__).resolve().parent/'configs'/('k4-'+profile+'.config')))
     d.setdefault('release','6.6.157-k4-'+profile)
     d.setdefault('dtb','nxp/imx/imx50-kindle-k4.dtb')
-    d.setdefault('metadata',{'KBUILD_BUILD_VERSION':'1','KBUILD_BUILD_TIMESTAMP':'2026-10-01 00:00:00 UTC','KBUILD_BUILD_USER':'k4','KBUILD_BUILD_HOST':'builder'})
+    d.setdefault('metadata',{})
     if not re.fullmatch(r'[A-Za-z0-9_.+-]{1,64}',d['release']):raise ValueError('invalid kernel release')
     dt_source=SOURCE/'arch/arm/boot/dts'/pathlib.Path(d['dtb']).with_suffix('.dts')
     if a.mode != 'prebuilt' and not dt_source.is_file():raise ValueError('DTB source missing: '+str(dt_source))
@@ -62,7 +61,6 @@ def main():
     cmd = ['make', '-C', str(SOURCE), 'O='+str(out), 'ARCH=arm',
            'CROSS_COMPILE='+d.get('cross_compile', 'arm-linux-gnueabihf-'),
            'KERNELRELEASE='+d['release']]
-    verifying = a.verify_release or a.mode == 'reproduce'
     if a.mode == 'prebuilt':
         artifacts = {name: pathlib.Path(d['inputs'][name]['resolved']) for name in ('zImage','dtb')}
         module_root=out/'root-modules'
@@ -70,8 +68,7 @@ def main():
         with __import__('tarfile').open(d['inputs']['modules']['resolved']) as archive:
             archive.extractall(module_root, filter='data')
     else:
-        lock=json.loads((pathlib.Path(__file__).parent/'alpine/kernel.lock.json').read_text()) if verifying else {}
-        toolchain(d.get('cross_compile','arm-linux-gnueabihf-'), lock.get('toolchain'))
+        toolchain(d.get('cross_compile','arm-linux-gnueabihf-'))
         if not (out/'.config').exists() or a.clean:
             subprocess.run(cmd+['k4_defconfig'],env=env,check=True)
             subprocess.run(['bash',str(SOURCE/'scripts/kconfig/merge_config.sh'),'-m','-O',str(out),str(out/'.config'),config],env=env,check=True)
@@ -86,27 +83,17 @@ def main():
         required=('IMX2_WDT','DEVTMPFS','DEVTMPFS_MOUNT','EXT4_FS','MMC','MMC_BLOCK','MMC_SDHCI','MMC_SDHCI_PLTFM','MMC_SDHCI_ESDHC_IMX')
         for key in required:
             if 'CONFIG_'+key+'=y\n' not in cfg:raise ValueError('boot path requires builtin: '+key)
-        if 'baseline_metadata' in d:
-            bm=d['baseline_metadata'];header=out/'baseline-uts.h'
-            header.write_text('#define UTS_VERSION '+json.dumps(bm['temporary_uts'])+'\n')
-            subprocess.run(cmd+['usr/gen_init_cpio'],env=env,check=True)
-            cpio=out/'baseline-empty.cpio'
-            with cpio.open('wb') as f:
-                subprocess.run([str(out/'usr/gen_init_cpio'),'-t',str(bm['empty_cpio_epoch']),str(SOURCE/'usr/default_cpio_list')],stdout=f,check=True)
-            cmd+=['CFLAGS_version.o=-include '+str(header),'cpio-data='+str(cpio)]
         subprocess.run(cmd+['-j'+str(a.jobs),'zImage','modules',d['dtb']],env=env,check=True)
         artifacts={'zImage':out/'arch/arm/boot/zImage','dtb':out/'arch/arm/boot/dts'/d['dtb']}
         module_root=out/'root-modules'
         if module_root.exists():shutil.rmtree(module_root)
         subprocess.run(cmd+['modules_install','INSTALL_MOD_PATH='+str(module_root),'INSTALL_MOD_STRIP=1'],env=env,check=True)
-    if verifying or a.mode == 'prebuilt':
+    if a.mode == 'prebuilt':
         import importlib.util
         spec=importlib.util.spec_from_file_location('alpine_builder',pathlib.Path(__file__).parent/'alpine/build.py')
         alpine=importlib.util.module_from_spec(spec);spec.loader.exec_module(alpine)
-        if a.mode == 'prebuilt':
-            d['release']=alpine.kernel_release(artifacts['zImage'])
-            alpine.compatible_modules(artifacts['zImage'],module_root/'lib/modules'/d['release'])
-        if verifying:alpine.verify_release(artifacts['zImage'],artifacts['dtb'],module_root/'lib/modules'/d['release'])
+        d['release']=alpine.kernel_release(artifacts['zImage'])
+        alpine.compatible_modules(artifacts['zImage'],module_root/'lib/modules'/d['release'])
     if 'ram_recipe' in d['inputs']:
         import rootfs
         rd=rootfs.load(d['inputs']['ram_recipe']['resolved'])
@@ -121,7 +108,7 @@ def main():
     for name in ('ram_root', 'barebox'):
         if name in d['inputs']:
             artifacts[name] = pathlib.Path(d['inputs'][name]['resolved'])
-    report = {'mode':a.mode,'release_verified':verifying,'kernel_release':d['release'],'artifacts': {k:digest(v) for k,v in artifacts.items()},
+    report = {'mode':a.mode,'kernel_release':d['release'],'artifacts': {k:digest(v) for k,v in artifacts.items()},
               'modules': sorted(str(p.relative_to(module_root)) for p in module_root.rglob('*.ko')),
               'config_sha256': digest(out/'.config') if (out/'.config').exists() else None, 'device_operations': False,
               'root_recipe': report_root if 'ram_recipe' in d['inputs'] else None}

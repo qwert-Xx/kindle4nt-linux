@@ -49,7 +49,12 @@ for freq in 800000 160000; do
 	test "$before" = "$after"
 	test "$($bb cat "$c/scaling_cur_freq")" = "$freq"
 	$bb sleep 4
-	$bb ping -c 2 -W 2 192.168.210.1
+	gateway=$($bb ip route show default | $bb awk '$1 == "default" { for (i=2; i<NF; i++) if ($i == "via") { print $(i+1); exit } }')
+	if [ -n "$gateway" ]; then
+	    $bb ping -c 2 -W 2 "$gateway"
+	else
+	    echo "SKIP gateway ping: no default route with a gateway"
+	fi
 	test "$($bb cat /sys/class/udc/ci_hdrc.0/state)" = configured
 done
 cleanup

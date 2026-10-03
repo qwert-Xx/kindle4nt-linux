@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 # Kindle 4 Non-Touch Linux
 
-从 [项目入口](project/README.md)开始：构建、RAM 维护、boot1 与 Alpine 安装。
+从 [项目入口](project/README.md)开始：先备份整机 eMMC，再构建、准备 RAM 维护并安装 boot1 与 Alpine。
 
 公开树提供源码补丁与配方，不分发固件、校准、波形、凭据或设备备份。上游版本与 SHA256 见 sources/manifest.json 及 project 的锁文件；不使用子模块。
 

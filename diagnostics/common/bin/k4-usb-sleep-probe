@@ -42,7 +42,12 @@ for mode in --s2idle --mem; do
     /bin/k4-dual-rtc "$mode"
     $bb sleep 5
     test "$($bb cat /sys/class/udc/ci_hdrc.0/state)" = configured
-    $bb ping -c 2 -W 2 192.168.210.1
+    gateway=$($bb ip route show default | $bb awk '$1 == "default" { for (i=2; i<NF; i++) if ($i == "via") { print $(i+1); exit } }')
+    if [ -n "$gateway" ]; then
+        $bb ping -c 2 -W 2 "$gateway"
+    else
+        echo "SKIP gateway ping: no default route with a gateway"
+    fi
 done
 $bb cat "$rail" >/tmp/usb-sleep-rails-after
 $bb cmp /tmp/usb-sleep-rails-before /tmp/usb-sleep-rails-after

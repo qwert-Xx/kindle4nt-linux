@@ -73,7 +73,17 @@ def main():
                'build-plugin.py', 'plugin_common.py', 'ocram-stock-entry.S',
                'boot-trace.c', 'maintenance.its', 'inspect_image.py']
     selections += ['porting/barebox-emmc/' + name for name in barebox]
-    selections += ['porting/inspect-waveform.py', 'porting/RELEASE-DEPLOY-PUBLIC-20261003.md']
+    selections += ['porting/inspect-waveform.py', 'porting/RELEASE-DEPLOY-PUBLIC-20261003.md',
+                   'porting/STOCK-CONFIG-DIFFERENCES.md',
+                   'porting/PUBLIC-SOURCE-CLEANUP-20261003.md',
+                   'porting/CLOCK-DEPENDENCIES-20261003.md',
+                   'porting/DISPLAY-LIFECYCLE-20261003.md',
+                   'porting/DRIVER-ACCEPTANCE-20261003.md',
+                   'porting/FIRMWARE-EXTRACTION-VALIDATION-20261003.md',
+                   'porting/ROM-BACKUP-20261003.md',
+                   'porting/CLEANUP-VALIDATION-20261003.md',
+                   'porting/DRIVER-LIMITS-VALIDATION-20261003.md',
+                   'porting/CHARGE-SOURCE-MAPPING.md', 'porting/WIFI.md']
     for name in git('ls-files', '--', *selections).decode().splitlines():
         source = ROOT/name
         target = out/name
@@ -85,7 +95,7 @@ def main():
     (out/'.gitignore').write_text('__pycache__/\n*.pyc\nout/\n')
     (out/'README.md').write_text(
         '<!-- SPDX-License-Identifier: CC-BY-4.0 -->\n# Kindle 4 Non-Touch Linux\n\n'
-        '从 [项目入口](project/README.md)开始：构建、RAM 维护、boot1 与 Alpine 安装。\n\n'
+        '从 [项目入口](project/README.md)开始：先备份整机 eMMC，再构建、准备 RAM 维护并安装 boot1 与 Alpine。\n\n'
         '公开树提供源码补丁与配方，不分发固件、校准、波形、凭据或设备备份。'
         '上游版本与 SHA256 见 sources/manifest.json 及 project 的锁文件；不使用子模块。\n\n'
         '先取得 Linux v6.6.157，在独立源码目录按 kernel/patches/series 顺序应用补丁；'

@@ -18,7 +18,7 @@ def main():
     if not (v.out/('e2fsprogs-'+lock['version'])).exists():
         with tarfile.open(v.source) as t:t.extractall(v.out,filter='data')
     src=v.out/('e2fsprogs-'+lock['version']);build=v.out/'build';build.mkdir(exist_ok=True);bundle=v.out/'maintenance';bundle.mkdir(exist_ok=True)
-    env=dict(os.environ,CC='arm-linux-gnueabihf-gcc',AR='arm-linux-gnueabihf-ar',RANLIB='arm-linux-gnueabihf-ranlib',CFLAGS='-O2 -mno-unaligned-access',LDFLAGS='-static',SOURCE_DATE_EPOCH='1727740800')
+    env=dict(os.environ,CC='arm-linux-gnueabihf-gcc',AR='arm-linux-gnueabihf-ar',RANLIB='arm-linux-gnueabihf-ranlib',CFLAGS='-O2 -mno-unaligned-access',LDFLAGS='-static')
     with (v.out/'build.log').open('w') as log:
         def run(cmd):subprocess.run(cmd,cwd=build,env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
         run([str(src/'configure'),'--host=arm-linux-gnueabihf','--disable-nls','--disable-elf-shlibs','--disable-uuidd','--disable-fsck','--disable-e2initrd-helper','--without-crond-dir','--enable-libuuid','--enable-libblkid'])

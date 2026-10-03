@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 # 从自己的输入生成维护配方
 
-以下示例在仓库根执行，沿用[构建指南](BUILD.md)的 PRIVATE 和 OUT。先按[用户态配方](../userspace/README.md)生成 `OUT/userspace/bin/` 和 `busybox.links`。PRIVATE 下准备 `firmware/`、`wpa_supplicant.conf`、`authorized_keys`、Dropbear 格式的 `dropbear-hostkey`；Alpine 可另提供 OpenSSH 格式的 `ssh_host_ecdsa_key`。
+以下示例在仓库根执行，沿用[构建指南](BUILD.md)的 PRIVATE 和 OUT。先按[用户态配方](../userspace/README.md)生成 `OUT/userspace/bin/` 和 `busybox.links`。先按[私有输入提取指南](FIRMWARE-EXTRACTION.md)准备固件、公开监管数据库和自己的配置/密钥。PRIVATE 下准备 `firmware/`、`wpa_supplicant.conf`、`authorized_keys`、Dropbear 格式的 `dropbear-hostkey`；Alpine 可另提供 OpenSSH 格式的 `ssh_host_ecdsa_key`。
 
 Dropbear 格式的主机密钥可在可信任的主机上用 `dropbearkey -t ecdsa -s 256 -f "$PRIVATE/dropbear-hostkey"` 生成，或从自己的维护系统备份。它与 OpenSSH 私钥格式不同。维护内嵌根以只读方式挂载，因此使用预置密钥。
 
@@ -50,7 +50,7 @@ link('etc/resolv.conf', '/run/resolv.conf')
 for n in ('depmod','insmod','lsmod','modprobe','rmmod'):
     link('sbin/'+n, '/bin/busybox-modutils')
 inner = dict(entries=list(entries.values()), image_bytes=48*1024*1024,
-             uuid='8a25ce4d-0367-4a11-b617-d3846be75b46', reproducible_metadata=True,
+             uuid='8a25ce4d-0367-4a11-b617-d3846be75b46',
              busybox_links=dict(path=str(userspace/'busybox.links'), sha256=sha(userspace/'busybox.links')))
 (private/'filesystem.json').write_text(json.dumps(inner, indent=2)+'\n')
 entries = {}

@@ -131,8 +131,6 @@ def filesystem(recipe,output,diagnostics=None,modules=None,release=None,modalias
             if str(parent) not in entries or entries[str(parent)]['kind']!='dir':
                 raise ValueError('non-directory parent')
             parent=parent.parent
-    reproducible=bool(d.get('reproducible_metadata',False))
-    env=dict(os.environ, E2FSPROGS_FAKE_TIME='1727740800') if reproducible else None
     with tempfile.TemporaryDirectory(prefix='rootfs.',dir=output.parent) as td:
         stage=pathlib.Path(td)/'tree';stage.mkdir()
         for e in sorted(d['entries'],key=lambda x:(x['name'].count('/'),x['name'])):
@@ -143,9 +141,8 @@ def filesystem(recipe,output,diagnostics=None,modules=None,release=None,modalias
             elif k in ('char','block'):p.touch()
             if k in ('dir','file'):p.chmod(e['mode'])
         with output.open('wb') as f:f.truncate(d['image_bytes'])
-        extra=['-E','hash_seed='+d['uuid']] if reproducible else []
         subprocess.run(['mke2fs','-q','-F','-t','ext3','-b','4096','-I','256','-m','0',
-                        '-U',d['uuid'],'-O','^64bit,^metadata_csum']+extra+['-d',str(stage),str(output)],check=True,env=env)
+                        '-U',d['uuid'],'-O','^64bit,^metadata_csum','-d',str(stage),str(output)],check=True)
         # mke2fs imports path names directly. Address metadata by inode,
         # avoiding debugfs's shell-like path parser (which cannot escape quotes).
         inodes={'.':2}
@@ -168,14 +165,10 @@ def filesystem(recipe,output,diagnostics=None,modules=None,release=None,modalias
                 commands.append('set_inode_field '+n+' block[1] '+str(device))
             types={'file':stat.S_IFREG,'dir':stat.S_IFDIR,'link':stat.S_IFLNK,'char':stat.S_IFCHR,'block':stat.S_IFBLK}
             commands.append('set_inode_field '+n+' mode '+hex(types[e['kind']]|e['mode']))
-            for field,value in [('uid',0),('gid',0),('mtime',0),('atime',0)]+([('ctime',0),('crtime',0)] if reproducible else []):
+            for field,value in [('uid',0),('gid',0),('mtime',0),('atime',0)]:
                 commands.append('set_inode_field '+n+' '+field+' '+str(value))
-        if reproducible:
-            for inode in ('<2>','<8>','<11>'):
-                for field in ('mtime','atime','ctime','crtime'):
-                    commands.append('set_inode_field '+inode+' '+field+' 0')
         batch=pathlib.Path(td)/'commands';batch.write_text('\n'.join(commands)+'\n')
-        subprocess.run(['debugfs','-w','-f',str(batch),str(output)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,env=env)
+        subprocess.run(['debugfs','-w','-f',str(batch),str(output)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     output.chmod(0o600)
     return {'filesystem_entries':len(entries),'host_regular_image':True}
 def build(recipe,output,modules=None,release=None,modalias_coldplug=False,formal_modules=True):

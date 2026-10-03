@@ -5,16 +5,15 @@ Alpine 使用官方 APK；本目录构建 BusyBox 维护根所需的第三方工
 
 ```sh
 python3 project/userspace/rebuild.py --cache "$PRIVATE/source-cache" --out "$OUT/userspace"
-python3 project/userspace/test_compare.py
 ```
 
 已有缓存可加 `--offline`，缺少文件或哈希不符会报错；`--cache` 指定缓存目录，默认 `~/.cache/k4/sources`。
 
-默认组件：BusyBox 1.31.1、独立 modutils、Dropbear 2024.86、wpa_supplicant 2.11、libnl 3.12.0、iw 6.17、wireless-regdb 2026.09.03。可用 `--components busybox` 等选择组件。`--clean` 清理输出，环境变量 `OUT` 设置默认输出。`--reference` 与 `--verify-release` 用于固定参考产物的精确比较。
+默认组件：BusyBox 1.31.1、独立 modutils、Dropbear 2024.86、wpa_supplicant 2.11、libnl 3.12.0、iw 6.17、wireless-regdb 2026.09.03。可用 `--components busybox` 等选择组件。`--clean` 清理输出，环境变量 `OUT` 设置默认输出。
 
 BusyBox 使用锁定的 Linaro GCC 4.9.4-2017.01 arm-linux-gnueabi 工具链；其余使用 ARMhf GCC。BusyBox 构建同时运行 `make busybox.links`，将清单输出为 `OUT/userspace/busybox.links`，二进制输出在 `OUT/userspace/bin/`。维护根配方引用同一配置生成的清单，详见[构建输入](../docs/BUILD.md)。
 
-BusyBox/modutils 的 generated AUTOCONF_TIMESTAMP 固定为配方中的时间，以便重建。regulatory.db 从官方源码生成；签名复制自锁定的官方归档。`compare.py` 可比较 ELF 并单独报告 GNU build-id 差异；这与整文件 SHA256 相等是两种结果。
+regulatory.db 从官方源码生成；签名复制自锁定的官方归档。
 
 Dropbear 关闭密码认证；维护 Wi-Fi 使用 nl80211。Alpine 使用自己的标准网络和 SSH 服务，见[Alpine 文档](../alpine/README.md)。kexec 为可选工具，当前恢复入口使用 barebox 与 ROM，见[恢复指南](../docs/RAM-BOOT.md)。
 

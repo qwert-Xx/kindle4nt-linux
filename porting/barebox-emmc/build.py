@@ -28,11 +28,10 @@ def main():
     build = out/'build'
     build.mkdir()
     shutil.copyfile(args.config, build/'.config')
-    env = dict(os.environ, KBUILD_BUILD_TIMESTAMP='Fri Oct 2 20:48:05 CST 2026', KBUILD_BUILD_VERSION='1')
     cmd = ['make', '-C', str(source), 'O='+str(build), 'ARCH=arm',
            'CROSS_COMPILE='+os.environ.get('CROSS_COMPILE', 'arm-linux-gnueabihf-')]
-    subprocess.run(cmd+['olddefconfig'], check=True, env=env)
-    subprocess.run(cmd+['-j'+str(args.jobs)], check=True, env=env)
+    subprocess.run(cmd+['olddefconfig'], check=True)
+    subprocess.run(cmd+['-j'+str(args.jobs)], check=True)
     subprocess.run([sys.executable, str(P/'build-plugin.py'),
                     str(build/'images/barebox-kindle-d01100.img'), str(out/'plugin')], check=True)
     print('Image: '+str(out/'plugin/barebox-boot1-plugin-candidate.img'))

@@ -1201,7 +1201,7 @@
 +#endif
 --- a/drivers/video/fbdev/Kconfig
 +++ b/drivers/video/fbdev/Kconfig
-@@ -1956,3 +1956,51 @@
+@@ -1956,3 +1956,52 @@
  source "drivers/video/fbdev/mmp/Kconfig"
  
  source "drivers/video/fbdev/core/Kconfig"
@@ -1241,8 +1241,8 @@
 +	  Own the K4 800x600 controller, clocks, supplies, waveform and IRQ.
 +	  Provide serialized image updates to in-kernel display consumers.
 +	  No automatic refresh on probe; requires panel-specific firmware.
-+	  The fixed SoC device cannot be unbound while DMA state is uncertain.
-+	  A modular service can load late, but cannot unload before reboot.
++	  Standard bind/unbind and module removal are supported. Faulted DMA
++	  storage remains quarantined until reset if stop cannot be proven.
 +
 +config FB_IMX50_EPDC
 +	tristate "Kindle K4 EPDC RAM framebuffer"
@@ -1252,7 +1252,8 @@
 +	  Provide an 800x600 XRGB8888 /dev/fb device using the K4 display
 +	  service, deferred writes/mmap updates and idle panel powerdown.
 +	  Console binding or writes can initiate a real display refresh.
-+	  The initial modular frontend cannot unload while open users may remain.
++	  Unbind detaches the frontend; existing files retain their shadow memory
++	  and module reference until close.
 --- a/drivers/video/fbdev/Makefile
 +++ b/drivers/video/fbdev/Makefile
 @@ -128,3 +128,6 @@
@@ -1518,7 +1519,7 @@
 +MODULE_LICENSE("GPL");
 --- /dev/null
 +++ b/drivers/video/fbdev/imx50-epdc-fb.c
-@@ -0,0 +1,634 @@
+@@ -0,0 +1,672 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/* RAM framebuffer consumer of the K4 EPDC service. */
 +#include <linux/fb.h>
@@ -1827,6 +1828,10 @@
 +	if (blank < FB_BLANK_UNBLANK || blank > FB_BLANK_POWERDOWN)
 +		return -EINVAL;
 +	mutex_lock(&f->io_lock);
++	if (f->stopped) {
++		mutex_unlock(&f->io_lock);
++		return -ENODEV;
++	}
 +	spin_lock_irqsave(&f->dirty_lock, flags);
 +	f->blanked = blank != FB_BLANK_UNBLANK;
 +	spin_unlock_irqrestore(&f->dirty_lock, flags);
@@ -1842,8 +1847,32 @@
 +	return ret;
 +}
 +
++/* fb_info stays alive for existing files/VMAs after unregister. Those files
++ * pin fbops->owner; destroy runs on the final fb_info reference, not remove.
++ */
++static void k4_fb_destroy(struct fb_info *info)
++{
++	struct k4_fb *f = info->par;
++
++	fb_deferred_io_cleanup(info);
++	cancel_delayed_work_sync(&f->idle_work);
++	fb_dealloc_cmap(&info->cmap);
++	vfree(f->snapshot);
++	vfree(info->screen_buffer);
++	framebuffer_release(info);
++}
++
++static int k4_fb_open(struct fb_info *info, int user)
++{
++	struct k4_fb *f = info->par;
++
++	return READ_ONCE(f->stopped) ? -ENODEV : 0;
++}
++
 +static const struct fb_ops k4_fb_ops = {
 +	.owner = THIS_MODULE,
++	.fb_open = k4_fb_open,
++	.fb_destroy = k4_fb_destroy,
 +	FB_DEFAULT_DEFERRED_OPS(k4_fb),
 +	.fb_check_var = k4_fb_check_var,
 +	.fb_set_par = k4_fb_set_par,
@@ -2128,6 +2157,23 @@
 +	mutex_unlock(&f->io_lock);
 +}
 +
++static void k4_fb_remove(struct platform_device *pdev)
++{
++	struct k4_fb *f = platform_get_drvdata(pdev);
++	struct fb_info *info = f->info;
++
++	/* Stop queueing and drain refresh/idle before supplier links are released.
++	 * Old mmap writes may still queue defio, but its stopped callback does no
++	 * hardware access. Memory/defio remain owned by the final fb_info reference.
++	 */
++	k4_fb_shutdown(pdev);
++	lock_fb_info(info);
++	info->state = FBINFO_STATE_SUSPENDED;
++	unlock_fb_info(info);
++	platform_set_drvdata(pdev, NULL);
++	unregister_framebuffer(info); /* May call k4_fb_destroy immediately. */
++}
++
 +static const struct of_device_id k4_fb_match[] = {
 +	{ .compatible = "amazon,k4-epdc-fb" }, { }
 +};
@@ -2135,22 +2181,15 @@
 +static struct platform_driver k4_fb_driver = {
 +	.probe = k4_fb_probe,
 +	.shutdown = k4_fb_shutdown,
++	.remove_new = k4_fb_remove,
 +	.driver = {
 +		.name = "k4-epdc-fb",
 +		.of_match_table = k4_fb_match,
 +		.pm = pm_sleep_ptr(&k4_fb_pm),
 +		.dev_groups = k4_fb_groups,
-+		.suppress_bind_attrs = true,
 +	},
 +};
-+/* No module_exit: an inherited/faulted DMA arena or an open framebuffer
-+ * must survive until reboot. Late loading is supported; unloading is not.
-+ */
-+static int __init k4_display_init(void)
-+{
-+	return platform_driver_register(&k4_fb_driver);
-+}
-+module_init(k4_display_init);
++module_platform_driver(k4_fb_driver);
 +MODULE_DEVICE_TABLE(of, k4_fb_match);
 +MODULE_LICENSE("GPL");
 --- /dev/null
@@ -2862,7 +2901,7 @@
 +MODULE_LICENSE("GPL");
 --- /dev/null
 +++ b/drivers/video/fbdev/imx50-epdc-waveform.c
-@@ -0,0 +1,436 @@
+@@ -0,0 +1,441 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/* Decode format-1 WBF or load WRF; raw WBF never reaches controller DMA. */
 +#include <linux/crc32.h>
@@ -2873,6 +2912,7 @@
 +#include <linux/module.h>
 +#include <linux/nvmem-consumer.h>
 +#include <linux/property.h>
++#include <linux/overflow.h>
 +#include <linux/slab.h>
 +#include <asm/unaligned.h>
 +
@@ -2880,8 +2920,6 @@
 +
 +#define K4_WBF_NAME "amazon/k4/panel-stock.wbf"
 +#define K4_WRF_NAME "amazon/k4/panel-stock.wrf"
-+#define K4_WBF_LIMIT (256 * 1024)
-+#define K4_WRF_LIMIT (2 * 1024 * 1024)
 +#define K4_HEADER_SIZE 48
 +
 +/* Amazon eink_panel.c: mode versions 4/6 share a map; version 7 adds FAST. */
@@ -2903,9 +2941,9 @@
 +	unsigned int count, i;
 +	u32 crc;
 +
-+	/* File bounds from Amazon's WBF/proxy allocation limits, not one sample. */
++	/* The header declares the complete file length; firmware owns that allocation. */
 +	if (!wbf || !wbf->data ||
-+	    wbf->size < K4_HEADER_SIZE || wbf->size > K4_WBF_LIMIT)
++	    wbf->size < K4_HEADER_SIZE)
 +		return -EINVAL;
 +	header = wbf->data;
 +	count = (unsigned int)header[38] + 1;
@@ -2952,7 +2990,7 @@
 +{
 +	int ret;
 +
-+	if (!wrf || !wrf->data || wrf->size < K4_HEADER_SIZE || wrf->size > K4_WRF_LIMIT)
++	if (!wrf || !wrf->data || wrf->size < K4_HEADER_SIZE)
 +		return -EINVAL;
 +	ret = k4_waveform_check_wbf(wbf, wave, offset);
 +	if (ret)
@@ -3028,7 +3066,9 @@
 +	return -EBADMSG;
 +}
 +
-+/* A sizing pass checks all streams before allocation. A second bounded pass
++/* A sizing pass derives length from mode/temperature tables and expanded streams,
++ * bounded by size_t arithmetic rather than a sample size. Allocation may fail.
++ * It checks all streams before allocation. A second bounded pass
 + * creates EPDC's LE64 mode/temp offsets and frame counts, then action bytes.
 + * Offsets in WRF are relative to its payload, unlike WBF's absolute pointers.
 + */
@@ -3037,17 +3077,21 @@
 +{
 +	unsigned int modes = (unsigned int)wbf->data[37] + 1;
 +	unsigned int temperatures = (unsigned int)wbf->data[38] + 1;
-+	size_t mode_table, used = offset + modes * 8;
++	size_t mode_table, used, mode_bytes, temperature_bytes;
 +	unsigned int mode, temperature;
 +	int ret;
 +
++	if (check_mul_overflow((size_t)modes, (size_t)8, &mode_bytes) ||
++	    check_mul_overflow((size_t)temperatures, (size_t)8, &temperature_bytes) ||
++	    check_add_overflow(offset, mode_bytes, &used))
++		return -EOVERFLOW;
 +	mode_table = (u32)wbf->data[32] | (u32)wbf->data[33] << 8 |
 +		     (u32)wbf->data[34] << 16;
 +	if (mode_table < offset || mode_table > wbf->size ||
 +	    modes * 4 > wbf->size - mode_table)
 +		return -EBADMSG;
 +	if (used > limit)
-+		return -E2BIG;
++		return -EOVERFLOW;
 +	for (mode = 0; mode < modes; mode++) {
 +		size_t source_temps, target_temps = used;
 +
@@ -3055,11 +3099,11 @@
 +				     temperatures * 4, &source_temps);
 +		if (ret)
 +			return ret;
-+		if (temperatures * 8 > limit - used)
++		if (temperature_bytes > limit - used)
 +			return -E2BIG;
 +		if (proxy)
 +			put_unaligned_le64(used - offset, proxy + offset + mode * 8);
-+		used += temperatures * 8;
++		used += temperature_bytes;
 +		for (temperature = 0; temperature < temperatures; temperature++) {
 +			size_t source, bytes;
 +
@@ -3098,7 +3142,7 @@
 +
 +	if (wbf->data[36] || wbf->data[40] == wbf->data[41])
 +		return -EOPNOTSUPP;
-+	ret = k4_wbf_convert_pass(wbf, offset, NULL, K4_WRF_LIMIT, &length);
++	ret = k4_wbf_convert_pass(wbf, offset, NULL, SIZE_MAX, &length);
 +	if (ret)
 +		return ret;
 +	proxy = kvzalloc(length, GFP_KERNEL);
@@ -3146,7 +3190,7 @@
 +		goto put;
 +	}
 +	length = get_unaligned_le32(header + 4);
-+	if (length < sizeof(header) || length > window || length > K4_WBF_LIMIT) {
++	if (length < sizeof(header) || length > window) {
 +		ret = -EINVAL;
 +		goto put;
 +	}
@@ -3345,7 +3389,7 @@
 +#endif
 --- /dev/null
 +++ b/drivers/video/fbdev/imx50-epdc.c
-@@ -0,0 +1,569 @@
+@@ -0,0 +1,610 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/* K4 EPDC owner: clocks, panel supplies, firmware and serialized updates. */
 +#include <linux/clk.h>
@@ -3356,6 +3400,7 @@
 +#include <linux/imx50-epdc-image.h>
 +#include <linux/imx50-pxp.h>
 +#include <linux/k4-papyrus.h>
++#include <linux/k4-panel-flash.h>
 +#include <linux/module.h>
 +#include <linux/k4-provider.h>
 +#include <linux/of_platform.h>
@@ -3410,7 +3455,7 @@
 +}
 +
 +/* Caller holds the owner lock. Always try panel shutdown after a DMA fault,
-+ * but retain its clocks, IRQ object, mapping and buffers until machine reset.
++ * but retain its clocks and buffers until machine reset.
 + */
 +static int epdc_off_locked(struct imx50_epdc *e)
 +{
@@ -3777,6 +3822,18 @@
 +	cancel_work_sync(&e->power_work);
 +}
 +
++static void epdc_put_clocks(void *data)
++{
++	struct imx50_epdc *e = data;
++
++	/* Unproven DMA stop must not release enabled/exclusive clock handles. */
++	if (e->fault)
++		return;
++	if (!IS_ERR_OR_NULL(e->pixel))
++		clk_put(e->pixel);
++	clk_bulk_put(ARRAY_SIZE(e->access), e->access);
++}
++
 +static int epdc_probe(struct platform_device *pdev)
 +{
 +	struct device *dev = &pdev->dev;
@@ -3803,6 +3860,9 @@
 +	if (IS_ERR(base))
 +		return PTR_ERR(base);
 +	imx50_epdc_hw_init(&e->hw, base);
++	ret = devm_k4_panel_flash_link(dev, "nvmem");
++	if (ret)
++		return dev_err_probe(dev, ret, "panel flash supplier\n");
 +	e->papyrus = devm_k4_papyrus_get(dev, "papyrus");
 +	if (IS_ERR(e->papyrus))
 +		return dev_err_probe(dev, PTR_ERR(e->papyrus), "Papyrus supplier\n");
@@ -3811,10 +3871,13 @@
 +		return dev_err_probe(dev, PTR_ERR(e->pxp), "PxP supplier\n");
 +	e->access[0].id = "apbh";
 +	e->access[1].id = "epdc_axi";
-+	ret = devm_clk_bulk_get(dev, ARRAY_SIZE(e->access), e->access);
++	ret = clk_bulk_get(dev, ARRAY_SIZE(e->access), e->access);
 +	if (ret)
 +		return dev_err_probe(dev, ret, "access clocks\n");
-+	e->pixel = devm_clk_get(dev, "epdc_pix");
++	ret = devm_add_action_or_reset(dev, epdc_put_clocks, e);
++	if (ret)
++		return ret;
++	e->pixel = clk_get(dev, "epdc_pix");
 +	if (IS_ERR(e->pixel))
 +		return dev_err_probe(dev, PTR_ERR(e->pixel), "pixel clock\n");
 +	e->pixel_parent = devm_clk_get(dev, "pixel_parent");
@@ -3887,32 +3950,54 @@
 +	cancel_work_sync(&e->power_work);
 +}
 +
++static void epdc_remove(struct platform_device *pdev)
++{
++	struct imx50_epdc *e = platform_get_drvdata(pdev);
++	int ret;
++
++	/* Managed links have detached fbdev and other consumers. Unregister the
++	 * notifier before draining work so it cannot queue another power callback.
++	 */
++	WRITE_ONCE(e->ready, false);
++	devm_regulator_unregister_notifier(e->display, &e->power_nb);
++	cancel_work_sync(&e->power_work);
++	mutex_lock(&e->lock);
++	e->stopped = true;
++	epdc_off_locked(e);
++	if (e->wave && !e->fault) {
++		ret = imx50_epdc_waveform_free(e->wave);
++		if (ret)
++			e->fault = ret;
++		else
++			e->wave = NULL;
++	}
++	if (e->fault) {
++		/* No retained software callbacks: devres frees IRQ and MMIO. Only
++		 * the quarantined DMA data and clock handles survive until reset.
++		 */
++		get_device(e->dev);
++		dev_warn(e->dev, "DMA stop unproven: retaining arena/clocks until reset\n");
++	}
++	mutex_unlock(&e->lock);
++	platform_set_drvdata(pdev, NULL);
++}
++
 +static const struct of_device_id epdc_match[] = {
 +	{ .compatible = "amazon,k4-imx50-epdc" }, { }
 +};
 +
-+/* Built in, with no userspace unbind. In-flight fault buffers are deliberately
-+ * not devm allocations. Dynamic removal of this fixed SoC device is unsupported.
-+ */
 +static struct platform_driver epdc_driver = {
 +	.probe = epdc_probe,
 +	.shutdown = epdc_shutdown,
++	.remove_new = epdc_remove,
 +	.driver = {
 +		.name = "imx50-k4-epdc",
 +		.of_match_table = epdc_match,
 +		.dev_groups = epdc_groups,
 +		.pm = pm_sleep_ptr(&epdc_pm),
-+		.suppress_bind_attrs = true,
 +	},
 +};
-+/* No module_exit: an inherited/faulted DMA arena or an open framebuffer
-+ * must survive until reboot. Late loading is supported; unloading is not.
-+ */
-+static int __init k4_display_init(void)
-+{
-+	return platform_driver_register(&epdc_driver);
-+}
-+module_init(k4_display_init);
++module_platform_driver(epdc_driver);
 +MODULE_DEVICE_TABLE(of, epdc_match);
 +MODULE_LICENSE("GPL");
 --- /dev/null

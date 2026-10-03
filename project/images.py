@@ -12,7 +12,7 @@ def main():
                         help='external JSON: hashed kernel/RAM inputs and alpine paths (cache, firmware_dir, wifi_config, authorized_keys, ssh_host_key, tools_dir)')
     parser.add_argument('--out', required=True, type=pathlib.Path)
     parser.add_argument('--source', help='Linux source directory for kernel compilation')
-    parser.add_argument('--mode', choices=('source', 'prebuilt', 'reproduce'), default='source')
+    parser.add_argument('--mode', choices=('source', 'prebuilt'), default='source')
     parser.add_argument('--check-only', action='store_true')
     args = parser.parse_args()
     data = build.inputs(args.inputs)

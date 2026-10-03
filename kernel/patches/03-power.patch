@@ -447,7 +447,7 @@
 +	  This module is called k4-panel-flash. OF/SPI aliases allow coldplug.
 +	  Display consumers defer until this provider is available; recovery
 +	  does not depend on it. Release all NVMEM consumer references before
-+	  unloading. Manual bind/unbind attributes are deliberately disabled.
++	  unloading. Managed links detach display consumers on manual unbind.
  
  config NVMEM_APPLE_EFUSES
  	tristate "Apple eFuse support"
@@ -463,7 +463,7 @@
  obj-$(CONFIG_NVMEM_BCM_OCOTP)		+= nvmem-bcm-ocotp.o
 --- /dev/null
 +++ b/drivers/nvmem/k4-panel-flash.c
-@@ -0,0 +1,216 @@
+@@ -0,0 +1,232 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/* Read-only access to the factory NOR on a Kindle display panel. */
 +#include <linux/module.h>
@@ -498,6 +498,7 @@
 +struct k4_flash {
 +	struct spi_device *spi;
 +	struct mutex lock;
++	bool stopped;
 +	const struct k4_flash_chip *chip;
 +	u8 *tx;
 +	u8 *rx;
@@ -569,6 +570,10 @@
 +	if (!bytes)
 +		return 0;
 +	mutex_lock(&flash->lock);
++	if (flash->stopped) {
++		ret = -ENODEV;
++		goto unlock;
++	}
 +	ret = k4_flash_status(flash);
 +	if (ret)
 +		goto unlock;
@@ -653,6 +658,18 @@
 +	return 0;
 +}
 +
++static void k4_flash_remove(struct spi_device *spi)
++{
++	struct k4_flash *flash = spi_get_drvdata(spi);
++
++	/* Consumer links release cells first. Drain spi_sync before devres
++	 * unregisters nvmem and frees its callback context and transfer buffers.
++	 */
++	mutex_lock(&flash->lock);
++	flash->stopped = true;
++	mutex_unlock(&flash->lock);
++}
++
 +static const struct of_device_id k4_flash_of_match[] = {
 +	{ .compatible = "amazon,kindle-panel-flash" },
 +	{ }
@@ -670,10 +687,9 @@
 +		.name = "k4-panel-flash",
 +		.of_match_table = k4_flash_of_match,
 +		.dev_groups = k4_flash_groups,
-+		/* Forced unbind would bypass the NVMEM consumer module reference. */
-+		.suppress_bind_attrs = true,
 +	},
 +	.probe = k4_flash_probe,
++	.remove = k4_flash_remove,
 +	.id_table = k4_flash_ids,
 +};
 +module_spi_driver(k4_flash_driver);
@@ -1143,7 +1159,7 @@
  		ret = get_unaligned_le16(data);
 --- /dev/null
 +++ b/drivers/power/supply/k4-charge-policy.h
-@@ -0,0 +1,262 @@
+@@ -0,0 +1,248 @@
 +/* SPDX-License-Identifier: GPL-2.0-only */
 +/* Pure policy shared by the board driver and host boundary tests. */
 +#ifndef K4_CHARGE_POLICY_H
@@ -1190,26 +1206,13 @@
 +	return code;
 +}
 +
-+static inline int k4_current_upper(unsigned int code)
++/* Stock file_storage.c passes DAC1 for full speed and DAC5 for high speed;
++ * arcotg_udc.c writes those codes directly, without tolerance deductions.
++ * Standard budgets are in microamps, so quantize nominal DAC values here.
++ */
++static inline unsigned int k4_budget_code(int budget_ua)
 +{
-+	if (code == 4)
-+		return 440000;
-+	if (code == 6)
-+		return 620000;
-+	return k4_current_ua[code] * 115 / 100;
-+}
-+
-+static inline unsigned int k4_budget_code(int budget_ua, unsigned int reserve_ua)
-+{
-+	unsigned int code = 0;
-+	int available;
-+
-+	if (budget_ua <= 0 || reserve_ua >= (unsigned int)budget_ua)
-+		return 0;
-+	available = budget_ua - reserve_ua;
-+	while (code + 1 < K4_CURRENT_CODES && k4_current_upper(code + 1) <= available)
-+		code++;
-+	return code;
++	return k4_current_floor(budget_ua);
 +}
 +
 +/* Tequila: 4.200 V, gauge temperature policy, 1000 mW power limiter,
@@ -1235,7 +1238,6 @@
 +	int current_ua;
 +	int capacity;
 +	int usb_ua;
-+	unsigned int usb_reserve_ua;
 +	int input_mv;
 +	int current_settled;
 +	int precharge;
@@ -1310,7 +1312,7 @@
 +		return K4_CHARGE_FAULT;
 +	if (!(s->sense0 & 0x40))
 +		return K4_CHARGE_NO_INPUT;
-+	if (!k4_budget_code(s->usb_ua, s->usb_reserve_ua))
++	if (!k4_budget_code(s->usb_ua))
 +		return K4_CHARGE_USB_BUDGET;
 +	if (s->input_mv < 4400 || s->input_mv > 5300)
 +		return K4_CHARGE_INPUT_VOLTAGE;
@@ -1335,7 +1337,7 @@
 +					  enum k4_charge_reason reason,
 +					  unsigned int limit_code)
 +{
-+	unsigned int budget_code = k4_budget_code(s->usb_ua, s->usb_reserve_ua);
++	unsigned int budget_code = k4_budget_code(s->usb_ua);
 +
 +	if (reason != K4_CHARGE_ELIGIBLE || limit_code >= K4_CURRENT_CODES)
 +		return 0;
@@ -1602,7 +1604,7 @@
 +MODULE_LICENSE("GPL");
 --- /dev/null
 +++ b/drivers/power/supply/k4-mc13892-charger.c
-@@ -0,0 +1,1051 @@
+@@ -0,0 +1,1041 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/* Tequila charger policy. See porting/CHARGE-POLICY.md. */
 +#include <linux/atomic.h>
@@ -1664,7 +1666,6 @@
 +	bool irqs_masked;
 +	unsigned int irq_count;
 +	unsigned int board_max_code, limit_code;
-+	unsigned int usb_reserve_ua;
 +#ifdef CONFIG_CHARGER_K4_MC13892_LEDS
 +	struct led_trigger charging_trigger, full_trigger;
 +	bool led_triggers;
@@ -1779,7 +1780,6 @@
 +	int ret;
 +
 +	memset(s, 0, sizeof(*s));
-+	s->usb_reserve_ua = c->usb_reserve_ua;
 +	/* The ID byte is board data, not cryptographic battery authentication. */
 +	ret = i2c_smbus_read_byte_data(c->gauge, 0x7e);
 +	if (ret < 0)
@@ -1842,7 +1842,7 @@
 +		if (ret)
 +			return ret;
 +		c->sample.usb_ua = budget;
-+		if (code > k4_budget_code(budget, c->usb_reserve_ua))
++		if (code > k4_budget_code(budget))
 +			return -EAGAIN;
 +		if (k4_fault_pending(c))
 +			return -EINTR;
@@ -1939,7 +1939,7 @@
 +		ret = k4_source_budget(c, &budget);
 +		if (!ret) {
 +			c->sample.usb_ua = budget;
-+			if (code > k4_budget_code(budget, c->usb_reserve_ua))
++			if (code > k4_budget_code(budget))
 +				ret = -EAGAIN;
 +		}
 +	}
@@ -2241,7 +2241,7 @@
 +		"usb_ua=%d input_mv=%d sense0=0x%06x sense1=0x%06x charger0=0x%06x code=%u\n"
 +		"limit_code=%u board_max_code=%u target_code=%u initialized=%u release_pending=%u\n"
 +		"active_ms=%llu active_limit_ms=%llu battery_retries=%u fault_code=%u fault_seq=%u\n"
-+		"usb_reserve_ua=%u budget_code=%u powerup_sense=0x%06x serial_path=%u low_power_boot=%u bpon=%u\n"
++		"budget_code=%u powerup_sense=0x%06x serial_path=%u low_power_boot=%u bpon=%u\n"
 +		"gadget_ua=%d detector_ua=%d detector_present=%u\n",
 +		c->controlled, k4_charge_reason_name(c->reason), s->error,
 +		c->write_error, k4_fault_pending(c) ||
@@ -2259,8 +2259,8 @@
 +		(unsigned long long)div_u64(c->active_ns, NSEC_PER_MSEC),
 +		(unsigned long long)div_u64(K4_MAX_ACTIVE_NS, NSEC_PER_MSEC),
 +		c->battery_retries, (s->sense0 & K4_CHGFAULT_MASK) >> 8,
-+		(unsigned int)atomic_read(&c->fault_seq), c->usb_reserve_ua,
-+		k4_budget_code(s->usb_ua, c->usb_reserve_ua), s->powerup_sense,
++		(unsigned int)atomic_read(&c->fault_seq),
++		k4_budget_code(s->usb_ua), s->powerup_sense,
 +		!!(s->powerup_sense & K4_CHRGSSS), !!(s->sense1 & K4_LPBS),
 +		c->precharge, c->gadget_ua, c->detector_ua, !!c->detector);
 +	mutex_unlock(&c->lock);
@@ -2471,7 +2471,7 @@
 +	struct device_node *node;
 +	struct power_supply_config config = {};
 +	struct k4_charger *c;
-+	u32 max_ua = 80000, reserve_ua = 60000;
++	u32 max_ua = 80000;
 +	int ret;
 +
 +	if (of_find_property(k4_config_node(dev),
@@ -2483,13 +2483,6 @@
 +	}
 +	if (max_ua < 80000 || max_ua > k4_current_ua[K4_CURRENT_CODES - 1])
 +		return -EINVAL;
-+	if (of_find_property(k4_config_node(dev),
-+			     "amazon,usb-current-reserve-microamp", NULL)) {
-+		ret = of_property_read_u32(k4_config_node(dev),
-+			"amazon,usb-current-reserve-microamp", &reserve_ua);
-+		if (ret)
-+			return ret;
-+	}
 +	c = devm_kzalloc(dev, sizeof(*c), GFP_KERNEL);
 +	if (!c)
 +		return -ENOMEM;
@@ -2499,7 +2492,6 @@
 +	c->reason = K4_CHARGE_READ_ERROR;
 +	c->suspended = true;
 +	c->board_max_code = k4_current_floor(max_ua);
-+	c->usb_reserve_ua = reserve_ua;
 +	c->limit_code = 1;
 +	mutex_init(&c->lock);
 +	INIT_DELAYED_WORK(&c->work, k4_work);
@@ -3125,7 +3117,7 @@
 +#endif
 --- /dev/null
 +++ b/drivers/regulator/k4-papyrus.c
-@@ -0,0 +1,952 @@
+@@ -0,0 +1,961 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/* K4 TPS65180B DISPLAY/VCOM sequencer and fresh thermistor acquisition. */
 +#include <linux/delay.h>
@@ -3134,6 +3126,7 @@
 +#include <linux/i2c.h>
 +#include <linux/interrupt.h>
 +#include <linux/k4-papyrus.h>
++#include <linux/k4-panel-flash.h>
 +#include <linux/module.h>
 +#include <linux/k4-provider.h>
 +#include <linux/nvmem-consumer.h>
@@ -3173,7 +3166,7 @@
 +	struct mutex lock;
 +	unsigned int samples;
 +	u8 irq_seen[2];
-+	int last_error;
++	int last_error, irq;
 +	bool suspended;
 +	bool stopping, owned, awake, display_on, vcom_on, notify_pending, ready;
 +	int power_error, shutdown_error;
@@ -4013,6 +4006,9 @@
 +	ret = papyrus_profile(p);
 +	if (ret)
 +		return dev_err_probe(&client->dev, ret, "invalid panel power profile\n");
++	ret = devm_k4_panel_flash_link(&client->dev, "nvmem-cells");
++	if (ret)
++		return dev_err_probe(&client->dev, ret, "panel flash supplier\n");
 +	ret = papyrus_panel_calibration(p);
 +	if (ret)
 +		return dev_err_probe(&client->dev, ret, "panel VCOM calibration\n");
@@ -4029,6 +4025,7 @@
 +			IRQF_ONESHOT | IRQF_TRIGGER_FALLING, "k4-papyrus", p);
 +	if (ret)
 +		goto fail;
++	p->irq = irq;
 +	config.driver_data = p;
 +	for (i = 0; i < ARRAY_SIZE(papyrus_regulators); i++) {
 +		p->rdev[i] = devm_regulator_register(&client->dev,
@@ -4052,7 +4049,13 @@
 +
 +static void papyrus_remove(struct i2c_client *client)
 +{
-+	papyrus_stop(i2c_get_clientdata(client));
++	struct k4_papyrus_temp *p = i2c_get_clientdata(client);
++
++	/* Consumers are detached by managed links. Synchronize the threaded IRQ
++	 * before stopping work and before devres unregisters regulator providers.
++	 */
++	disable_irq(p->irq);
++	papyrus_stop(p);
 +}
 +
 +static const struct of_device_id papyrus_of_match[] = {
@@ -4070,8 +4073,6 @@
 +		.of_match_table = papyrus_of_match,
 +		.dev_groups = papyrus_groups,
 +		.pm = pm_sleep_ptr(&papyrus_pm),
-+		/* Display consumers may retain DMA across a power fault. */
-+		.suppress_bind_attrs = true,
 +	},
 +};
 +module_i2c_driver(papyrus_driver);
@@ -4875,7 +4876,7 @@
  }
 --- a/drivers/soc/imx/Kconfig
 +++ b/drivers/soc/imx/Kconfig
-@@ -1,5 +1,23 @@
+@@ -1,5 +1,24 @@
  # SPDX-License-Identifier: GPL-2.0-only
  menu "i.MX SoC drivers"
 +
@@ -4885,7 +4886,8 @@
 +	help
 +	  Sleepable serialized XRGB8888 to 8-bit luma conversion for kernel
 +	  display consumers. Uses the i.MX50 register layout and IRQ completion.
-+	  Faulted DMA arenas are quarantined until reboot; no runtime unbind.
++	  Standard bind/unbind and module removal are supported. Faulted DMA
++	  arenas remain quarantined until reset.
 +
 +config K4_PM_RAM_TRACE
 +	bool "Kindle K4 PM callback trace in reserved watchdog RAM"
@@ -4899,7 +4901,7 @@
  
  config IMX_GPCV2_PM_DOMAINS
  	bool "i.MX GPCv2 PM domains"
-@@ -39,4 +57,13 @@
+@@ -39,4 +58,13 @@
  	default SOC_IMX9 && IMX_GPCV2_PM_DOMAINS
  	depends on PM_GENERIC_DOMAINS
  
@@ -4923,7 +4925,7 @@
 +obj-$(CONFIG_IMX50_PXP_KERNEL) += imx50-pxp.o
 --- /dev/null
 +++ b/drivers/soc/imx/imx50-pxp.c
-@@ -0,0 +1,581 @@
+@@ -0,0 +1,603 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/* i.MX50 ePXP synchronous kernel image service. No NEXT command chaining. */
 +#include <linux/clk.h>
@@ -5428,6 +5430,17 @@
 +
 +static DEFINE_SIMPLE_DEV_PM_OPS(imx50_pxp_pm, imx50_pxp_suspend, imx50_pxp_resume);
 +
++/* Faulted DMA keeps its allocation and clock references until reset. The
++ * IRQ and CPU mapping can be released once all software callers are drained.
++ */
++static void imx50_pxp_put_clocks(void *data)
++{
++	struct imx50_pxp *p = data;
++
++	if (!p->clocks_retained)
++		clk_bulk_put(ARRAY_SIZE(p->clocks), p->clocks);
++}
++
 +static int imx50_pxp_probe(struct platform_device *pdev)
 +{
 +	struct imx50_pxp *p;
@@ -5446,9 +5459,12 @@
 +		return PTR_ERR(p->base);
 +	p->clocks[0].id = "apbh";
 +	p->clocks[1].id = "pxp_axi";
-+	ret = devm_clk_bulk_get(p->dev, ARRAY_SIZE(p->clocks), p->clocks);
++	ret = clk_bulk_get(p->dev, ARRAY_SIZE(p->clocks), p->clocks);
 +	if (ret)
 +		return dev_err_probe(p->dev, ret, "get clocks\n");
++	ret = devm_add_action_or_reset(p->dev, imx50_pxp_put_clocks, p);
++	if (ret)
++		return ret;
 +	p->axi_parent = devm_clk_get_optional(p->dev, "axi_parent");
 +	if (IS_ERR(p->axi_parent))
 +		return dev_err_probe(p->dev, PTR_ERR(p->axi_parent), "AXI parent\n");
@@ -5480,6 +5496,21 @@
 +	mutex_unlock(&p->lock);
 +}
 +
++static void imx50_pxp_remove(struct platform_device *pdev)
++{
++	struct imx50_pxp *p = platform_get_drvdata(pdev);
++
++	/* Device links have unbound consumers; the mutex drains a synchronous job.
++	 * Each job parks DMA and synchronizes its IRQ before dropping this lock.
++	 */
++	imx50_pxp_shutdown(pdev);
++	if (p->fault && p->arena) {
++		get_device(p->dev);
++		dev_warn(p->dev, "DMA fault: retaining %zu bytes until reset\n", p->capacity);
++	}
++	platform_set_drvdata(pdev, NULL);
++}
++
 +static const struct of_device_id imx50_pxp_match[] = {
 +	{ .compatible = "fsl,imx50-pxp" }, { }
 +};
@@ -5487,22 +5518,15 @@
 +static struct platform_driver imx50_pxp_driver = {
 +	.probe = imx50_pxp_probe,
 +	.shutdown = imx50_pxp_shutdown,
++	.remove_new = imx50_pxp_remove,
 +	.driver = {
 +		.name = "imx50-pxp-kernel",
 +		.dev_groups = imx50_pxp_groups,
 +		.of_match_table = imx50_pxp_match,
 +		.pm = pm_sleep_ptr(&imx50_pxp_pm),
-+		.suppress_bind_attrs = true,
 +	},
 +};
-+/* No module_exit: an inherited/faulted DMA arena or an open framebuffer
-+ * must survive until reboot. Late loading is supported; unloading is not.
-+ */
-+static int __init k4_display_init(void)
-+{
-+	return platform_driver_register(&imx50_pxp_driver);
-+}
-+module_init(k4_display_init);
++module_platform_driver(imx50_pxp_driver);
 +MODULE_DEVICE_TABLE(of, imx50_pxp_match);
 +MODULE_LICENSE("GPL");
 --- a/drivers/watchdog/imx2_wdt.c
@@ -5568,6 +5592,47 @@
  	if (of_property_read_bool(dev->of_node, "fsl,suspend-in-wait")) {
  		if (!wdev->data->wdw_supported) {
 --- /dev/null
++++ b/include/linux/k4-panel-flash.h
+@@ -0,0 +1,38 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _LINUX_K4_PANEL_FLASH_H
++#define _LINUX_K4_PANEL_FLASH_H
++
++#include <linux/k4-provider.h>
++#include <linux/of.h>
++#include <linux/spi/spi.h>
++
++/* Express the dependency on the SPI driver, not just the nvmem child device.
++ * Cells can be under either the provider or its fixed-layout child. A managed
++ * link detaches the consumer before flash devres frees its callback context.
++ */
++static inline int devm_k4_panel_flash_link(struct device *consumer,
++					 const char *property)
++{
++	struct device_node *np, *parent;
++	struct device *supplier;
++
++	np = of_parse_phandle(consumer->of_node, property, 0);
++	if (!np)
++		return 0;
++	while (np && !of_device_is_compatible(np, "amazon,kindle-panel-flash")) {
++		parent = of_get_parent(np);
++		of_node_put(np);
++		np = parent;
++	}
++	if (!np)
++		return 0;
++	if (IS_REACHABLE(CONFIG_SPI))
++		supplier = bus_find_device_by_of_node(&spi_bus_type, np);
++	else
++		supplier = NULL;
++	of_node_put(np);
++	if (!supplier)
++		return -EPROBE_DEFER;
++	return devm_k4_provider_hold(consumer, supplier);
++}
++#endif
+--- /dev/null
 +++ b/include/linux/k4-papyrus.h
 @@ -0,0 +1,12 @@
 +/* SPDX-License-Identifier: GPL-2.0-only */
@@ -5584,7 +5649,7 @@
 +#endif
 --- /dev/null
 +++ b/include/linux/k4-provider.h
-@@ -0,0 +1,53 @@
+@@ -0,0 +1,54 @@
 +/* SPDX-License-Identifier: GPL-2.0-only */
 +#ifndef _LINUX_K4_PROVIDER_H
 +#define _LINUX_K4_PROVIDER_H
@@ -5607,8 +5672,9 @@
 +
 +/* Takes the reference returned by of_find_*_device_by_node, including failure.
 + * Pin before reading provider private data; check its ready state afterwards.
-+ * Deferred consumer probes unwind the reference through devres. Providers suppress
-+ * userspace unbind; a consumer also pins the driver's module until devres teardown.
++ * Deferred consumer probes unwind the reference through devres. Managed device
++ * links unbind consumers before their supplier; the module reference lasts until
++ * consumer devres teardown.
 + */
 +static inline int devm_k4_provider_hold(struct device *consumer,
 +				       struct device *provider)

@@ -154,7 +154,6 @@ def verify_ram(directory):
     report=dict(entries=len(entries),checksums=True,sorted_zero_owner_time=True,shell_syntax=True,emmc_fstab_absent=True,ordinary_block_devices=True,device_executed=False)
     (directory/'ram-verification.json').write_text(json.dumps(report,indent=2)+'\n');return report
 if __name__=='__main__':
-    ap=argparse.ArgumentParser();ap.add_argument('--build',type=pathlib.Path,required=True);ap.add_argument('--compare',type=pathlib.Path);ap.add_argument('--ram',type=pathlib.Path);a=ap.parse_args();r=verify(a.build)
-    if a.compare:assert (a.build/'rootfs.tar.gz').read_bytes()==(a.compare/'rootfs.tar.gz').read_bytes();r['reproducible_tar']=True;(a.build/'verification.json').write_text(json.dumps(r,indent=2)+'\n')
+    ap=argparse.ArgumentParser();ap.add_argument('--build',type=pathlib.Path,required=True);ap.add_argument('--ram',type=pathlib.Path);a=ap.parse_args();r=verify(a.build)
     if a.ram:print(json.dumps(verify_ram(a.ram)))
     print(json.dumps({k:v for k,v in r.items() if k not in ('qemu_smoke','service_declarations','topological_order')}))

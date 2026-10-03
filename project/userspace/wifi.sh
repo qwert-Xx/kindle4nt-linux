@@ -6,7 +6,6 @@ repo=$(cd "$(dirname "$0")" && pwd)
 cache=${1:?CACHE}
 out=${2:?OUT}
 cross=arm-linux-gnueabihf-
-export SOURCE_DATE_EPOCH=1790812800
 mapflags="-ffile-prefix-map=$out=/build/k4-wifi -fdebug-prefix-map=$out=/build/k4-wifi"
 mkdir -p "$out/work" "$out/bin"
 cd "$cache"

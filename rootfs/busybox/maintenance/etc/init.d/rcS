@@ -58,9 +58,9 @@ else
 		echo MSFT100 > "$g/os_desc/qw_sign"
 		echo 0x0525 > "$g/idVendor"
 		echo 0xa4a8 > "$g/idProduct"
-		echo K4-6.6-COMPOSITE-PROBE > "$g/strings/0x409/serialnumber"
-		echo KindlePort > "$g/strings/0x409/manufacturer"
-		echo "K4 Linux USB composite" > "$g/strings/0x409/product"
+		echo kindle4nt > "$g/strings/0x409/serialnumber"
+		echo kindle4nt > "$g/strings/0x409/manufacturer"
+		echo "Kindle 4 Non-Touch" > "$g/strings/0x409/product"
 		echo "RAM maintenance RNDIS and ACM" > "$g/configs/c.1/strings/0x409/configuration"
 		# USB budget for the whole device, not a battery charge-current setting.
 		echo 500 > "$g/configs/c.1/MaxPower"

@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 # 构建
 
-所有命令在仓库根执行。Linux 主机需 Python 3.12、make、ARM 交叉 GCC/binutils、dtc、U-Boot mkimage、patch、tar/gzip、mke2fs/debugfs、dpkg-deb、openssl、ssh-keygen、pkg-config 及构建用户态所需的开发库。内核当前工具链为 ARMhf GCC 13.3 / binutils 2.42；精确复现时以 `project/alpine/kernel.lock.json` 为准。BusyBox 使用锁定 Linaro 4.9.4 工具链，见[用户态配方](../userspace/README.md)。Alpine 组装自行从锁定缓存提取 QEMU；维护 applet 安装直接读取 busybox.links。
+所有命令在仓库根执行。Linux 主机需 Python 3.12、make、ARM 交叉 GCC/binutils、dtc、U-Boot mkimage、patch、tar/gzip、mke2fs/debugfs、dpkg-deb、openssl、ssh-keygen、pkg-config 及构建用户态所需的开发库。内核当前工具链为 ARMhf GCC 13.3 / binutils 2.42。BusyBox 使用锁定 Linaro 4.9.4 工具链，见[用户态配方](../userspace/README.md)。Alpine 组装自行从锁定缓存提取 QEMU；维护 applet 安装直接读取 busybox.links。
 
 ## 输入目录
 
@@ -13,7 +13,7 @@ OUT="$HOME/k4-output"
 mkdir -p "$PRIVATE" "$OUT"
 ```
 
-`PRIVATE` 保存自己的固件/波形、Wi-Fi 配置、授权公钥、主机密钥、第三方归档和 JSON 配方。固件目录按目标 `/lib/firmware` 布局，含 ath6kl 固件/校准和签名 regulatory.db。默认显示从面板 flash 获取 WBF 并解码，外部波形不是构建必填项；完整获取命令见[显示波形](WAVEFORMS.md)。没有可用波形可启动、维护和联网，显示不可用。
+`PRIVATE` 保存自己的固件/波形、Wi-Fi 配置、授权公钥、主机密钥、第三方归档和 JSON 配方。备份中的路径、提取命令及监管数据库来源见[私有输入提取指南](FIRMWARE-EXTRACTION.md)。固件目录按目标 `/lib/firmware` 布局，含 ath6kl 固件/校准和签名 regulatory.db。默认显示从面板 flash 获取 WBF 并解码，外部波形不是构建必填项；完整获取命令见[显示波形](WAVEFORMS.md)。没有可用波形可启动、维护和联网，显示不可用。
 
 APK 缓存可用以下命令准备；已有缓存也会校验锁定哈希：
 
@@ -61,7 +61,7 @@ python3 project/userspace/e2fsprogs.py --source "$PRIVATE/e2fsprogs-1.47.1.tar.x
 
 从新用户态和私有输入生成这两份配方的完整可复制示例见[维护配方示例](MAINTENANCE-INPUTS.md)。
 
-## 三种入口
+## 构建方式
 
 ### 从源码构建（默认）
 
@@ -72,7 +72,7 @@ make -C project check INPUTS="$PRIVATE/inputs.json" OUT="$OUT/images"
 make -C project images INPUTS="$PRIVATE/inputs.json" OUT="$OUT/images"
 ```
 
-源码默认 `k4_defconfig` 加 production 片段。`SOURCE=/path/to/linux` 或 JSON 的 `kernel_source` 可指定其它已应用 K4 改动的 Linux 树；公共导出中的 `kernel/patches/series` 按顺序应用于 v6.6.157，debug 再应用 debug-patches。当前完整研究仓库无需重复应用补丁。
+源码默认 `k4_defconfig` 加 production 片段。`SOURCE=/path/to/linux` 或 JSON 的 `kernel_source` 可指定其它已应用 K4 改动的 Linux 树；公共导出中的 `kernel/patches/series` 按顺序应用于 v6.6.157，debug 再应用 debug-patches。当前完整研究仓库的正式源码无需重复应用生产补丁。调试实现保存在 `project/debug-patches/`，公开导出时生成 `kernel/debug-patches/series`；debug 构建先在独立源码副本应用该 series，再通过 `project/build.py --source "$LINUX" --preset debug` 构建。不要把调试补丁应用到正在使用的 production 源码树。
 
 公开发布树提供补丁与配方，不内嵌上游 Linux 源码，也不使用子模块。先从固定版本与 SHA256 获取上游，验证开发者签名，再按 series 应用生产补丁：
 
@@ -87,7 +87,7 @@ make -C project check SOURCE="$LINUX" INPUTS="$PRIVATE/inputs.json" OUT="$OUT/im
 make -C project images SOURCE="$LINUX" INPUTS="$PRIVATE/inputs.json" OUT="$OUT/images"
 ```
 
-上游下载验证需要 xz、GnuPG 和可用的 kernel.org WKD 网络访问；版本、SHA256 与签名指纹见 `sources/manifest.json`。离线缓存另加 `--offline`，须提前具备归档、签名和已验证的开发者公钥。已有上游源码也可直接应用补丁。公开树后续的 kernel/images/reproduce 命令均需 `SOURCE="$LINUX"` 或输入 JSON 的 `kernel_source`；debug 再按 `kernel/debug-patches/series` 应用补丁。
+上游下载验证需要 xz、GnuPG 和可用的 kernel.org WKD 网络访问；版本、SHA256 与签名指纹见 `sources/manifest.json`。离线缓存另加 `--offline`，须提前具备归档、签名和已验证的开发者公钥。已有上游源码也可直接应用补丁。公开树后续的 kernel/images 命令均需 `SOURCE="$LINUX"` 或输入 JSON 的 `kernel_source`；debug 再按 `kernel/debug-patches/series` 应用补丁。
 
 只构建内核时：
 
@@ -103,16 +103,6 @@ JSON 的 `inputs` 额外提供 `zImage`、`dtb`、`modules` 的 `path/sha256`。
 make -C project images MODE=prebuilt INPUTS="$PRIVATE/prebuilt-inputs.json" OUT="$OUT/prebuilt"
 ```
 
-### 精确复现
-
-源码重建后按 `kernel.lock.json` 比较内核、DTB 和模块 SHA，且核对锁定工具链：
-
-```sh
-make -C project images MODE=reproduce INPUTS="$PRIVATE/inputs.json" OUT="$OUT/reproduce"
-```
-
-reproduce 用于核对已发布版本：使用该发布对应的源码、配置、工具链和输入，按发布锁比较新内核、DTB 与模块。当前开发源码或配置修改使用 source 模式；发布锁随正式发布的内核与产物一起更新。
-
 ## 配置与输出
 
 `project/build.py --config` 在 preset 后覆盖配置。`OUT` 环境变量可设置默认目录；`--clean` 清理该目录重新构建：
@@ -125,11 +115,12 @@ python3 project/build.py --inputs "$PRIVATE/inputs.json" --out "$OUT/kernel" --c
 
 统一入口生成 `alpine/rootfs.tar.gz`、`alpine-ram/alpine-ram.cpio.gz`、`maintenance/ram.cpio.gz`，报告保存在各输出目录的 JSON 中。barebox 单独构建，见[boot1](BAREBOX-BOOT1.md)。构建完成后先准备[维护 FIT](RAM-BOOT.md)，再进行安装。
 
+验收检查归档结构、ARM ABI、模块 release、启动服务和用户态功能，不要求构建产物与旧版本逐字节或哈希一致。报告中的产物 SHA 仅记录本次输出；上游输入 SHA256 和签名校验继续执行。
+
 ## 主机检查
 
 ```sh
 python3 -m unittest discover -s project -p 'test_*.py'
-python3 project/userspace/test_compare.py
 ```
 
 这些检查验证配方、归档、模块匹配与部署脚本的主机模拟；真实硬件行为见[已知问题](KNOWN-ISSUES.md)。

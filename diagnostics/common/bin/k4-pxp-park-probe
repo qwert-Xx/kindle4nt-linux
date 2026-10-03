@@ -24,7 +24,12 @@ $bb grep -q 'completed=24 irqs=24 allocations=2 releases=2' "$p/result"
 test "$($bb cat /sys/power/suspend_stats/success)" = 1
 test "$($bb cat /sys/power/suspend_stats/fail)" = 0
 test "$($bb cat /sys/class/udc/ci_hdrc.0/state)" = configured
-$bb ping -c 2 -W 2 192.168.210.1
+gateway=$($bb ip route show default | $bb awk '$1 == "default" { for (i=2; i<NF; i++) if ($i == "via") { print $(i+1); exit } }')
+if [ -n "$gateway" ]; then
+    $bb ping -c 2 -W 2 "$gateway"
+else
+    echo "SKIP gateway ping: no default route with a gateway"
+fi
 test "$($bb cat /proc/sys/kernel/tainted)" = 0
 test "$($bb cat /sys/block/mmcblk2/ro)" = 1
 h0=$($bb dd if=/dev/mmcblk2 bs=1048576 count=1 2>/dev/null | $bb sha256sum)

@@ -14,11 +14,11 @@ class RootRecipe(unittest.TestCase):
    with self.assertRaises(ValueError):rootfs.load(q)
    q.write_text(json.dumps({'entries':[e]}));f.write_bytes(b'changed')
    with self.assertRaises(ValueError):rootfs.load(q)
- def test_default_bootmark_is_stub_and_deterministic(self):
+ def test_default_bootmark_is_stub(self):
   with tempfile.TemporaryDirectory() as td:
    p=pathlib.Path(td)/'bootmark';p.write_bytes(b'RAW_RAM_DIAGNOSTIC')
    d={'entries':[{'name':'bin/k4-bootmark','kind':'file','mode':0o755,'resolved':str(p)}]}
-   a=rootfs.archive(d);self.assertEqual(a,rootfs.archive(d))
+   a=rootfs.archive(d)
    self.assertNotIn(b'RAW_RAM_DIAGNOSTIC',gzip.decompress(a))
    d['automatic_diagnostics']=True;self.assertIn(b'RAW_RAM_DIAGNOSTIC',gzip.decompress(rootfs.archive(d)))
  def test_busybox_install_preserves_tools_and_validates_paths(self):

@@ -9,7 +9,7 @@
 
 官方 OpenSSH 10.3_p1-r1 与 sshd OpenRC 服务监听 22 端口及所有 IPv4/IPv6 地址，root 仅使用公钥登录，SFTP 使用 internal-sftp。USB gadget 在 k4-platform 中初始化，ttyGS0 提供 root shell。维护根另用 Dropbear/2222。
 
-`--firmware-dir` 是外部 `/lib/firmware` 的内容，`--wifi-config` 是外部 Wi-Fi 配置。`--authorized-keys` 提供 root 公钥授权（安装权限 600）；`--ssh-host-key` 接受外部 OpenSSH ECDSA 私钥（600），公钥由 ssh-keygen 派生（644）。省略主机密钥时，官方 sshd 服务首次启动生成 ECDSA 密钥。构建过程不生成随机身份；固定输入的归档可复现，运行时生成的密钥另行保存。
+`--firmware-dir` 是外部 `/lib/firmware` 的内容，`--wifi-config` 是外部 Wi-Fi 配置。`--authorized-keys` 提供 root 公钥授权（安装权限 600）；`--ssh-host-key` 接受外部 OpenSSH ECDSA 私钥（600），公钥由 ssh-keygen 派生（644）。省略主机密钥时，官方 sshd 服务首次启动生成 ECDSA 密钥。构建过程不生成随机身份；运行时生成的密钥另行保存。
 
 ## Watchdog 与源文件
 

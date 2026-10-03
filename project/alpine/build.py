@@ -62,15 +62,8 @@ def compatible_modules(kernel,source_modules):
         actual[p.relative_to(source_modules).as_posix()]=sha(p)
     return release,actual
 
-def verify_release(kernel,dtb,source_modules):
-    lock=json.loads((HERE/'kernel.lock.json').read_text())
-    release,actual=compatible_modules(kernel,source_modules)
-    if sha(kernel)!=lock['zImage'] or sha(dtb)!=lock['dtb'] or actual!=lock['modules']:
-        raise ValueError('release hash mismatch')
-    print('VERIFY_RELEASE_OK '+release+' modules='+str(len(actual)))
-
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--cache',type=pathlib.Path,required=True);ap.add_argument('--firmware-dir',type=pathlib.Path,required=True,help='external contents of /lib/firmware (ath6kl firmware, calibration and regulatory.db); private input');ap.add_argument('--wifi-config',type=pathlib.Path,required=True,help='external private wpa_supplicant.conf');ap.add_argument('--tools-dir',type=pathlib.Path,help='bin directory from project/userspace builds or explicitly supplied K4 ELF tools; diagnostics are omitted');ap.add_argument('--ssh-host-key',type=pathlib.Path,help='existing external OpenSSH ECDSA private host key; omit for first-start key generation');ap.add_argument('--authorized-keys',type=pathlib.Path,help='external root SSH public-key authorization file');ap.add_argument('--out',type=pathlib.Path,default=os.environ.get('OUT',str(HERE.parents[1]/'out/alpine')));ap.add_argument('--clean',action='store_true');ap.add_argument('--verify-release',action='store_true');ap.add_argument('--kernel',type=pathlib.Path,required=True);ap.add_argument('--dtb',type=pathlib.Path,required=True);ap.add_argument('--modules',type=pathlib.Path,required=True);a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--cache',type=pathlib.Path,required=True);ap.add_argument('--firmware-dir',type=pathlib.Path,required=True,help='external contents of /lib/firmware (ath6kl firmware, calibration and regulatory.db); private input');ap.add_argument('--wifi-config',type=pathlib.Path,required=True,help='external private wpa_supplicant.conf');ap.add_argument('--tools-dir',type=pathlib.Path,help='bin directory from project/userspace builds or explicitly supplied K4 ELF tools; diagnostics are omitted');ap.add_argument('--ssh-host-key',type=pathlib.Path,help='existing external OpenSSH ECDSA private host key; omit for first-start key generation');ap.add_argument('--authorized-keys',type=pathlib.Path,help='external root SSH public-key authorization file');ap.add_argument('--out',type=pathlib.Path,default=os.environ.get('OUT',str(HERE.parents[1]/'out/alpine')));ap.add_argument('--clean',action='store_true');ap.add_argument('--kernel',type=pathlib.Path,required=True);ap.add_argument('--dtb',type=pathlib.Path,required=True);ap.add_argument('--modules',type=pathlib.Path,required=True);a=ap.parse_args()
     out=output(a.out,[HERE,a.cache,a.firmware_dir,a.wifi_config,a.kernel,a.dtb,a.modules]+[p for p in (a.tools_dir,a.ssh_host_key,a.authorized_keys) if p],a.clean);cache=a.cache.resolve()
     # Reassemble staging trees; retain reusable output and logs between invocations.
     for directory in ('rootfs','host','hostkeys','repository','fetched','qemu'):
@@ -78,7 +71,6 @@ def main():
     root=out/'rootfs';root.mkdir()
     release=kernel_release(a.kernel);source_modules=a.modules/release
     release,actual=compatible_modules(a.kernel,source_modules)
-    if a.verify_release:verify_release(a.kernel,a.dtb,source_modules)
     lock=json.loads((HERE/'packages.lock.json').read_text())
     def checked(name,d,key='sha256'):p=cache/name;assert sha(p,key)==d[key],name;return p
     mini=checked(lock['minirootfs']['file'],lock['minirootfs']);hostpkg=checked(lock['host_apk']['file'],lock['host_apk']);hostmini=checked(lock['host_mini']['file'],lock['host_mini']);qdeb=checked(lock['qemu']['file'],lock['qemu'],'sha512')
@@ -166,7 +158,7 @@ def main():
     archive(root,out/'rootfs.tar.gz')
     (out/'rootfs.tar.gz').chmod(0o600)
     shutil.copy2(HERE.parent/'tools/deploy-emmc-root',out/'deploy-alpine-root')
-    report=dict(kernel_release=release,packages=installed(root),firmware_sha256={p.relative_to(a.firmware_dir).as_posix():sha(p) for p in sorted(a.firmware_dir.rglob("*")) if p.is_file() and not p.is_symlink()},release_verified=a.verify_release,kernel_sha256=sha(a.kernel),dtb_sha256=sha(a.dtb),module_count=len(actual),k4_copied=copied,device_operations=False,rootfs_sha256=sha(out/'rootfs.tar.gz'),rootfs_bytes=(out/'rootfs.tar.gz').stat().st_size)
+    report=dict(kernel_release=release,packages=installed(root),firmware_sha256={p.relative_to(a.firmware_dir).as_posix():sha(p) for p in sorted(a.firmware_dir.rglob("*")) if p.is_file() and not p.is_symlink()},kernel_sha256=sha(a.kernel),dtb_sha256=sha(a.dtb),module_count=len(actual),k4_copied=copied,device_operations=False,rootfs_sha256=sha(out/'rootfs.tar.gz'),rootfs_bytes=(out/'rootfs.tar.gz').stat().st_size)
     (out/'build-report.json').write_text(json.dumps(report,indent=2)+'\n')
     print(json.dumps({k:v for k,v in report.items() if k not in ('packages','k4_copied')}))
 if __name__=='__main__':main()

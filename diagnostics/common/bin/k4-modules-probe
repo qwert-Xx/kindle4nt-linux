@@ -45,7 +45,12 @@ test "$($bb cat /proc/sys/kernel/tainted)" = "$before"
 if $mod modprobe k4_intentionally_missing_module; then exit 1; fi
 for name in crc7 option usb_wwan usbserial; do ! $bb grep -q "^$name " /proc/modules; done
 $bb sleep 4
-$bb ping -c 2 -W 2 192.168.210.1
+gateway=$($bb ip route show default | $bb awk '$1 == "default" { for (i=2; i<NF; i++) if ($i == "via") { print $(i+1); exit } }')
+if [ -n "$gateway" ]; then
+    $bb ping -c 2 -W 2 "$gateway"
+else
+    echo "SKIP gateway ping: no default route with a gateway"
+fi
 test "$($bb cat /sys/class/udc/ci_hdrc.0/state)" = configured
 h0=$($bb dd if=/dev/mmcblk2 bs=1048576 count=1 2>/dev/null | $bb sha256sum)
 h16=$($bb dd if=/dev/mmcblk2 bs=1048576 skip=16 count=1 2>/dev/null | $bb sha256sum)

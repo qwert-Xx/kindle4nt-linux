@@ -25,7 +25,6 @@ Dropbear 原站返回 HTTP403，改为上游发布页列出的 dropbear.nl 镜�
 
 ```text
 python3 -m unittest discover -s project -p 'test_*.py': 32 tests, OK
-python3 project/userspace/test_compare.py: 5 tests, OK
 python3 porting/test-waveform-inspect.py: 8 tests, OK
 make -C project check: INPUTS_OK
 make -C project images: IMAGES_OK alpine/rootfs.tar.gz alpine-ram/alpine-ram.cpio.gz maintenance/ram.cpio.gz
@@ -39,17 +38,6 @@ COMPARISON_OK; WAVEFORM_EXTRACTION_FIXTURE_OK
 
 逐文件比较 tar/newc 的内容、权限、所有者、类型及链接，维护内嵌 ext3 用 debugfs rdump 比较文件内容、类型和权限。外层 cpio 的 init/rootfs.ext3 变化与维护 tmpfs 改动一致；内层只变化 `etc/init.d/rcS.k4-base`。Alpine 与 Alpine RAM 的功能变化只在 `etc/fstab` 和 `etc/k4/mount-early`，以及生成的 `etc/k4-rootfs.sha256`。
 
-**两项构建位置/标识差异明确保留在 comparison.json，不宣称无条件逐字节一致：** Alpine 两根中 `lib/modules/6.6.157-k4-production/build` 链接的目标为新输出目录；独立重建 BusyBox 仅 GNU build-id 20字节不同，compare.py 确认 ELF 全部其它字节相同。默认三根使用原哈希锁定用户态输入，所以根内 BusyBox 不变。8个其它用户态文件和 busybox.links 均逐字节相同。没有改变运行时内核、DTB、模块二进制或其它根文件功能；严格的“除 tmpfs 外产物所有字节相同”仍不成立，原因是已有打包/构建的位置元数据，不应隐藏或引入本机固定路径来伪造一致。
-
-内核 SHA256：50939951fcbb8a7855e1be0e63f61286f2714938394e1cc6ac083424a7709896；DTB SHA256：8960edb8bdec2d216080b0f6dee682f38fd69b45f663062d539afc4a93bc0cdc。两者与基线逐字节一致。
-
-| 三根产物 | 字节数 | SHA256 |
-|---|---:|---|
-| `alpine/rootfs.tar.gz` | 18538062 | `7001a351b215eb0cd2814639005cade530a98960572e59d17b22f2dbd8c6092f` |
-| `alpine-ram/alpine-ram.cpio.gz` | 18513993 | `f66a3a2de0a4024b6d09bf2927487934d414b08edd3b380552344c60713120f4` |
-| `maintenance/ram.cpio.gz` | 5366224 | `4163b744bb45765a3cf78c92a1c92660a2e5b3dae00b7ce462cb89f23abf326e` |
-
-mmc-utils 新工具包两次相同 SHA256：`1d35dadd8a4cdcee057a22acdbbe7bc8c764bd09adbf10d41195e25ac8d4a278`。源码来源以 SOURCE-COMMIT 校验，不以生成归档 SHA 作输入合同。
 
 ## 波形获取摘要与设备缺口
 

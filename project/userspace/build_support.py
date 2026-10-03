@@ -13,16 +13,10 @@ def output(path, inputs=(), clean=False):
     out.mkdir(parents=True, exist_ok=True)
     return out
 
-def toolchain(cross='arm-linux-gnueabihf-', expected=None):
+def toolchain(cross='arm-linux-gnueabihf-'):
     compiler = cross + 'gcc'
     target = subprocess.check_output([compiler, '-dumpmachine'], text=True).strip()
     if target != 'arm-linux-gnueabihf':
         raise ValueError('expected arm-linux-gnueabihf target, got ' + target)
     version = subprocess.check_output([compiler, '--version'], text=True).splitlines()[0]
-    if expected is not None:
-        compiler_version = expected['compiler'] if isinstance(expected,dict) else expected
-        if version != compiler_version:raise ValueError('release toolchain mismatch: '+version)
-        if isinstance(expected,dict) and 'linker' in expected:
-            linker=subprocess.check_output([cross+'ld','--version'],text=True).splitlines()[0]
-            if linker!=expected['linker']:raise ValueError('release linker mismatch: '+linker)
     return version
