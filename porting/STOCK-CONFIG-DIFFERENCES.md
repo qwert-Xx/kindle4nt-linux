@@ -1242,3 +1242,222 @@ ANATOP无用户时runtime suspended。临时CCF消费者共享bandgap两引用�
 硬件参数与驱动无改动；生效设备树仍为 `nxp/imx/imx50-kindle-k4.dtb`。
 验证仅为主机回归、公开审查、复制一致性与许可检查，设备及冷启动不新增结论。
 详见 [公开源文件清理](PUBLIC-SOURCE-CLEANUP-20261003.md)。
+
+## 2026-10-04 Unknown 充电来源按 BC1.2 处理
+
+原厂 arcotg_udc.c 对未枚举、线状态为 J/K 的来源先用 DAC1，超时后仍未枚举则
+选 CHARGING_THIRD_PARTY（DAC5）。本项目不移植：MAX14656 已按 BC1.2 及 Apple/
+专用充电器规则检测来源，未识别来源按 SDP 规则只使用 gadget 额度。有意偏离，
+理由是超时推断无法区分未响应主机口或弱电源。依据与映射见
+`CHARGE-SOURCE-MAPPING.md`。驱动代码未改。
+
+## 2026-10-04 原厂硬件充电计时与 Tequila 重试
+
+生效设备树：`nxp/imx/imx50-kindle-k4.dtb`，所有 common DTS 入口。
+充电时长按原厂只用 MC13892 硬件120分钟计时 + Tequila 一次重启。
+原厂 `arcotg_udc.c:260–261` 定义 `CHRG_TIMER_THRESHOLD_TEQ=1`，
+`:4724–4727` 为 Tequila 选择该阈值；`:4166–4204` 的 FAULTI 回调
+在计数未达阈值时写 CHGRESTART 并递增，否则停充，`:780–785` 阻止
+超限恢复，`:3715,3979` 在充电器断开时清零。`:870–887` 满电后电流
+置0，电压低于4105mV时恢复电流并CHGRESTART，开启新的硬件周期。
+
+驱动保留故障码10的一次重试及10秒条件核验、ICHARG=0→非零时
+CHGRESTART、完整采样确认CHGDETS=0且USB额度=0且输入<4.4V后清零
+重试计数的语义。控制切换、满电补电和逻辑USB断开保持重试计数。
+
+验证范围：七项指定充电/USB主机回归通过，118组执行器/初始化/恢复
+场景包含长期插入与多轮补电、重试耗尽和断开条件逐项检查，地址、
+未定义行为与泄漏检查全部启用；K4 defconfig 下 ARM 充电驱动单对象
+编译无警告。未操作设备或构建部署镜像，真实
+硬件超时、长期补电、物理拔插与冷启动仍待设备验收。
+
+
+## 2026-10-04 K4 EPDC 面板关电保留历史
+
+原厂`mxc_epdc_fb.c:902–1010,3604`正常powerup/powerdown只切引脚、
+时钟、CLKGATE和供电，INIT在probe初始化一次；blank与system PM
+（2946–2991、4482–4501）不重画。现代owner在probe后首次更新懒执行
+configure/INIT，正常idle/blank/suspend保留initialized、控制器配置
+和DRAM工作历史；恢复只解除gate、恢复时钟与供电，提交原局部区域。
+前端UNBLANK处理已有脏区，显式refresh仍为整幅FULL。故障后可安全
+重试时INIT+整幅恢复，活动DMA故障继续隔离直至整机复位。
+生效DT为imx50-kindle-k4及包含common显示节点的EPDC变体；DT、波形、
+PxP和时钟provider未改。主机/ARM验证及真实待机与画质缺口见
+[历史保留记录](EPDC-HISTORY-RETAIN-20261004.md)。本轮没有设备操作。
+
+## EPDC 异步管线（2026-10-04）
+
+生效设备树为 `imx50-kindle-k4.dts` 及包含 common 显示节点的 EPDC
+变体。PxP 按原厂 `drivers/dma/pxp/pxp_dma.c:437–497,1263–1305`
+配置反相/单色 LUT 与 GRAY16 直方图，完成后返回 HIST_CTRL.STATUS。
+主机模型验证四种 LUT 组合及原厂直方图参数；DMA_DEBUG=0/1 的既有
+PxP 服务回归通过。硬件直方图及画质仍需实机验证。
+完整管线的实现与验收记录见 `EPDC-MULTI-LUT-20261004.md`。
+
+Owner/hw 使用原厂 16 LUT、20 更新缓冲的异步 WB/LUT 管线，碰撞掩码
+随 LUT 完成清除、碰撞优先重提交、较新更新优先，marker 随目标 LUT
+完成。AUTO 按 PxP 直方图及 Lab126 的版本 4/6/7 模式映射选择 DU 或
+GC16。LUT15 活动时按原厂 EOF + 118us 公式提交，未添加 LUT 预留。
+Papyrus 按原厂每 60000ms 后台采样并缓存温度，probe/resume 立即调度；
+EPDC 提交使用最近有效样本，仅首次无样本时同步转换。该读取方式与
+原厂 `papyrus-regulator.c:65,1014–1054` 和
+`mxc_epdc_fb.c:2273–2274,2586–2587,3448–3449` 一致。hwmon 现场
+读取及既有过热检查仍获取新样本。主机缓存/PM/错误回归和 ARM 构建
+通过；A 机 kexec RAM 延迟依据及剩余缺口见
+`EPDC-Y8-TEMP-SNAPSHOT-20261006.md`。
+正常空闲关电保留控制器和工作区历史。
+DMA/供电故障及超时保留故障隔离；未写命令的供电失败可重试。
+主机联动模型 DMA_DEBUG=0/1 的 18/19 场景通过，真实设备 IRQ、画质、
+EOF、功耗和冷启动仍待验证。
+
+Framebuffer 默认 AUTOMATIC（原厂 `mxc_epdc_fb.c:4038` 为 REGION_MODE），
+这是主管按“通用 fbdev 写入即显示”作出的默认策略决定：通用 Linux fbdev 程序和
+metronomefb/broadsheetfb 期望写入即显示，Amazon 框架总是显式发送更新。
+write/mmap 脏页按原厂 `2855–2912` 合成 miny..maxy 的整行区域（计入
+末行），走相同异步队列与合并机制。现有 refresh/flush/waveform_mode/
+state 由新管线提供；无 UAPI/ioctl 变更。前端已有 idle-delay-ms 显式
+设置 owner 的 powerdown delay；owner 默认值仍为原厂的 0。
+
+
+## EPDC mxcfb 用户接口（2026-10-04）
+
+生效设备树仍为 `imx50-kindle-k4.dts` 及包含 common 显示节点的 EPDC
+变体。DT、共享时钟及电源参数保持板级配置。
+UAPI 采用 NXP lf-6.6 `include/uapi/linux/mxcfb.h` 的 72 字节 SEND 和
+8 字节 WAIT 布局。支持 SEND、WAIT、SET/GET_PWRDOWN_DELAY、
+SET_TEMPERATURE（仅 TEMP_USE_AMBIENT）、SET_AUTO_UPDATE_MODE 和
+SET_UPDATE_SCHEME；只读 state 为诊断接口。用户用法见
+`project/docs/DISPLAY.md`，实现与验收见 `EPDC-MXCFB-20261004.md`。
+
+QUEUE_AND_MERGE 为默认，与 K4 原厂一致。SNAPSHOT（0）在提交返回前
+按源格式捕获请求区域；转换、AUTO 与碰撞重试读取私有副本，各更新
+独立处理。原厂 `mxc_epdc_fb.c:1569–1593,2425–2500` 接受 SNAPSHOT
+并在返回前处理像素；本实现同步捕获原始区域、异步执行 PxP，以保留
+现有异步后端。scheme 切换立即生效，已排队更新保持各自的副本或画布
+引用；原厂 setter 先 flush，此处以逐更新保存采样语义支持立即切换。
+主机捕获/切换/碰撞/分配失败/旋转模型及 ARM 构建通过。
+SNAPSHOT 下断电后首次更新只按捕获区域恢复面板历史；需要整屏恢复
+时提交整屏区域。已有 A 机 kexec RAM 画布重写测试及冷启动/画质缺口
+见 `EPDC-Y8-TEMP-SNAPSHOT-20261006.md`。
+AUTO 使用已由原厂 Lab126 推导出的固定映射，不需要用户配置
+SET_WAVEFORM_MODES，该命令返回 ENOTTY。只支持反相/强制单色 flags；
+其它 flags、非零 dither_mode/quant_bit 和指定温度返回 EINVAL。
+WAIT 的 collision_test 表示 NXP 干跑结果，TEST_COLLISION 不支持，
+普通更新回填 0，不把内部碰撞重试误报成干跑结果。等待为 NXP 的
+5 秒上限，超时不取消 DMA。
+
+AUTOMATIC 默认是主管按“通用 fbdev 写入即显示”作出的决定。
+KOReader/FBInk 等自行发送更新的应用，应先 MXCFB_SET_AUTO_UPDATE_MODE
+切到 REGION_MODE，否则写屏会额外触发自动刷新。静态刷屏工具通过
+用户态配方构建，Alpine tools_dir 与维护根逐文件配方安装到 `/bin/`。
+主机模型、项目 unittest、ARM 构建和根打包验收见第三阶段记录；
+未访问设备，真实画质、用户应用、冷启动及电源生命周期仍待实机验证。
+
+## PxP LUT / AUTO 离线修正（2026-10-04）
+
+生效设备树为 `imx50-kindle-k4.dts` 及包含 common PxP/显示节点的
+EPDC 变体。PxP LUT 填写沿用原厂 `pxp_dma.c:434–495` 的逐项
+LUT_CTRL.ADDR 读取机制；直方图沿用 `933–936,963–965` 的清 IRQ 前
+STATUS 采集，再由 process 返回 IRQ 样本。AUTO bit0 选择 DU、其它
+分类选择 GC16 的 owner 策略沿用既有原厂映射。diagnostic 显示缓存
+histogram。按原厂 `441–443,495,1261–1305` 恢复 LUT 操作缓存和
+初始 LUT 之后的一次性直方图配置；每次 reset 后重建缓存与分类参数。
+CTRL 的 RGB888/MONOC8 编码、BYPASS bit31、0x80 阈值和启动前配置
+已复核；CROP 差异来自预先打包独立源区域、处理后裁剪的服务布局。
+时钟、电源、设备树与用户接口参数未改。
+
+全部七个 EPDC 主机测试、PxP 两种 DMA_DEBUG 服务回归、生产 ARM
+zImage 构建通过；本次驱动差异 checkpatch 为 0 ERROR / 0 WARNING。
+主机模型覆盖地址指针读回、IRQ 采样顺序、保留位读回、缓存与 reset
+后重建。B 掉电离线，本次没有访问设备；上述修正按原厂推导，
+反相、单色画质及 AUTO 黑白/灰阶的实机分类仍待验，原厂机制差异
+尚不能作为已证实的实机根因。
+
+## REGION damage 与 LUT 实机定位（2026-10-04）
+
+生效设备树为 `imx50-kindle-k4.dts` 及包含 common 显示节点的 EPDC
+变体。B 上保留 REGION 的三块测试已证明 `6016e1170` 的 PxP 单色/
+反相生效；原测试末尾恢复 AUTOMATIC 触发无 flags 补刷，覆盖了 LUT
+结果。AUTO 黑白选 DU 的 0.273s 为主管实测结果。
+
+前端按原厂 `mxc_epdc_fb.c:2894–2895,1546–1567` 丢弃 REGION 的
+mmap 与 write/绘制 damage，进入 REGION 清除累积 damage，切回
+AUTOMATIC 不安排补刷。模式切换前以标准 `flush_delayed_work()` 在
+旧 REGION 模式消费现代 core 的尚未执行页列表；新 AUTOMATIC
+写入仍按原有 min/max 整行策略刷新。PxP 寄存器/时钟/电源与 DT
+未变。原厂对应机制、手册章节、主机用例及实机验收见
+`EPDC-MULTI-LUT-20261004.md` 末尾。
+
+全部七个 EPDC 主机测试及 ARM zImage 构建通过；前端差异 checkpatch
+为 0 ERROR / 0 WARNING。实机证据为现有内核在保留 REGION 时的正确
+LUT 画面；B 上传前掉线，修正前端的模式切换与新 AUTOMATIC 写入
+尚待部署后复验。没有以主机模型替代这一实机缺口。
+
+
+## D06 / 输入过压与插电初始档位（2026-10-04）
+
+生效设备树为 `imx50-kindle-k4.dts` 及包含 common 充电节点的变体；
+板级来源额度、用户上限与设备树配置沿用当前定义。
+原厂 `arcotg_udc.c:256,622-655` 的输入条件为CHRGRAW>=6000mV停充、
+<6000mV恢复，无欠压停充。当前纯策略使用同一边界，每轮新采样重新
+核验其他条件后决定恢复。输入<4400mV只用于完整物理断开确认。
+
+原厂 `arcotg_udc.c:237,3906-3908` 在非SE1来源尚未枚举时先DAC1。
+当前CHGDETS=1且gadget/detector额度均为0时先DAC1，决策及写前后额度
+检查共享这一规则；两路原始额度保持0。非零额度、detector来源合并、
+挂起2mA、板级/用户上限与其它准入条件仍按当前规则执行。完整采样
+CHGDETS=0、合并额度=0且输入<4.4V才清零故障重试计数。
+
+逐项原厂/当前源码触发条件、现有有意偏离及证据缺口见
+`CHARGE-STOCK-TRIGGER-AUDIT-20261004.md`。FS标准预算、BC1.2分类、
+J/K超时升档选择、温度/满电/故障/PM等差异由报告列明。
+七项指定主机测试全部通过，包含4.3/5.9/6.0V和回落、未枚举DAC1、
+挂起DAC0及断开计数边界；K4 defconfig下充电驱动ARM单对象编译通过，
+无警告。没有设备操作或镜像构建；真实弱口输入、未枚举充入、
+温升/完整充电周期及冷启动仍待硬件验收。
+
+
+## 充电休眠、连续越界与满电条件（2026-10-04）
+
+生效设备树为 `imx50-kindle-k4.dts` 及包含 common 充电节点的变体；
+设备树、板级额度与公共接口保持现有定义。
+按原厂 `arcotg_udc.c:4887-4927`，系统休眠入口读取电池有效性和电压，
+有效电池且0<电压<=3420mV返回-EBUSY；否则同步取消检测工作、保留
+充电档位且无充电寄存器写入。恢复充电子IRQ后两秒重新采样。
+按 `arcotg_udc.c:2739-2749`，gadget的2mA挂起通知保留当前DAC，
+原始gadget/detector额度仍合并报告，其他准入与限额继续生效。
+
+原厂 `yoshi_battery.c:60,805-838,850-863` 每20秒采样，第5个连续
+温度或电压越界样本置错误，正常样本立即清除。当前两秒采样以BOOTTIME
+从首次越界计时，持续>=80秒才停充；温度、电压独立计时，正常有效样本
+立即清除对应计时/错误，读错误处理保持原规则。3°C/45°C取整和
+2.5V/4.35V边界沿用当前定义，初始化同样使用延迟判断。
+满电按 `arcotg_udc.c:871-886` 的CHGCURRS=0且>4100mV，或容量100%
+且电流0–20mA判定，保留非零DAC及6秒稳定要求与<4105mV补电滞回。
+来源文档按MAX14656当前表描述AL32（Apple12W）为Unknown、额度0。
+
+七项指定主机测试全部通过，新增覆盖休眠前后零写入/档位不变、
+3.42/3.43V和无效电池边界、gadget 2mA保留档位、温度/电压79/80秒
+边界及正常样本重置、4.2V单独不判满与原厂两种满电条件。
+地址、未定义行为与泄漏检查全部启用。
+K4 defconfig下充电驱动ARM单对象编译通过，无警告，输出在工作树外。
+本次没有设备操作或镜像构建/部署；真实休眠充电、异常温度/电压、
+完整充电周期及冷启动仍待硬件验收。
+
+## 2026-10-04 RAM 维护系统充电上限 80mA
+
+原厂按来源直接写 DAC 码（arcotg_udc.c:3602-3618），没有单独的维护系统。
+本项目 RAM 维护系统启动时把用户上限设为 80000 µA（`rootfs/busybox/maintenance/etc/k4-charge-current-ua`），
+Alpine 保持 480000。依据：第二台 K4 接在弱端口时，配置后 DAC5 使 VBUS 跌至约 4.35 V，
+主机层枚举反复失败、维护系统无法访问；限到 80mA 后立即稳定枚举。用户已批准该偏离。
+80mA 为主充电路径标称值，系统负载超出部分由电池补充。
+
+
+## EPDC Y8 快速路径（2026-10-06）
+
+生效设备树为 `imx50-kindle-k4.dts` 及包含 common 显示节点的 EPDC
+变体。Y8、无旋转、无有效 LUT 标志、无需 AUTO 直方图时逐行复制更新
+区域；其余输入使用 PxP。原厂 `drivers/dma/pxp/pxp_dma.c:560–563`
+的 CSC2 灰度系数之和为 256，等值 RGB 的输出与 Y8 输入一致。
+主机像素/边界/分配模型及 ARM 构建通过；A 机 kexec RAM 延迟数据与
+冷启动、画质验证缺口见 `EPDC-Y8-TEMP-SNAPSHOT-20261006.md`。

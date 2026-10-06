@@ -35,7 +35,7 @@ for n, p in rootfs_sources.files('common','busybox/maintenance').items():
     if n == 'bin/k4-modalias-coldplug': continue
     if p.is_symlink(): link(n, p.readlink().as_posix())
     else: file(n, p, p.stat().st_mode & 0o777)
-for n in ('busybox','busybox-modutils','dropbear','dropbearkey','wpa_supplicant','wpa_cli','iw'):
+for n in ('busybox','busybox-modutils','dropbear','dropbearkey','wpa_supplicant','wpa_cli','iw','k4-epd-update'):
     file('bin/' + n, userspace / 'bin' / n, 0o755)
 for p in sorted((private/'firmware').rglob('*')):
     n = 'lib/firmware/' + p.relative_to(private/'firmware').as_posix()
@@ -75,7 +75,7 @@ outer = dict(entries=list(entries.values()), filesystem_recipe='filesystem.json'
 inputs = dict(kernel_profile='production', release='6.6.157-k4-production',
               inputs=dict(ram_recipe=dict(path='ram-recipe.json',sha256=sha(private/'ram-recipe.json'))),
               alpine=dict(cache='alpine-cache',firmware_dir='firmware',wifi_config='wpa_supplicant.conf',
-                          authorized_keys='authorized_keys'))
+                          authorized_keys='authorized_keys',tools_dir=str(userspace/'bin')))
 if (private/'ssh_host_ecdsa_key').is_file(): inputs['alpine']['ssh_host_key']='ssh_host_ecdsa_key'
 (private/'inputs.json').write_text(json.dumps(inputs, indent=2)+'\n')
 print('Created filesystem.json, ram-recipe.json, inputs.json')

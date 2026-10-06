@@ -60,3 +60,6 @@ python3 porting/inspect-waveform.py --wbf "$PRIVATE/firmware/amazon/k4/panel-sto
 原厂 SSH 地址、端口与认证使用自己系统的设置。只有文件备份时，从备份的 `var/local/eink/waveforms/` 复制当前选择的同名配对文件，再检查。原厂路径和配对读取依据为 `porting/WAVEFORMS.md` 中已有实机记录及原厂 `eink_panel.c`/`waveform.c`；上述完整命令**本次未实机验证**。缓存没有 WRF 时，默认 NVMEM 内核路径仍能解码支持的 WBF。外部文件加载的设备树才需要配对文件；本任务不修改设备树或驱动。
 
 `/mnt/wfm/waveform_to_use.gz` 可能是压缩代理，不能当作原始 WBF。源码内置 25℃ 回退例子不能替代自己面板的波形。检查器验证格式、CRC 与配对头表，不证明画质或面板匹配。没有固定本机 SHA 限制；可自行记录 SHA256 校验备份传输。波形与面板备份留仓库外。flash 实际读取、面板匹配、刷新和跨温区画质仍需设备验证。
+
+当前 framebuffer 的 mxcfb ABI、波形编号和 `k4-epd-update` 用法见
+[显示接口](DISPLAY.md)。

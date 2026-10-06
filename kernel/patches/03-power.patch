@@ -1159,7 +1159,7 @@
  		ret = get_unaligned_le16(data);
 --- /dev/null
 +++ b/drivers/power/supply/k4-charge-policy.h
-@@ -0,0 +1,248 @@
+@@ -0,0 +1,306 @@
 +/* SPDX-License-Identifier: GPL-2.0-only */
 +/* Pure policy shared by the board driver and host boundary tests. */
 +#ifndef K4_CHARGE_POLICY_H
@@ -1238,14 +1238,76 @@
 +	int current_ua;
 +	int capacity;
 +	int usb_ua;
++	int usb_suspended;
 +	int input_mv;
 +	int current_settled;
 +	int precharge;
++	int temp_out_of_range;
++	int voltage_out_of_range;
 +	unsigned int sense0;
 +	unsigned int sense1;
 +	unsigned int powerup_sense;
 +	unsigned int charger0;
 +};
++
++/* Stock five 20-second samples span 80 seconds from the first violation. */
++#define K4_RANGE_DELAY_NS (80ULL * 1000000000ULL)
++
++struct k4_charge_range {
++	unsigned long long temp_since, voltage_since;
++	int temp_active, voltage_active;
++};
++
++static inline int k4_pack_valid(const struct k4_charge_sample *s)
++{
++	return s->present && (s->pack_id == 12 || s->pack_id == 76 ||
++			     s->pack_id == 140 || s->pack_id == 204);
++}
++
++static inline int k4_range_elapsed(int outside, int *active,
++				   unsigned long long *since,
++				   unsigned long long now)
++{
++	if (!outside) {
++		*active = 0;
++		return 0;
++	}
++	if (!*active) {
++		*active = 1;
++		*since = now;
++	}
++	return now - *since >= K4_RANGE_DELAY_NS;
++}
++
++static inline void k4_charge_ranges(struct k4_charge_sample *s,
++				    struct k4_charge_range *range,
++				    unsigned long long now)
++{
++	int temp_outside = s->temp_decic <= 30 || s->temp_decic >= 450;
++	int voltage_outside = s->voltage_uv <= K4_PACK_MIN_UV ||
++			      s->voltage_uv >= 4350000;
++
++	if (s->error)
++		return;
++	s->temp_out_of_range = k4_range_elapsed(temp_outside,
++						&range->temp_active, &range->temp_since, now);
++	s->voltage_out_of_range = k4_range_elapsed(voltage_outside,
++						   &range->voltage_active, &range->voltage_since,
++						   now);
++}
++
++static inline unsigned int k4_source_code(const struct k4_charge_sample *s)
++{
++	/* Stock starts host charging at DAC1 before USB enumeration. The raw
++	 * budget remains zero so physical-disconnect accounting is unchanged.
++	 */
++	if ((s->sense0 & K4_CHGDETS) && !s->usb_ua)
++		return 1;
++	/* USB suspend retains the programmed current, as in arcotg_udc. */
++	if ((s->sense0 & K4_CHGDETS) && s->usb_suspended)
++		return (s->charger0 & K4_CURRENT_MASK) >> 3;
++	return k4_budget_code(s->usb_ua);
++}
 +
 +enum k4_charge_reason {
 +	K4_CHARGE_ELIGIBLE,
@@ -1261,7 +1323,6 @@
 +	K4_CHARGE_NO_INPUT,
 +	K4_CHARGE_FAULT,
 +	K4_CHARGE_MODE,
-+	K4_CHARGE_SESSION_LIMIT,
 +	K4_CHARGE_RECOVERY_WAIT,
 +	K4_CHARGE_FULL,
 +};
@@ -1293,17 +1354,16 @@
 +{
 +	if (s->error)
 +		return K4_CHARGE_READ_ERROR;
-+	if (!s->present || (s->pack_id != 12 && s->pack_id != 76 &&
-+			   s->pack_id != 140 && s->pack_id != 204))
++	if (!k4_pack_valid(s))
 +		return K4_CHARGE_PACK;
 +	/* Conservative rounding of the old 37 F / 113 F limits. */
-+	if (s->temp_decic <= 30)
++	if (s->temp_out_of_range && s->temp_decic <= 30)
 +		return K4_CHARGE_COLD;
-+	if (s->temp_decic >= 450)
++	if (s->temp_out_of_range && s->temp_decic >= 450)
 +		return K4_CHARGE_HOT;
-+	if (s->voltage_uv <= K4_PACK_MIN_UV)
++	if (s->voltage_out_of_range && s->voltage_uv <= K4_PACK_MIN_UV)
 +		return K4_CHARGE_BATTERY_LOW;
-+	if (s->voltage_uv >= 4350000)
++	if (s->voltage_out_of_range && s->voltage_uv >= 4350000)
 +		return K4_CHARGE_BATTERY_HIGH;
 +	if (!k4_charge_path_valid(s))
 +		return K4_CHARGE_PATH;
@@ -1312,19 +1372,18 @@
 +		return K4_CHARGE_FAULT;
 +	if (!(s->sense0 & 0x40))
 +		return K4_CHARGE_NO_INPUT;
-+	if (!k4_budget_code(s->usb_ua))
++	if (!k4_source_code(s))
 +		return K4_CHARGE_USB_BUDGET;
-+	if (s->input_mv < 4400 || s->input_mv > 5300)
++	if (s->input_mv >= 6000)
 +		return K4_CHARGE_INPUT_VOLTAGE;
 +	if (!k4_charge_mode_valid(s->charger0))
 +		return K4_CHARGE_MODE;
 +	if (s->capacity < 0 || s->capacity > 100)
 +		return K4_CHARGE_READ_ERROR;
-+	/* Zero current after our own stop/suspend is not a charge termination. */
-+	if (s->voltage_uv >= 4200000 ||
-+	    (s->current_settled && (s->charger0 & K4_CURRENT_MASK) &&
-+	     ((!(s->sense0 & 0x800) && s->voltage_uv > 4100000) ||
-+	      (s->capacity == 100 && s->current_ua >= 0 && s->current_ua <= 20000))))
++	/* Zero current after our own stop is not a charge termination. */
++	if (s->current_settled && (s->charger0 & K4_CURRENT_MASK) &&
++	    ((!(s->sense0 & 0x800) && s->voltage_uv > 4100000) ||
++	     (s->capacity == 100 && s->current_ua >= 0 && s->current_ua <= 20000)))
 +		*full = 1;
 +	else if (s->voltage_uv < 4105000)
 +		*full = 0;
@@ -1337,7 +1396,7 @@
 +					  enum k4_charge_reason reason,
 +					  unsigned int limit_code)
 +{
-+	unsigned int budget_code = k4_budget_code(s->usb_ua);
++	unsigned int budget_code = k4_source_code(s);
 +
 +	if (reason != K4_CHARGE_ELIGIBLE || limit_code >= K4_CURRENT_CODES)
 +		return 0;
@@ -1366,7 +1425,6 @@
 +	case K4_CHARGE_NO_INPUT: return "no-input";
 +	case K4_CHARGE_FAULT: return "fault-active-or-awaiting-check";
 +	case K4_CHARGE_MODE: return "unsupported-charger-mode";
-+	case K4_CHARGE_SESSION_LIMIT: return "charge-time-limit";
 +	case K4_CHARGE_RECOVERY_WAIT: return "battery-fault-recovery";
 +	case K4_CHARGE_FULL: return "full";
 +	}
@@ -1604,14 +1662,13 @@
 +MODULE_LICENSE("GPL");
 --- /dev/null
 +++ b/drivers/power/supply/k4-mc13892-charger.c
-@@ -0,0 +1,1041 @@
+@@ -0,0 +1,1005 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/* Tequila charger policy. See porting/CHARGE-POLICY.md. */
 +#include <linux/atomic.h>
 +#include <linux/i2c.h>
 +#include <linux/jiffies.h>
 +#include <linux/leds.h>
-+#include <linux/math64.h>
 +#include <linux/mfd/mc13xxx.h>
 +#include <linux/module.h>
 +#include <linux/mutex.h>
@@ -1627,7 +1684,6 @@
 +#define K4_CHARGER0 48
 +#define K4_POLL (2 * HZ)
 +/* Tequila's original policy allows one restart of the 120 minute charger. */
-+#define K4_MAX_ACTIVE_NS (4ULL * 60 * 60 * NSEC_PER_SEC)
 +#define K4_BATTERY_RETRIES 1
 +#define K4_RECOVERY_NS (10ULL * NSEC_PER_SEC)
 +/* Gauge properties may be cached for five seconds after a DAC change. */
@@ -1651,11 +1707,12 @@
 +	struct delayed_work work;
 +	struct notifier_block notifier;
 +	struct k4_charge_sample sample;
++	struct k4_charge_range range;
 +	enum k4_charge_reason reason;
 +	atomic_t fault_seq, current_irq_state;
 +	unsigned int checked_fault_seq, battery_retries;
-+	u64 active_ns, accounted_at, healthy_since;
-+	bool active_running, recovery_healthy;
++	u64 healthy_since;
++	bool recovery_healthy;
 +	unsigned long sampled_at, current_changed, current_irq_due;
 +	int full, write_error;
 +	int green_latched;
@@ -1681,16 +1738,6 @@
 +static bool k4_fault_pending(struct k4_charger *c)
 +{
 +	return (unsigned int)atomic_read(&c->fault_seq) != c->checked_fault_seq;
-+}
-+
-+static void k4_account_time(struct k4_charger *c)
-+{
-+	u64 now = ktime_get_boottime_ns();
-+
-+	if (c->active_running && now >= c->accounted_at)
-+		c->active_ns += min(now - c->accounted_at,
-+				  K4_MAX_ACTIVE_NS - c->active_ns);
-+	c->accounted_at = now;
 +}
 +
 +#ifdef CONFIG_CHARGER_K4_MC13892_LEDS
@@ -1758,6 +1805,7 @@
 +	*budget = 0;
 +	c->gadget_ua = 0;
 +	c->detector_ua = 0;
++	c->sample.usb_suspended = 0;
 +	ret = k4_property(c->usb, POWER_SUPPLY_PROP_CURRENT_MAX, &gadget);
 +	if (ret)
 +		return ret;
@@ -1769,6 +1817,7 @@
 +	if (gadget < 0 || detector < 0)
 +		return -EINVAL;
 +	c->gadget_ua = gadget;
++	c->sample.usb_suspended = gadget == 2000;
 +	c->detector_ua = detector;
 +	*budget = max(gadget, detector);
 +	return 0;
@@ -1804,6 +1853,7 @@
 +	if (ret)
 +		return ret;
 +	ret = k4_source_budget(c, &s->usb_ua);
++	s->usb_suspended = c->gadget_ua == 2000;
 +	if (ret)
 +		return ret;
 +	ret = mc13xxx_adc_do_conversion(c->pmic, MC13XXX_ADC_MODE_MULT_CHAN,
@@ -1834,16 +1884,11 @@
 +
 +	if (code >= K4_CURRENT_CODES || code > c->board_max_code || code > c->limit_code)
 +		return -EINVAL;
-+	k4_account_time(c);
 +	if (code) {
-+		if (c->active_ns >= K4_MAX_ACTIVE_NS)
-+			return -ETIME;
 +		ret = k4_source_budget(c, &budget);
 +		if (ret)
 +			return ret;
 +		c->sample.usb_ua = budget;
-+		if (code > k4_budget_code(budget))
-+			return -EAGAIN;
 +		if (k4_fault_pending(c))
 +			return -EINTR;
 +	}
@@ -1851,9 +1896,6 @@
 +	ret = mc13xxx_reg_read(c->pmic, K4_CHARGER0, &reg);
 +	if (ret)
 +		goto out;
-+	/* An unconfirmed stop must continue consuming the safety budget. */
-+	if (c->controlled && (reg & K4_CURRENT_MASK))
-+		c->active_running = true;
 +	if (code) {
 +		ret = mc13xxx_reg_read(c->pmic, 2, &sense);
 +		if (ret)
@@ -1871,7 +1913,8 @@
 +			ret = -EPERM;
 +			goto out;
 +		}
-+		if (!(sense & 0x40)) {
++		if (!(sense & K4_CHGDETS) ||
++		    code > k4_source_code(&c->sample)) {
 +			ret = -EAGAIN;
 +			goto out;
 +		}
@@ -1897,17 +1940,9 @@
 +		 */
 +		if (code && (!(reg & K4_CURRENT_MASK) || retry_battery || low_restart))
 +			value |= K4_CHGRESTART;
-+		k4_account_time(c);
-+		if (code) {
-+			if (c->active_ns >= K4_MAX_ACTIVE_NS) {
-+				ret = -ETIME;
-+				goto out;
-+			}
-+			/* Count a write that may take effect even if SPI reports failure. */
-+			c->active_running = true;
-+			if (retry_battery)
-+				c->battery_retries++;
-+		}
++		/* Count a write that may take effect even if SPI reports failure. */
++		if (code && retry_battery)
++			c->battery_retries++;
 +		ret = mc13xxx_reg_rmw(c->pmic, K4_CHARGER0,
 +				     mask | K4_CHARGE_COMMANDS, value);
 +		if (ret)
@@ -1929,8 +1964,6 @@
 +		c->sample.charger0 = verify;
 +		if (code && low_restart)
 +			c->bpon_restart_at = ktime_get_boottime_ns();
-+		k4_account_time(c);
-+		c->active_running = c->controlled && code;
 +	}
 +out:
 +	mc13xxx_unlock(c->pmic);
@@ -1939,7 +1972,7 @@
 +		ret = k4_source_budget(c, &budget);
 +		if (!ret) {
 +			c->sample.usb_ua = budget;
-+			if (code > k4_budget_code(budget))
++			if (code > k4_source_code(&c->sample))
 +				ret = -EAGAIN;
 +		}
 +	}
@@ -1963,8 +1996,7 @@
 +	if (ret)
 +		return ret;
 +	/* Internal trickle/LPB needs distinct M3 ownership, unlike single path. */
-+	if (c->sample.voltage_uv <= K4_PACK_MIN_UV ||
-+	    !k4_charge_path_valid(&c->sample))
++	if (!k4_charge_path_valid(&c->sample))
 +		return -EOPNOTSUPP;
 +	mc13xxx_lock(c->pmic);
 +	ret = mc13xxx_reg_read(c->pmic, K4_CHARGER0, &reg);
@@ -2019,7 +2051,7 @@
 +	/* Code 2 means either battery collapse or timeout, not timeout alone. */
 +	if (safe.error || (safe.sense0 & K4_CHGFAULT_MASK) != 0x200 ||
 +	    c->battery_retries >= K4_BATTERY_RETRIES ||
-+	    c->active_ns >= K4_MAX_ACTIVE_NS || !c->limit_code)
++	    !c->limit_code)
 +		goto unhealthy;
 +	/* Requalify every other guard without treating our stop as termination. */
 +	safe.sense0 &= ~K4_CHGFAULT_MASK;
@@ -2047,8 +2079,8 @@
 +	bool retry_battery, previous_bpon;
 +	int ret;
 +
-+	k4_account_time(c);
 +	c->sample.error = k4_sample(c, &c->sample);
++	k4_charge_ranges(&c->sample, &c->range, ktime_get_boottime_ns());
 +	previous_bpon = c->precharge;
 +	c->precharge = k4_precharge_next(&c->sample, c->precharge);
 +	if (previous_bpon != c->precharge) {
@@ -2065,8 +2097,6 @@
 +	/* USB gadget disconnect alone is not loss of the physical input. */
 +	if (!c->sample.error && !(c->sample.sense0 & K4_CHGDETS) &&
 +	    !c->sample.usb_ua && c->sample.input_mv < 4400) {
-+		c->active_ns = 0;
-+		c->active_running = false;
 +		c->battery_retries = 0;
 +		c->recovery_healthy = false;
 +	}
@@ -2084,9 +2114,7 @@
 +	    (!c->initialized || !k4_charge_mode_valid(c->sample.charger0))) {
 +		ret = k4_init_charge(c);
 +		if (ret) {
-+			if (c->sample.voltage_uv <= K4_PACK_MIN_UV)
-+				c->reason = K4_CHARGE_BATTERY_LOW;
-+			else if (!k4_charge_path_valid(&c->sample))
++			if (!k4_charge_path_valid(&c->sample))
 +				c->reason = K4_CHARGE_PATH;
 +			else
 +				c->reason = K4_CHARGE_MODE;
@@ -2100,15 +2128,9 @@
 +		c->recovery_healthy = false;
 +		return;
 +	}
-+	if (c->active_ns >= K4_MAX_ACTIVE_NS)
-+		c->reason = K4_CHARGE_SESSION_LIMIT;
 +	target = k4_charge_target(&c->sample, c->reason, c->limit_code);
 +	retry_battery = k4_recovery_ready(c, &target);
 +	ret = k4_apply_current(c, target, retry_battery);
-+	if (ret == -ETIME) {
-+		c->reason = K4_CHARGE_SESSION_LIMIT;
-+		ret = k4_set_current(c, 0);
-+	}
 +	if (ret == -EAGAIN) {
 +		/* Normal unplug/enumeration races are not latched hardware faults. */
 +		c->reason = c->sample.sense0 & 0x40 ?
@@ -2240,13 +2262,13 @@
 +		"id=%d present=%d temp_decic=%d voltage_uv=%d current_ua=%d capacity=%d\n"
 +		"usb_ua=%d input_mv=%d sense0=0x%06x sense1=0x%06x charger0=0x%06x code=%u\n"
 +		"limit_code=%u board_max_code=%u target_code=%u initialized=%u release_pending=%u\n"
-+		"active_ms=%llu active_limit_ms=%llu battery_retries=%u fault_code=%u fault_seq=%u\n"
++		"battery_retries=%u fault_code=%u fault_seq=%u\n"
 +		"budget_code=%u powerup_sense=0x%06x serial_path=%u low_power_boot=%u bpon=%u\n"
 +		"gadget_ua=%d detector_ua=%d detector_present=%u\n",
 +		c->controlled, k4_charge_reason_name(c->reason), s->error,
 +		c->write_error, k4_fault_pending(c) ||
 +			(s->sense0 & (K4_USBOVS | K4_CHGFAULT_MASK)) ||
-+			(s->sense1 & K4_THWARN_MASK) || c->active_ns >= K4_MAX_ACTIVE_NS,
++			(s->sense1 & K4_THWARN_MASK),
 +		c->full,
 +		jiffies_to_msecs(jiffies - c->sampled_at), s->pack_id, s->present,
 +		s->temp_decic, s->voltage_uv, s->current_ua, s->capacity, s->usb_ua,
@@ -2256,8 +2278,6 @@
 +		c->controlled && !c->release_pending ?
 +			k4_charge_target(s, c->reason, c->limit_code) : 0,
 +		c->initialized, c->release_pending,
-+		(unsigned long long)div_u64(c->active_ns, NSEC_PER_MSEC),
-+		(unsigned long long)div_u64(K4_MAX_ACTIVE_NS, NSEC_PER_MSEC),
 +		c->battery_retries, (s->sense0 & K4_CHGFAULT_MASK) >> 8,
 +		(unsigned int)atomic_read(&c->fault_seq),
 +		k4_budget_code(s->usb_ua), s->powerup_sense,
@@ -2590,25 +2610,27 @@
 +static int k4_suspend(struct device *dev)
 +{
 +	struct k4_charger *c = dev_get_drvdata(dev);
-+	int ret = 0;
++	struct k4_charge_sample battery = { 0 };
++	int voltage, ret;
 +
 +	mutex_lock(&c->lock);
++	/* Match stock: only a valid battery with a positive low voltage vetoes PM. */
++	battery.pack_id = i2c_smbus_read_byte_data(c->gauge, 0x7e);
++	ret = k4_property(c->battery, POWER_SUPPLY_PROP_PRESENT, &battery.present);
++	voltage = i2c_smbus_read_word_data(c->gauge, 0x08);
++	if (!ret && k4_pack_valid(&battery) && voltage > 0 && voltage <= 3420) {
++		mutex_unlock(&c->lock);
++		return -EBUSY;
++	}
 +	c->suspended = true;
 +	mutex_unlock(&c->lock);
 +	cancel_delayed_work_sync(&c->work);
 +	mutex_lock(&c->lock);
-+	if (c->controlled)
-+		ret = k4_set_current(c, 0);
-+	if (ret)
-+		c->suspended = false;
 +	k4_leds_update_locked(c);
 +	mutex_unlock(&c->lock);
-+	if (ret)
-+		k4_queue(c);
-+	else
-+		/* Shared PMIC INT may now wake the SoC for the power button. */
-+		k4_suspend_irqs(c, true);
-+	return ret;
++	/* Shared PMIC INT may now wake the SoC for the power button. */
++	k4_suspend_irqs(c, true);
++	return 0;
 +}
 +
 +static int k4_resume(struct device *dev)
@@ -3117,9 +3139,9 @@
 +#endif
 --- /dev/null
 +++ b/drivers/regulator/k4-papyrus.c
-@@ -0,0 +1,961 @@
+@@ -0,0 +1,1045 @@
 +// SPDX-License-Identifier: GPL-2.0-only
-+/* K4 TPS65180B DISPLAY/VCOM sequencer and fresh thermistor acquisition. */
++/* K4 TPS65180B DISPLAY/VCOM sequencer and ambient temperature cache. */
 +#include <linux/delay.h>
 +#include <linux/gpio/consumer.h>
 +#include <linux/hwmon.h>
@@ -3154,6 +3176,7 @@
 +#define PAPYRUS_STANDBY 0x40
 +#define PAPYRUS_ACTIVE 0x80
 +#define PAPYRUS_PG_ALL 0xfa
++#define PAPYRUS_TEMP_INTERVAL_MS 60000
 +
 +/* SLVSA76G: the two documented TPS65180B revisions share this register map. */
 +static bool papyrus_revision_supported(int revision)
@@ -3172,7 +3195,9 @@
 +	int power_error, shutdown_error;
 +	struct gpio_desc *wakeup, *vcom, *pgood, *nint;
 +	struct regulator_dev *rdev[2];
-+	struct delayed_work monitor;
++	struct delayed_work monitor, temperature_work;
++	long temperature;
++	bool temperature_valid;
 +	unsigned long next_temperature;
 +	u8 vp, vn, vcom_dac, sequence[3], hot, cool;
 +};
@@ -3475,6 +3500,8 @@
 +	if (ret)
 +		goto fault;
 +	*result = raw * 1000;
++	p->temperature = *result;
++	p->temperature_valid = true;
 +	p->samples++;
 +	p->last_error = 0;
 +	return 0;
@@ -3484,6 +3511,25 @@
 +	 * Do not reset display power to recover a thermistor bus transaction.
 +	 */
 +	p->last_error = ret;
++	return ret;
++}
++
++/* Caller holds lock. Restore WAKEUP when sampling an idle, sleeping chip. */
++static int papyrus_sample(struct k4_papyrus_temp *p, long *value)
++{
++	bool asleep = !p->awake;
++	int ret, sleep_ret;
++
++	if (p->suspended || p->stopping)
++		return -EBUSY;
++	ret = papyrus_temperature(p, value);
++	if (asleep) {
++		sleep_ret = papyrus_sleep(p);
++		if (!ret && sleep_ret)
++			ret = sleep_ret;
++	}
++	if (ret)
++		p->last_error = ret;
 +	return ret;
 +}
 +
@@ -3706,6 +3752,32 @@
 +	return ret;
 +}
 +
++/* Stock papyrus-regulator.c:1014-1054 samples ambient every 60000 ms. */
++static void papyrus_temperature_work(struct work_struct *work)
++{
++	struct k4_papyrus_temp *p = container_of(to_delayed_work(work),
++					struct k4_papyrus_temp, temperature_work);
++	bool notify = false;
++	long temperature;
++	int ret;
++
++	mutex_lock(&p->lock);
++	if (p->suspended || p->stopping)
++		goto out;
++	ret = papyrus_sample(p, &temperature);
++	if (ret && p->display_on) {
++		p->power_error = ret;
++		papyrus_off(p);
++		notify = true;
++	}
++	mod_delayed_work(system_wq, &p->temperature_work,
++			 msecs_to_jiffies(PAPYRUS_TEMP_INTERVAL_MS));
++out:
++	mutex_unlock(&p->lock);
++	if (notify)
++		papyrus_notify(p);
++}
++
 +static const struct hwmon_ops papyrus_hwmon_ops = {
 +	.is_visible = papyrus_visible,
 +	.read = papyrus_read,
@@ -3720,6 +3792,34 @@
 +	return papyrus_read(provider, hwmon_temp, hwmon_temp_input, 0, temperature);
 +}
 +EXPORT_SYMBOL_GPL(k4_papyrus_read_temperature);
++
++int k4_papyrus_cached_temperature(struct device *provider, long *temperature)
++{
++	struct k4_papyrus_temp *p = dev_get_drvdata(provider);
++	bool notify = false;
++	int ret = 0;
++
++	if (!temperature || !p || !READ_ONCE(p->ready))
++		return -ENODEV;
++	mutex_lock(&p->lock);
++	if (p->stopping) {
++		ret = -ENODEV;
++	} else if (p->temperature_valid) {
++		*temperature = p->temperature;
++	} else {
++		ret = papyrus_sample(p, temperature);
++		if (ret && p->display_on) {
++			p->power_error = ret;
++			papyrus_off(p);
++			notify = true;
++		}
++	}
++	mutex_unlock(&p->lock);
++	if (notify)
++		papyrus_notify(p);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(k4_papyrus_cached_temperature);
 +
 +struct device *devm_k4_papyrus_get(struct device *consumer, const char *property)
 +{
@@ -3831,6 +3931,8 @@
 +			p->suspended = true;
 +	}
 +	mutex_unlock(&p->lock);
++	if (!ret)
++		cancel_delayed_work_sync(&p->temperature_work);
 +	return ret;
 +}
 +
@@ -3840,6 +3942,7 @@
 +
 +	mutex_lock(&p->lock);
 +	p->suspended = false;
++	mod_delayed_work(system_wq, &p->temperature_work, 0);
 +	mutex_unlock(&p->lock);
 +	return 0;
 +}
@@ -3916,6 +4019,7 @@
 +	WRITE_ONCE(p->ready, false);
 +	mutex_unlock(&p->lock);
 +	cancel_delayed_work_sync(&p->monitor);
++	cancel_delayed_work_sync(&p->temperature_work);
 +	mutex_lock(&p->lock);
 +	if (p->owned) {
 +		papyrus_off(p);
@@ -4002,6 +4106,7 @@
 +	p->client = client;
 +	mutex_init(&p->lock);
 +	INIT_DELAYED_WORK(&p->monitor, papyrus_monitor);
++	INIT_DELAYED_WORK(&p->temperature_work, papyrus_temperature_work);
 +	i2c_set_clientdata(client, p);
 +	ret = papyrus_profile(p);
 +	if (ret)
@@ -4040,6 +4145,7 @@
 +	ret = PTR_ERR_OR_ZERO(hwmon);
 +	if (!ret) {
 +		WRITE_ONCE(p->ready, true);
++		mod_delayed_work(system_wq, &p->temperature_work, 0);
 +		return 0;
 +	}
 +fail:
@@ -4925,7 +5031,7 @@
 +obj-$(CONFIG_IMX50_PXP_KERNEL) += imx50-pxp.o
 --- /dev/null
 +++ b/drivers/soc/imx/imx50-pxp.c
-@@ -0,0 +1,603 @@
+@@ -0,0 +1,656 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/* i.MX50 ePXP synchronous kernel image service. No NEXT command chaining. */
 +#include <linux/clk.h>
@@ -4954,6 +5060,7 @@
 +#define PXP_EVENTS GENMASK(3, 0)
 +#define PXP_GUARD 4096
 +#define PXP_RGB_GREY 0x1080
++#define PXP_HIST_CTRL 0x490
 +
 +struct imx50_pxp {
 +	struct device *dev;
@@ -4966,8 +5073,9 @@
 +	const char *stage;
 +	u32 diag_ctrl, diag_stat, diag_next;
 +	bool initialized, suspended, stopped, clocks_retained;
-+	u32 irq_stat;
-+	u32 last_ctrl;
++	bool histogram_configured;
++	u32 irq_stat, irq_histogram;
++	u32 last_ctrl, lut_flags;
 +	u64 completed, irqs, allocations, releases;
 +	u8 *arena;
 +	dma_addr_t dma;
@@ -5004,6 +5112,8 @@
 +
 +	if (!(stat & PXP_EVENTS))
 +		return IRQ_NONE;
++	/* Stock samples STATUS before acknowledging the completion IRQ. */
++	WRITE_ONCE(p->irq_histogram, readl(p->base + PXP_HIST_CTRL) & 0xf);
 +	writel(BIT(1), p->base + PXP_CTRL_CLR);
 +	writel(stat & PXP_EVENTS, p->base + PXP_STAT_CLR);
 +	readl(p->base + PXP_STAT);
@@ -5082,12 +5192,14 @@
 +		return ret;
 +	if (readl(p->base + PXP_STAT) || readl(p->base + PXP_NEXT))
 +		return -EIO;
++	p->histogram_configured = false;
++	p->lut_flags = U32_MAX;
 +	p->initialized = true;
 +	return 0;
 +}
 +
 +static int imx50_pxp_configure(struct imx50_pxp *p,
-+			     const struct imx50_pxp_image *im, size_t output)
++			     const struct imx50_pxp_image *im, size_t output, u32 flags)
 +{
 +	u32 ctrl = PXP_RGB_GREY | ((im->rotation / 90) << 8);
 +	struct { u32 reg, val; } regs[] = {
@@ -5104,7 +5216,13 @@
 +		{ 0x320, 0 }, { 0x360, 0 }, { 0x3a0, 0 }, { 0x3e0, 0 },
 +		{ 0x400, 4 }, { 0x410, 0x0096004d }, { 0x420, 0x0000001d },
 +		{ 0x430, 0 }, { 0x440, 0 }, { 0x450, 0 }, { 0x460, 0 },
-+		{ 0x470, BIT(31) },
++	};
++	struct { u32 reg, val; } hist_regs[] = {
++		{ 0x490, 0x20 }, /* GRAY16 panel, stock pxp_dma.c:1263 */
++		{ 0x4a0, 0x00000f00 }, { 0x4b0, 0x0f0a0500 },
++		{ 0x4c0, 0x06040200 }, { 0x4d0, 0x0f0d0b09 },
++		{ 0x4e0, 0x03020100 }, { 0x4f0, 0x07060504 },
++		{ 0x500, 0x0b0a0908 }, { 0x510, 0x0f0e0d0c },
 +	};
 +	unsigned int i;
 +
@@ -5116,6 +5234,34 @@
 +	if (readl(p->base + PXP_CTRL) != ctrl ||
 +	    (readl(p->base + PXP_STAT) & PXP_EVENTS) || readl(p->base + PXP_NEXT))
 +		return -EBUSY;
++	/* Stock caches the transform; threshold at 0x80, then inversion. */
++	if (p->lut_flags != flags) {
++		writel(flags ? 0 : BIT(31), p->base + 0x470);
++		if (flags) {
++			for (i = 0; i < 256; i++) {
++				u32 addr = readl(p->base + 0x470) & 0xff;
++				u32 value = (flags & IMX50_PXP_MONOCHROME) ?
++					(addr < 0x80 ? 0 : 255) : addr;
++
++				writel((flags & IMX50_PXP_INVERT) ? 255 - value : value,
++				       p->base + 0x480);
++			}
++		}
++		p->lut_flags = flags;
++	}
++	/* Stock programs classification once, after the initial LUT setup. */
++	if (!p->histogram_configured) {
++		for (i = 0; i < ARRAY_SIZE(hist_regs); i++) {
++			/* HIST_CTRL low bits are STATUS; PARAM reserved bits are unspecified. */
++			u32 mask = hist_regs[i].reg == PXP_HIST_CTRL ? ~0xfU :
++				   0x1f1f1f1f;
++
++			writel(hist_regs[i].val, p->base + hist_regs[i].reg);
++			if ((readl(p->base + hist_regs[i].reg) & mask) != hist_regs[i].val)
++				return -EIO;
++		}
++		p->histogram_configured = true;
++	}
 +	p->last_ctrl = ctrl;
 +	return 0;
 +}
@@ -5153,14 +5299,17 @@
 +	return readl_poll_timeout(p->base + PXP_CTRL, value, !value, 5, 1000);
 +}
 +
-+int imx50_pxp_convert(struct imx50_pxp *p, const struct imx50_pxp_image *im)
++int imx50_pxp_process(struct imx50_pxp *p, const struct imx50_pxp_image *im,
++		      u32 flags, u32 *histogram_out)
 +{
 +	size_t pixels, input_end, output, output_end, bytes, i;
-+	u32 value, idle;
++	u32 value, idle, histogram = 0;
 +	u32 dw, dh;
 +	bool clocks = false, line = false, started = false, completed = false, owned = false;
 +	int ret, park_ret;
 +
++	if (flags & ~(IMX50_PXP_INVERT | IMX50_PXP_MONOCHROME))
++		return -EINVAL;
 +	ret = imx50_pxp_validate(im);
 +	if (ret)
 +		return ret;
@@ -5232,7 +5381,7 @@
 +			goto park;
 +	}
 +	p->stage = "configure";
-+	ret = imx50_pxp_configure(p, im, output);
++	ret = imx50_pxp_configure(p, im, output, flags);
 +	if (ret)
 +		goto park;
 +	reinit_completion(&p->done);
@@ -5257,6 +5406,7 @@
 +	if (ret)
 +		goto park;
 +	completed = true;
++	histogram = READ_ONCE(p->irq_histogram);
 +	dma_rmb();
 +	if (!IS_ENABLED(CONFIG_IMX50_PXP_DMA_DEBUG))
 +		goto park;
@@ -5320,6 +5470,8 @@
 +		for (i = 0; i < dh; i++)
 +			memcpy((u8 *)im->dst + i * im->dst_stride,
 +			       p->arena + output + i * dw, dw);
++		if (histogram_out)
++			*histogram_out = histogram;
 +		p->completed++;
 +	}
 +unlock:
@@ -5328,6 +5480,12 @@
 +		p->stage = "complete";
 +	mutex_unlock(&p->lock);
 +	return ret;
++}
++EXPORT_SYMBOL_GPL(imx50_pxp_process);
++
++int imx50_pxp_convert(struct imx50_pxp *p, const struct imx50_pxp_image *im)
++{
++	return imx50_pxp_process(p, im, 0, NULL);
 +}
 +EXPORT_SYMBOL_GPL(imx50_pxp_convert);
 +
@@ -5397,6 +5555,7 @@
 +		p->stage ?: "none", p->last_result, p->fault, p->initialized,
 +		(unsigned long long)p->completed, p->diag_ctrl, p->diag_stat,
 +		p->diag_next, p->clocks_retained);
++	n += sysfs_emit_at(buf, n, "histogram=%x\n", p->irq_histogram);
 +	mutex_unlock(&p->lock);
 +	return n;
 +}
@@ -5634,7 +5793,7 @@
 +#endif
 --- /dev/null
 +++ b/include/linux/k4-papyrus.h
-@@ -0,0 +1,12 @@
+@@ -0,0 +1,15 @@
 +/* SPDX-License-Identifier: GPL-2.0-only */
 +#ifndef _LINUX_K4_PAPYRUS_H
 +#define _LINUX_K4_PAPYRUS_H
@@ -5645,6 +5804,9 @@
 +struct device *devm_k4_papyrus_get(struct device *consumer, const char *property);
 +/* Fresh conversion in millidegrees Celsius; may sleep and report power faults. */
 +int k4_papyrus_read_temperature(struct device *provider, long *temperature);
++
++/* Cached ambient in millidegrees Celsius; first valid sample may sleep. */
++int k4_papyrus_cached_temperature(struct device *provider, long *temperature);
 +
 +#endif
 --- /dev/null

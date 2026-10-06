@@ -13,7 +13,7 @@ OUT="$HOME/k4-output"
 mkdir -p "$PRIVATE" "$OUT"
 ```
 
-`PRIVATE` 保存自己的固件/波形、Wi-Fi 配置、授权公钥、主机密钥、第三方归档和 JSON 配方。备份中的路径、提取命令及监管数据库来源见[私有输入提取指南](FIRMWARE-EXTRACTION.md)。固件目录按目标 `/lib/firmware` 布局，含 ath6kl 固件/校准和签名 regulatory.db。默认显示从面板 flash 获取 WBF 并解码，外部波形不是构建必填项；完整获取命令见[显示波形](WAVEFORMS.md)。没有可用波形可启动、维护和联网，显示不可用。
+`PRIVATE` 保存自己的固件/波形、Wi-Fi 配置、授权公钥、主机密钥、第三方归档和 JSON 配方。备份中的路径、提取命令及监管数据库来源见[私有输入提取指南](FIRMWARE-EXTRACTION.md)。固件目录按目标 `/lib/firmware` 布局，含 ath6kl 固件/校准和签名 regulatory.db。默认显示从面板 flash 获取 WBF 并解码，外部波形不是构建必填项；完整获取命令见[显示波形](WAVEFORMS.md)，刷新操作见[显示接口](DISPLAY.md)。没有可用波形可启动、维护和联网，显示不可用。
 
 APK 缓存可用以下命令准备；已有缓存也会校验锁定哈希：
 
@@ -49,7 +49,7 @@ python3 project/userspace/e2fsprogs.py --source "$PRIVATE/e2fsprogs-1.47.1.tar.x
 }
 ```
 
-`authorized_keys` 与 `ssh_host_key` 参数可选；要通过 SSH 登录需实际安装授权公钥。省略 Alpine 主机密钥会在首次运行生成。`tools_dir` 可选，提供项目 ELF 工具。项目文本从 `rootfs/` 安装，诊断不进默认产物。
+`authorized_keys` 与 `ssh_host_key` 参数可选；要通过 SSH 登录需实际安装授权公钥。省略 Alpine 主机密钥会在首次运行生成。`tools_dir` 指向用户态构建的 `bin/`，将 `k4-epd-update` 等项目 ELF 工具安装到 Alpine 根的 `/bin/`；省略时只安装 APK 和项目文本。维护根逐文件配方同样包含 `bin/k4-epd-update`。项目文本从 `rootfs/` 安装，诊断不进默认产物。
 
 维护配方 `ram-recipe.json` 的 `entries` 描述外层 cpio；`filesystem_recipe` 引用内嵌 ext3 根配方，`filesystem_recipe_sha256` 校验它。内层含 `image_bytes`、`uuid`、`entries` 和：
 

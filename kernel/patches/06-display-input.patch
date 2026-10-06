@@ -1265,9 +1265,9 @@
 +imx50-k4-epdc-y := imx50-epdc.o imx50-epdc-image.o imx50-epdc-buffer.o imx50-epdc-hw.o imx50-epdc-waveform.o
 --- /dev/null
 +++ b/drivers/video/fbdev/imx50-epdc-buffer.c
-@@ -0,0 +1,251 @@
+@@ -0,0 +1,317 @@
 +// SPDX-License-Identifier: GPL-2.0-only
-+/* EPDC DMA ownership and serial update descriptors. No controller MMIO. */
++/* EPDC shared history and twenty WB update slots. No controller MMIO. */
 +#include <linux/crc32.h>
 +#include <linux/dma-mapping.h>
 +#include <linux/err.h>
@@ -1287,13 +1287,19 @@
 +	size_t bytes, allocation;
 +};
 +
++struct imx50_epdc_slot {
++	struct imx50_epdc_dma update;
++	struct imx50_epdc_rect rect;
++	u32 crc;
++	bool used, ready, active;
++};
++
 +struct imx50_epdc_buffers {
 +	struct device *dev;
-+	struct imx50_epdc_dma wave, work, update;
-+	struct imx50_epdc_rect rect;
-+	u32 width, height, modes, temperatures, stride;
-+	u32 wave_crc, update_crc;
-+	bool ready, active, initializing, primed;
++	struct imx50_epdc_dma wave, work;
++	struct imx50_epdc_slot slots[IMX50_EPDC_MAX_UPDATES];
++	u32 width, height, modes, temperatures, wave_crc;
++	bool primed;
 +	int fault;
 +};
 +
@@ -1331,16 +1337,17 @@
 +			   d->allocation - EPDC_GUARD - d->bytes);
 +}
 +
-+static int epdc_buffers_check(struct imx50_epdc_buffers *b, bool check_update)
++static int epdc_buffers_check(struct imx50_epdc_buffers *b,
++			      struct imx50_epdc_slot *s, bool image)
 +{
 +	if (!IS_ENABLED(CONFIG_IMX50_EPDC_DMA_DEBUG))
 +		return 0;
 +	if (!epdc_dma_guard(&b->wave) || !epdc_dma_guard(&b->work) ||
-+	    !epdc_dma_guard(&b->update))
++	    !epdc_dma_guard(&s->update))
 +		return -EOVERFLOW;
 +	if (crc32_le(~0, b->wave.cpu + EPDC_GUARD, b->wave.bytes) != b->wave_crc ||
-+	    (check_update && crc32_le(~0, b->update.cpu + EPDC_GUARD,
-+				     b->update.bytes) != b->update_crc))
++	    (image && crc32_le(~0, s->update.cpu + EPDC_GUARD,
++			      s->update.bytes) != s->crc))
 +		return -EILSEQ;
 +	return 0;
 +}
@@ -1351,7 +1358,7 @@
 +{
 +	struct imx50_epdc_buffers *b;
 +	size_t work_bytes, update_bytes;
-+	int ret;
++	int ret, i;
 +
 +	if (!dev || !waveform || !waveform_size ||
 +	    !width || !height || width > EPDC_RES_MAX || height > EPDC_RES_MAX || (width & 3) ||
@@ -1374,143 +1381,202 @@
 +	ret = epdc_dma_alloc(dev, &b->work, work_bytes);
 +	if (ret)
 +		goto fail;
-+	ret = epdc_dma_alloc(dev, &b->update, update_bytes);
-+	if (ret)
-+		goto fail;
++	for (i = 0; i < IMX50_EPDC_MAX_UPDATES; i++) {
++		ret = epdc_dma_alloc(dev, &b->slots[i].update, update_bytes);
++		if (ret)
++			goto fail;
++	}
 +	memcpy(b->wave.cpu + EPDC_GUARD, waveform, waveform_size);
 +	if (IS_ENABLED(CONFIG_IMX50_EPDC_DMA_DEBUG))
 +		b->wave_crc = crc32_le(~0, b->wave.cpu + EPDC_GUARD, waveform_size);
 +	return b;
 +fail:
-+	epdc_dma_free(dev, &b->update);
++	for (i = 0; i < IMX50_EPDC_MAX_UPDATES; i++)
++		epdc_dma_free(dev, &b->slots[i].update);
 +	epdc_dma_free(dev, &b->work);
 +	epdc_dma_free(dev, &b->wave);
 +	kfree(b);
 +	return ERR_PTR(ret);
 +}
 +
-+int imx50_epdc_buffers_prepare(struct imx50_epdc_buffers *b, struct imx50_pxp *pxp,
-+			       const struct imx50_epdc_source *src)
++int imx50_epdc_buffers_get(struct imx50_epdc_buffers *b)
 +{
++	unsigned int i;
++
++	if (b->fault)
++		return b->fault;
++	for (i = 0; i < IMX50_EPDC_MAX_UPDATES; i++) {
++		if (!b->slots[i].used) {
++			b->slots[i].used = true;
++			return i;
++		}
++	}
++	return -EBUSY;
++}
++
++int imx50_epdc_buffers_prepare(struct imx50_epdc_buffers *b, unsigned int slot,
++	struct imx50_pxp *pxp, const struct imx50_epdc_source *src,
++	const struct imx50_epdc_rect *panel_region, u32 flags, u32 *histogram)
++{
++	struct imx50_epdc_slot *s;
 +	u32 w, h;
 +	int ret;
 +
-+	if (b->fault || b->active)
-+		return b->fault ? b->fault : -EBUSY;
-+	if (!src || src->rotation > 270 || src->rotation % 90)
++	if (b->fault)
++		return b->fault;
++	if (slot >= IMX50_EPDC_MAX_UPDATES || !src)
 +		return -EINVAL;
++	s = &b->slots[slot];
++	if (!s->used || s->active)
++		return -EBUSY;
 +	w = src->rotation % 180 ? src->height : src->width;
 +	h = src->rotation % 180 ? src->width : src->height;
-+	if (w != b->width || h != b->height)
++	if (!panel_region && (w != b->width || h != b->height))
 +		return -EINVAL;
 +	w = src->rotation % 180 ? src->region.height : src->region.width;
-+	if (!w || w > b->width)
-+		return -EINVAL;
-+	/* A new request replaces the queued image; a failed preparation discards it. */
-+	b->ready = false;
-+	b->stride = ALIGN(w, 8);
-+	memset(b->update.cpu + EPDC_GUARD, 0xff, b->update.bytes);
-+	ret = imx50_epdc_prepare(pxp, src, b->update.cpu + EPDC_GUARD,
-+				b->update.bytes, b->stride, &b->rect);
-+	if (ret)
-+		return ret;
-+	b->ready = true;
-+	return 0;
++	s->ready = false;
++	memset(s->update.cpu + EPDC_GUARD, 0, s->update.bytes);
++	ret = imx50_epdc_prepare_update(pxp, src, s->update.cpu + EPDC_GUARD,
++				      s->update.bytes, ALIGN(w, 8), &s->rect,
++				      flags, histogram);
++	if (!ret && panel_region) {
++		if (panel_region->width != s->rect.width ||
++		    panel_region->height != s->rect.height ||
++		    panel_region->width > b->width || panel_region->height > b->height ||
++		    panel_region->left > b->width - panel_region->width ||
++		    panel_region->top > b->height - panel_region->height)
++			return -EINVAL;
++		s->rect = *panel_region;
++	}
++	if (!ret)
++		s->ready = true;
++	return ret;
 +}
 +
-+int imx50_epdc_buffers_begin(struct imx50_epdc_buffers *b, bool initialize,
-+			     bool full, u32 mode, u32 temperature,
-+			     struct imx50_epdc_command *command)
++int imx50_epdc_buffers_begin(struct imx50_epdc_buffers *b, unsigned int slot,
++	bool initialize, u32 update_mode, u32 mode, u32 temperature, unsigned int lut,
++	struct imx50_epdc_command *command)
 +{
-+	struct imx50_epdc_rect r = b->rect;
-+	struct imx50_epdc_command next;
++	struct imx50_epdc_slot *s;
++	struct imx50_epdc_rect r;
 +	int ret;
 +
-+	if (b->fault || b->active)
-+		return b->fault ? b->fault : -EBUSY;
-+	if (!command || mode >= b->modes || temperature >= b->temperatures ||
-+	    (!initialize && !mode))
++	if (b->fault)
++		return b->fault;
++	if (slot >= IMX50_EPDC_MAX_UPDATES || lut >= IMX50_EPDC_NUM_LUTS ||
++	    !command || mode >= b->modes || temperature >= b->temperatures ||
++	    (initialize ? (update_mode != 1 || mode) : !mode))
 +		return -EINVAL;
-+	ret = epdc_buffers_check(b, false);
++	s = &b->slots[slot];
++	if (!s->used || s->active)
++		return -EBUSY;
++	ret = epdc_buffers_check(b, s, false);
 +	if (ret) {
 +		b->fault = ret;
 +		return ret;
 +	}
++	r = s->rect;
 +	if (initialize) {
-+		if (!full || mode)
-+			return -EINVAL;
 +		r = (struct imx50_epdc_rect){ 0, 0, b->width, b->height };
-+		memset(b->update.cpu + EPDC_GUARD, 0xff, b->update.bytes);
-+	} else if (!b->primed || !b->ready) {
++		memset(s->update.cpu + EPDC_GUARD, 0xff, s->update.bytes);
++	} else if (!b->primed || !s->ready) {
 +		return -ENODATA;
 +	}
-+	next = (struct imx50_epdc_command) {
++	*command = (struct imx50_epdc_command) {
 +		.waveform_addr = b->wave.dma + EPDC_GUARD,
 +		.working_addr = b->work.dma + EPDC_GUARD,
-+		.update_addr = b->update.dma + EPDC_GUARD,
++		.update_addr = s->update.dma + EPDC_GUARD,
 +		.resolution = b->width | (b->height << 16),
 +		.coordinates = r.left | (r.top << 16),
 +		.size = r.width | (r.height << 16),
 +		.fixed = initialize ? 0xc000ffff : 0,
-+		.control = (initialize ? BIT(31) : 0) | (mode << 8) | (full ? 1 : 0),
++		.control = (initialize ? BIT(31) : 0) | (lut << 16) |
++			   (mode << 8) | update_mode,
 +		.temperature = temperature,
 +	};
 +	if (IS_ENABLED(CONFIG_IMX50_EPDC_DMA_DEBUG))
-+		b->update_crc = crc32_le(~0, b->update.cpu + EPDC_GUARD, b->update.bytes);
-+	b->initializing = initialize;
-+	b->ready = false;
-+	b->active = true;
++		s->crc = crc32_le(~0, s->update.cpu + EPDC_GUARD, s->update.bytes);
++	s->active = true;
 +	dma_wmb();
-+	*command = next;
 +	return 0;
 +}
 +
-+int imx50_epdc_buffers_complete(struct imx50_epdc_buffers *b, int error)
++int imx50_epdc_buffers_complete(struct imx50_epdc_buffers *b, unsigned int slot)
++{
++	struct imx50_epdc_slot *s;
++	int ret;
++
++	if (b->fault)
++		return b->fault;
++	if (slot >= IMX50_EPDC_MAX_UPDATES || !b->slots[slot].active)
++		return -EINVAL;
++	s = &b->slots[slot];
++	dma_rmb();
++	ret = epdc_buffers_check(b, s, true);
++	if (ret) {
++		b->fault = ret;
++		return ret;
++	}
++	s->active = false;
++	b->primed = true;
++	return 0;
++}
++
++int imx50_epdc_buffers_abort_unsubmitted(struct imx50_epdc_buffers *b, unsigned int slot)
 +{
 +	if (b->fault)
 +		return b->fault;
-+	if (!b->active)
++	if (slot >= IMX50_EPDC_MAX_UPDATES || !b->slots[slot].active)
 +		return -EINVAL;
-+	if (error > 0)
-+		error = -EIO;
-+	dma_rmb();
-+	if (!error)
-+		error = epdc_buffers_check(b, true);
-+	if (error) {
-+		b->fault = error;
-+		return error;
-+	}
-+	b->active = false;
-+	if (b->initializing)
-+		b->primed = true;
++	b->slots[slot].active = b->slots[slot].ready = false;
 +	return 0;
 +}
 +
-+int imx50_epdc_buffers_abort_unsubmitted(struct imx50_epdc_buffers *b)
++int imx50_epdc_buffers_put(struct imx50_epdc_buffers *b, unsigned int slot)
 +{
-+	if (b->fault || !b->active)
-+		return b->fault ? b->fault : -EINVAL;
-+	b->active = false;
-+	b->ready = false;
-+	b->initializing = false;
-+	b->primed = false;
++	if (b->fault)
++		return b->fault;
++	if (slot >= IMX50_EPDC_MAX_UPDATES || !b->slots[slot].used ||
++	    b->slots[slot].active)
++		return -EINVAL;
++	b->slots[slot].used = b->slots[slot].ready = false;
 +	return 0;
++}
++
++int imx50_epdc_buffers_error(struct imx50_epdc_buffers *b)
++{
++	return b->fault;
++}
++
++void imx50_epdc_buffers_fault(struct imx50_epdc_buffers *b, int error)
++{
++	b->fault = error < 0 ? error : -EIO;
 +}
 +
 +int imx50_epdc_buffers_invalidate(struct imx50_epdc_buffers *b)
 +{
-+	if (b->fault || b->active)
-+		return b->fault ? b->fault : -EBUSY;
++	unsigned int i;
++
++	if (b->fault)
++		return b->fault;
++	for (i = 0; i < IMX50_EPDC_MAX_UPDATES; i++)
++		if (b->slots[i].active)
++			return -EBUSY;
 +	b->primed = false;
-+	b->ready = false;
 +	return 0;
 +}
 +
 +int imx50_epdc_buffers_free(struct imx50_epdc_buffers *b)
 +{
-+	if (b->fault || b->active)
-+		return b->fault ? b->fault : -EBUSY;
-+	epdc_dma_free(b->dev, &b->update);
++	unsigned int i;
++
++	if (b->fault)
++		return b->fault;
++	for (i = 0; i < IMX50_EPDC_MAX_UPDATES; i++)
++		if (b->slots[i].used)
++			return -EBUSY;
++	for (i = 0; i < IMX50_EPDC_MAX_UPDATES; i++)
++		epdc_dma_free(b->dev, &b->slots[i].update);
 +	epdc_dma_free(b->dev, &b->work);
 +	epdc_dma_free(b->dev, &b->wave);
 +	kfree(b);
@@ -1519,7 +1585,7 @@
 +MODULE_LICENSE("GPL");
 --- /dev/null
 +++ b/drivers/video/fbdev/imx50-epdc-fb.c
-@@ -0,0 +1,672 @@
+@@ -0,0 +1,654 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/* RAM framebuffer consumer of the K4 EPDC service. */
 +#include <linux/fb.h>
@@ -1534,6 +1600,8 @@
 +#include <linux/string.h>
 +#include <linux/vmalloc.h>
 +#include <linux/workqueue.h>
++#include <linux/uaccess.h>
++#include <uapi/linux/mxcfb.h>
 +
 +#define K4_FB_WIDTH 800
 +#define K4_FB_HEIGHT 600
@@ -1548,18 +1616,16 @@
 +	struct fb_info *info;
 +	struct imx50_epdc *epdc;
 +	struct fb_deferred_io defio;
-+	struct delayed_work idle_work;
 +	struct mutex io_lock;
 +	spinlock_t dirty_lock;
 +	struct imx50_epdc_rect damage;
-+	void *snapshot;
 +	u32 palette[16], updates;
 +	u32 width, height, stride, bpp, rotation;
 +	enum imx50_epdc_format format;
 +	enum imx50_epdc_mode waveform_mode;
-+	unsigned long idle_delay, idle_deadline;
++	enum imx50_epdc_auto_mode auto_mode;
 +	int last_error, power_error;
-+	bool dirty, blanked, suspended, stopped, needs_full, full_requested;
++	bool dirty, blanked, suspended, stopped, needs_full;
 +};
 +
 +/* Damage callbacks can be called by console drawing: no sleeping or DMA. */
@@ -1567,26 +1633,26 @@
 +{
 +	struct imx50_epdc_rect *r = &f->damage;
 +	unsigned long flags;
-+	u32 right, bottom;
++	u32 bottom;
 +	bool schedule;
 +
 +	spin_lock_irqsave(&f->dirty_lock, flags);
-+	if (!w || !h || x >= f->width || y >= f->height)
++	if (f->auto_mode == IMX50_EPDC_REGION_MODE ||
++	    !w || !h || x >= f->width || y >= f->height)
 +		goto out;
-+	w = min(w, f->width - x);
 +	h = min(h, f->height - y);
 +	if (f->dirty) {
-+		right = max(r->left + r->width, x + w);
 +		bottom = max(r->top + r->height, y + h);
-+		r->left = min(r->left, x);
 +		r->top = min(r->top, y);
-+		r->width = right - r->left;
++		r->left = 0;
++		r->width = f->width;
 +		r->height = bottom - r->top;
 +	} else {
-+		*r = (struct imx50_epdc_rect){ x, y, w, h };
++		*r = (struct imx50_epdc_rect){ 0, y, f->width, h };
 +	}
 +	f->dirty = true;
-+	schedule = queue && !f->blanked && !f->suspended && !f->stopped;
++	schedule = queue && READ_ONCE(f->auto_mode) == IMX50_EPDC_AUTOMATIC_MODE &&
++		   !f->blanked && !f->suspended && !f->stopped;
 +	if (schedule)
 +		schedule_delayed_work(&f->info->deferred_work, f->defio.delay);
 +out:
@@ -1596,20 +1662,6 @@
 +static void k4_fb_damage(struct k4_fb *f, u32 x, u32 y, u32 w, u32 h)
 +{
 +	k4_fb_merge(f, x, y, w, h, true);
-+}
-+
-+/* Publish the full rectangle and algorithm request together before queueing. */
-+static void k4_fb_request_full(struct k4_fb *f)
-+{
-+	unsigned long flags;
-+
-+	spin_lock_irqsave(&f->dirty_lock, flags);
-+	f->damage = (struct imx50_epdc_rect){ 0, 0, f->width, f->height };
-+	f->dirty = true;
-+	f->full_requested = true;
-+	if (!f->blanked && !f->suspended && !f->stopped)
-+		schedule_delayed_work(&f->info->deferred_work, f->defio.delay);
-+	spin_unlock_irqrestore(&f->dirty_lock, flags);
 +}
 +
 +static void k4_fb_range(struct k4_fb *f, off_t offset, size_t len, bool queue)
@@ -1645,67 +1697,50 @@
 +
 +FB_GEN_DEFAULT_DEFERRED_SYSMEM_OPS(k4_fb, k4_fb_damage_range, k4_fb_damage_area)
 +
-+static void k4_fb_idle(struct work_struct *work)
-+{
-+	struct k4_fb *f = container_of(to_delayed_work(work), struct k4_fb, idle_work);
-+	unsigned long flags;
-+	bool paused;
-+
-+	mutex_lock(&f->io_lock);
-+	spin_lock_irqsave(&f->dirty_lock, flags);
-+	paused = f->blanked || f->suspended || f->stopped;
-+	spin_unlock_irqrestore(&f->dirty_lock, flags);
-+	if (paused)
-+		goto out;
-+	/* A queued old idle worker may have waited behind a newer update. */
-+	if (time_before(jiffies, f->idle_deadline)) {
-+		mod_delayed_work(system_wq, &f->idle_work, f->idle_deadline - jiffies);
-+	} else {
-+		f->needs_full = true;
-+		f->power_error = imx50_epdc_powerdown(f->epdc);
-+	}
-+out:
-+	mutex_unlock(&f->io_lock);
-+}
-+
 +static void k4_fb_deferred(struct fb_info *info, struct list_head *pages)
 +{
 +	struct k4_fb *f = info->par;
 +	struct fb_deferred_io_pageref *page;
 +	struct imx50_epdc_source source;
++	struct imx50_epdc_update update;
 +	struct imx50_epdc_rect rect;
 +	unsigned long flags;
 +	bool full;
 +	int ret;
 +
 +	/* Core has write-protected the dirty mmap pages before this callback. */
++	mutex_lock(&f->io_lock);
++	if (f->auto_mode == IMX50_EPDC_REGION_MODE) {
++		spin_lock_irqsave(&f->dirty_lock, flags);
++		f->dirty = false;
++		spin_unlock_irqrestore(&f->dirty_lock, flags);
++		goto out;
++	}
 +	list_for_each_entry(page, pages, list)
 +		k4_fb_range(f, page->offset, PAGE_SIZE, false);
-+	mutex_lock(&f->io_lock);
 +	spin_lock_irqsave(&f->dirty_lock, flags);
-+	if (!f->dirty || f->blanked || f->suspended || f->stopped) {
++	if (f->auto_mode != IMX50_EPDC_AUTOMATIC_MODE || !f->dirty ||
++	    f->blanked || f->suspended || f->stopped) {
 +		spin_unlock_irqrestore(&f->dirty_lock, flags);
 +		goto out;
 +	}
 +	rect = f->damage;
-+	full = f->needs_full || f->full_requested;
-+	f->full_requested = false;
++	full = f->needs_full;
 +	f->dirty = false;
 +	spin_unlock_irqrestore(&f->dirty_lock, flags);
-+	cancel_delayed_work(&f->idle_work);
-+	/* After idle powerdown the owner runs INIT, which affects the full panel.
-+	 * Restore the entire shadow image, even when the new damage is small.
-+	 * Explicit refresh also applies the waveform to every unchanged pixel.
-+	 */
++	/* Initial canvas and fault recovery apply to the whole canvas. */
 +	if (full)
 +		rect = (struct imx50_epdc_rect){ 0, 0, f->width, f->height };
-+	memcpy(f->snapshot, info->screen_buffer, f->stride * f->height);
 +	source = (struct imx50_epdc_source) {
-+		.pixels = f->snapshot, .size = f->stride * f->height,
++		.pixels = info->screen_buffer, .size = f->stride * f->height,
 +		.width = f->width, .height = f->height, .stride = f->stride,
 +		.format = f->format, .rotation = f->rotation * 90, .region = rect,
 +	};
-+	ret = imx50_epdc_update(f->epdc, &source, f->waveform_mode, full);
++	update = (struct imx50_epdc_update) {
++		.region = rect, .waveform_mode = f->waveform_mode,
++		.update_mode = full ? IMX50_EPDC_UPDATE_FULL : IMX50_EPDC_UPDATE_PARTIAL,
++	};
++	ret = imx50_epdc_send_update(f->epdc, &source, &update);
 +	f->last_error = ret;
 +	if (ret) {
 +		/* Keep damage for an explicit retry/new write, not a busy retry loop. */
@@ -1718,8 +1753,6 @@
 +	} else {
 +		f->updates++;
 +		f->needs_full = false;
-+		f->idle_deadline = jiffies + f->idle_delay;
-+		mod_delayed_work(system_wq, &f->idle_work, f->idle_delay);
 +	}
 +out:
 +	mutex_unlock(&f->io_lock);
@@ -1771,7 +1804,6 @@
 +	if (f->width == v.xres && f->height == v.yres &&
 +	    f->bpp == v.bits_per_pixel && f->rotation == v.rotate)
 +		goto out;
-+	cancel_delayed_work(&f->idle_work);
 +	f->needs_full = true;
 +	ret = imx50_epdc_powerdown(f->epdc);
 +	f->power_error = ret;
@@ -1836,12 +1868,13 @@
 +	f->blanked = blank != FB_BLANK_UNBLANK;
 +	spin_unlock_irqrestore(&f->dirty_lock, flags);
 +	if (blank) {
-+		cancel_delayed_work(&f->idle_work);
-+		f->needs_full = true;
 +		ret = imx50_epdc_powerdown(f->epdc);
 +		f->power_error = ret;
 +	} else {
-+		k4_fb_damage(f, 0, 0, ~0U, ~0U);
++		spin_lock_irqsave(&f->dirty_lock, flags);
++		if (!f->suspended && !f->stopped)
++			schedule_delayed_work(&info->deferred_work, f->defio.delay);
++		spin_unlock_irqrestore(&f->dirty_lock, flags);
 +	}
 +	mutex_unlock(&f->io_lock);
 +	return ret;
@@ -1852,12 +1885,8 @@
 + */
 +static void k4_fb_destroy(struct fb_info *info)
 +{
-+	struct k4_fb *f = info->par;
-+
 +	fb_deferred_io_cleanup(info);
-+	cancel_delayed_work_sync(&f->idle_work);
 +	fb_dealloc_cmap(&info->cmap);
-+	vfree(f->snapshot);
 +	vfree(info->screen_buffer);
 +	framebuffer_release(info);
 +}
@@ -1869,6 +1898,128 @@
 +	return READ_ONCE(f->stopped) ? -ENODEV : 0;
 +}
 +
++/* lf-6.6 mxcfb rectangles use the current, rotated framebuffer coordinates. */
++static int k4_fb_send_update(struct k4_fb *f, const struct mxcfb_update_data *data)
++{
++	const struct mxcfb_rect *r = &data->update_region;
++	struct imx50_epdc_source source;
++	struct imx50_epdc_update update;
++	int ret;
++
++	if (data->temp != TEMP_USE_AMBIENT || data->dither_mode || data->quant_bit ||
++	    data->flags & ~(EPDC_FLAG_ENABLE_INVERSION | EPDC_FLAG_FORCE_MONOCHROME) ||
++	    data->update_mode > UPDATE_MODE_FULL ||
++	    (data->waveform_mode != WAVEFORM_MODE_AUTO &&
++	     (data->waveform_mode < IMX50_EPDC_MODE_DU ||
++	      data->waveform_mode > IMX50_EPDC_MODE_GL16_FAST)) ||
++	    !r->width || !r->height || r->width > f->width || r->height > f->height ||
++	    r->left > f->width - r->width || r->top > f->height - r->height)
++		return -EINVAL;
++	update = (struct imx50_epdc_update) {
++		.region = { r->left, r->top, r->width, r->height },
++		.waveform_mode = data->waveform_mode, .update_mode = data->update_mode,
++		.update_marker = data->update_marker, .flags = data->flags,
++	};
++	source = (struct imx50_epdc_source) {
++		.pixels = f->info->screen_buffer, .size = f->stride * f->height,
++		.width = f->width, .height = f->height, .stride = f->stride,
++		.format = f->format, .rotation = f->rotation * 90, .region = update.region,
++	};
++	ret = imx50_epdc_send_update(f->epdc, &source, &update);
++	f->last_error = ret;
++	if (!ret) {
++		f->updates++;
++		if (data->update_mode == UPDATE_MODE_FULL &&
++		    r->width == f->width && r->height == f->height)
++			f->needs_full = false;
++	}
++	return ret;
++}
++
++static int k4_fb_ioctl(struct fb_info *info, unsigned int cmd, unsigned long arg)
++{
++	struct k4_fb *f = info->par;
++	void __user *argp = (void __user *)arg;
++	struct mxcfb_update_data data;
++	struct mxcfb_update_marker_data marker;
++	int value, ret = 0;
++	unsigned long flags;
++
++	/* Consume REGION mmap pages before changing mode. The worker needs
++	 * io_lock, so drain it before taking that lock.
++	 */
++	if (cmd == MXCFB_SET_AUTO_UPDATE_MODE &&
++	    READ_ONCE(f->auto_mode) == IMX50_EPDC_REGION_MODE)
++		flush_delayed_work(&info->deferred_work);
++
++	/* Serialize with layout changes and supplier teardown, including waits. */
++	mutex_lock(&f->io_lock);
++	if (f->stopped) {
++		ret = -ENODEV;
++		goto out;
++	}
++	switch (cmd) {
++	case MXCFB_SEND_UPDATE:
++		if (copy_from_user(&data, argp, sizeof(data))) {
++			ret = -EFAULT;
++			break;
++		}
++		ret = f->blanked || f->suspended ? -EPERM : k4_fb_send_update(f, &data);
++		if (!ret && copy_to_user(argp, &data, sizeof(data)))
++			ret = -EFAULT;
++		break;
++	case MXCFB_WAIT_FOR_UPDATE_COMPLETE:
++		if (copy_from_user(&marker, argp, sizeof(marker))) {
++			ret = -EFAULT;
++			break;
++		}
++		ret = imx50_epdc_wait_for_update_complete(f->epdc, marker.update_marker, 5000);
++		/* NXP reports only TEST_COLLISION dry runs here, not retry collisions.
++		 * Those requests are rejected, so every supported update returns zero.
++		 */
++		marker.collision_test = 0;
++		if (copy_to_user(argp, &marker, sizeof(marker)))
++			ret = -EFAULT;
++		break;
++	case MXCFB_GET_PWRDOWN_DELAY:
++		value = imx50_epdc_get_powerdown_delay(f->epdc);
++		if (copy_to_user(argp, &value, sizeof(value)))
++			ret = -EFAULT;
++		break;
++	case MXCFB_SET_PWRDOWN_DELAY:
++	case MXCFB_SET_TEMPERATURE:
++	case MXCFB_SET_AUTO_UPDATE_MODE:
++	case MXCFB_SET_UPDATE_SCHEME:
++		if (copy_from_user(&value, argp, sizeof(value))) {
++			ret = -EFAULT;
++			break;
++		}
++		if (cmd == MXCFB_SET_PWRDOWN_DELAY) {
++			ret = imx50_epdc_set_powerdown_delay(f->epdc, value);
++		} else if (cmd == MXCFB_SET_TEMPERATURE) {
++			ret = value == TEMP_USE_AMBIENT ? 0 : -EINVAL;
++		} else if (cmd == MXCFB_SET_UPDATE_SCHEME) {
++			ret = imx50_epdc_set_update_scheme(f->epdc, value);
++		} else if (value != AUTO_UPDATE_MODE_REGION_MODE &&
++			   value != AUTO_UPDATE_MODE_AUTOMATIC_MODE) {
++			ret = -EINVAL;
++		} else {
++			spin_lock_irqsave(&f->dirty_lock, flags);
++			WRITE_ONCE(f->auto_mode, value);
++			if (value == AUTO_UPDATE_MODE_REGION_MODE)
++				f->dirty = false;
++			spin_unlock_irqrestore(&f->dirty_lock, flags);
++		}
++		break;
++	default:
++		ret = -ENOTTY;
++		break;
++	}
++out:
++	mutex_unlock(&f->io_lock);
++	return ret;
++}
++
 +static const struct fb_ops k4_fb_ops = {
 +	.owner = THIS_MODULE,
 +	.fb_open = k4_fb_open,
@@ -1878,6 +2029,7 @@
 +	.fb_set_par = k4_fb_set_par,
 +	.fb_setcolreg = k4_fb_setcolreg,
 +	.fb_blank = k4_fb_blank,
++	.fb_ioctl = k4_fb_ioctl,
 +};
 +
 +static int k4_fb_suspend(struct device *dev)
@@ -1890,8 +2042,6 @@
 +	spin_lock_irqsave(&f->dirty_lock, flags);
 +	f->suspended = true;
 +	spin_unlock_irqrestore(&f->dirty_lock, flags);
-+	cancel_delayed_work(&f->idle_work);
-+	f->needs_full = true;
 +	ret = imx50_epdc_powerdown(f->epdc);
 +	f->power_error = ret;
 +	if (ret) {
@@ -1919,131 +2069,31 @@
 +}
 +static DEFINE_SIMPLE_DEV_PM_OPS(k4_fb_pm, k4_fb_suspend, k4_fb_resume);
 +
-+static int k4_fb_flush(struct k4_fb *f, bool full)
-+{
-+	unsigned long flags;
-+	int ret;
-+
-+	if (full) {
-+		k4_fb_request_full(f);
-+	} else {
-+		/* A prior failure retains damage without a busy retry loop. An
-+		 * explicit flush is permission to retry that damage once.
-+		 * mmap page faults already queue deferred work independently.
-+		 */
-+		spin_lock_irqsave(&f->dirty_lock, flags);
-+		if (f->dirty && !f->stopped && !f->suspended && !f->blanked)
-+			schedule_delayed_work(&f->info->deferred_work, f->defio.delay);
-+		spin_unlock_irqrestore(&f->dirty_lock, flags);
-+	}
-+	flush_delayed_work(&f->info->deferred_work);
-+	mutex_lock(&f->io_lock);
-+	spin_lock_irqsave(&f->dirty_lock, flags);
-+	ret = f->stopped || f->suspended || f->blanked ? -EBUSY : f->last_error;
-+	spin_unlock_irqrestore(&f->dirty_lock, flags);
-+	mutex_unlock(&f->io_lock);
-+	return ret;
-+}
-+
-+static ssize_t refresh_store(struct device *dev, struct device_attribute *attr,
-+			     const char *buf, size_t count)
-+{
-+	struct k4_fb *f = dev_get_drvdata(dev);
-+	bool request;
-+	int ret;
-+
-+	ret = kstrtobool(buf, &request);
-+	if (ret || !request)
-+		return -EINVAL;
-+	ret = k4_fb_flush(f, true);
-+	if (ret)
-+		return ret;
-+	return count;
-+}
-+static DEVICE_ATTR_WO(refresh);
-+
-+static ssize_t flush_store(struct device *dev, struct device_attribute *attr,
-+			   const char *buf, size_t count)
-+{
-+	struct k4_fb *f = dev_get_drvdata(dev);
-+	bool request;
-+	int ret;
-+
-+	ret = kstrtobool(buf, &request);
-+	if (ret || !request)
-+		return -EINVAL;
-+	ret = k4_fb_flush(f, false);
-+	if (ret)
-+		return ret;
-+	return count;
-+}
-+static DEVICE_ATTR_WO(flush);
-+
-+static ssize_t waveform_mode_show(struct device *dev, struct device_attribute *attr,
-+				  char *buf)
-+{
-+	struct k4_fb *f = dev_get_drvdata(dev);
-+	ssize_t n;
-+
-+	mutex_lock(&f->io_lock);
-+	n = sysfs_emit(buf, "%s\n", k4_fb_waveforms[f->waveform_mode - IMX50_EPDC_MODE_DU]);
-+	mutex_unlock(&f->io_lock);
-+	return n;
-+}
-+
-+static ssize_t waveform_mode_store(struct device *dev, struct device_attribute *attr,
-+				   const char *buf, size_t count)
-+{
-+	struct k4_fb *f = dev_get_drvdata(dev);
-+	int mode, ret = 0;
-+
-+	mode = sysfs_match_string(k4_fb_waveforms, buf);
-+	if (mode < 0)
-+		return -EINVAL;
-+	mutex_lock(&f->io_lock);
-+	if (f->stopped)
-+		ret = -EBUSY;
-+	else
-+		/* Configuration only: do not queue a refresh or power the panel.
-+		 * Work not yet started uses this mode; an in-flight snapshot holds
-+		 * io_lock and finishes before the setting can change.
-+		 */
-+		f->waveform_mode = mode + IMX50_EPDC_MODE_DU;
-+	mutex_unlock(&f->io_lock);
-+	if (ret)
-+		return ret;
-+	return count;
-+}
-+static DEVICE_ATTR_RW(waveform_mode);
-+
 +static ssize_t state_show(struct device *dev, struct device_attribute *attr, char *buf)
 +{
 +	struct k4_fb *f = dev_get_drvdata(dev);
 +	unsigned long flags;
-+	bool dirty, full_requested;
++	bool dirty;
 +	ssize_t n;
 +
 +	mutex_lock(&f->io_lock);
 +	spin_lock_irqsave(&f->dirty_lock, flags);
 +	dirty = f->dirty;
-+	full_requested = f->full_requested;
 +	spin_unlock_irqrestore(&f->dirty_lock, flags);
 +	n = sysfs_emit(buf, "updates=%u last_error=%d power_error=%d dirty=%u needs_full=%u\n",
 +		       f->updates, f->last_error, f->power_error, dirty, f->needs_full);
 +	n += sysfs_emit_at(buf, n, "width=%u height=%u bpp=%u rotation=%u stride=%u\n",
 +			   f->width, f->height, f->bpp, f->rotation * 90, f->stride);
 +	n += sysfs_emit_at(buf, n, "waveform_mode=%s\n",
++			   f->waveform_mode == IMX50_EPDC_MODE_AUTO ? "auto" :
 +			   k4_fb_waveforms[f->waveform_mode - IMX50_EPDC_MODE_DU]);
-+	n += sysfs_emit_at(buf, n, "full_requested=%u\n", full_requested);
++	n += sysfs_emit_at(buf, n, "auto_update_mode=%u\n", f->auto_mode);
 +	mutex_unlock(&f->io_lock);
 +	return n;
 +}
 +static DEVICE_ATTR_RO(state);
 +
 +static struct attribute *k4_fb_attrs[] = {
-+	&dev_attr_refresh.attr,
-+	&dev_attr_flush.attr,
-+	&dev_attr_waveform_mode.attr,
 +	&dev_attr_state.attr,
 +	NULL,
 +};
@@ -2054,7 +2104,7 @@
 +	struct device *dev = &pdev->dev;
 +	struct fb_info *info;
 +	struct k4_fb *f;
-+	u32 update_ms = 100, idle_ms = 500;
++	u32 update_ms = 100, idle_ms = 0;
 +	int ret;
 +
 +	info = framebuffer_alloc(sizeof(*f), dev);
@@ -2068,7 +2118,8 @@
 +	f->bpp = 32;
 +	f->stride = K4_FB_WIDTH * 4;
 +	f->format = IMX50_EPDC_XRGB8888;
-+	f->waveform_mode = IMX50_EPDC_MODE_GC16;
++	f->waveform_mode = IMX50_EPDC_MODE_AUTO;
++	f->auto_mode = IMX50_EPDC_AUTOMATIC_MODE;
 +	f->epdc = devm_imx50_epdc_get(dev, "epdc");
 +	if (IS_ERR(f->epdc)) {
 +		ret = dev_err_probe(dev, PTR_ERR(f->epdc), "EPDC supplier\n");
@@ -2086,13 +2137,13 @@
 +	}
 +	mutex_init(&f->io_lock);
 +	spin_lock_init(&f->dirty_lock);
-+	INIT_DELAYED_WORK(&f->idle_work, k4_fb_idle);
-+	f->idle_delay = msecs_to_jiffies(idle_ms);
++	ret = imx50_epdc_set_powerdown_delay(f->epdc, idle_ms);
++	if (ret)
++		goto free_info;
 +	f->defio.delay = max_t(unsigned long, 1, msecs_to_jiffies(update_ms));
 +	f->defio.deferred_io = k4_fb_deferred;
 +	info->screen_buffer = vzalloc(K4_FB_BYTES);
-+	f->snapshot = vzalloc(K4_FB_BYTES);
-+	if (!info->screen_buffer || !f->snapshot) {
++	if (!info->screen_buffer) {
 +		ret = -ENOMEM;
 +		goto free_memory;
 +	}
@@ -2130,12 +2181,10 @@
 +	f->stopped = true;
 +	spin_unlock_irq(&f->dirty_lock);
 +	fb_deferred_io_cleanup(info);
-+	cancel_delayed_work_sync(&f->idle_work);
 +	imx50_epdc_powerdown(f->epdc);
 +free_cmap:
 +	fb_dealloc_cmap(&info->cmap);
 +free_memory:
-+	vfree(f->snapshot);
 +	vfree(info->screen_buffer);
 +free_info:
 +	framebuffer_release(info);
@@ -2151,7 +2200,6 @@
 +	f->stopped = true;
 +	spin_unlock_irqrestore(&f->dirty_lock, flags);
 +	cancel_delayed_work_sync(&f->info->deferred_work);
-+	cancel_delayed_work_sync(&f->idle_work);
 +	mutex_lock(&f->io_lock);
 +	f->power_error = imx50_epdc_powerdown(f->epdc);
 +	mutex_unlock(&f->io_lock);
@@ -2194,9 +2242,9 @@
 +MODULE_LICENSE("GPL");
 --- /dev/null
 +++ b/drivers/video/fbdev/imx50-epdc-hw.c
-@@ -0,0 +1,462 @@
+@@ -0,0 +1,451 @@
 +// SPDX-License-Identifier: GPL-2.0-only
-+/* i.MX50 RM Rev.2 chapter 24: reset, K4 timing, serial DMA and IRQ drain. */
++/* i.MX50 RM Rev.2 chapter 24: reset, K4 timing, asynchronous WB/LUT DMA and IRQ drain. */
 +#include <linux/bitops.h>
 +#include <linux/imx50-epdc-buffer.h>
 +#include <linux/io.h>
@@ -2222,21 +2270,22 @@
 +#define E_IRQ		0x420
 +#define E_IRQ_CLR	0x428
 +#define E_LUTS		0x440
++#define E_NEXTLUT	0x460
++#define E_COL		0x480
 +#define E_STATUS	0x4a0
 +#define E_GPIO		0x700
 +#define E_VERSION	0x7f0
 +
 +#define E_RESET		BIT(31)
 +#define E_GATE		BIT(30)
-+#define E_LUT0		BIT(0)
 +#define E_WB		BIT(16)
 +#define E_COLLISION	BIT(17)
 +#define E_UNDERRUN	BIT(18)
 +#define E_BUS_ERROR	BIT(20)
 +#define E_IDLE		BIT(21)
-+#define E_ERRORS	(E_COLLISION | E_UNDERRUN | E_BUS_ERROR)
-+#define E_DONE		(E_LUT0 | E_WB | E_IDLE)
-+#define E_IRQS		(0xffff | E_WB | E_ERRORS | E_IDLE)
++#define E_EOF		BIT(19)
++#define E_ERRORS	E_BUS_ERROR
++#define E_IRQS		(0xffff | E_WB | E_COLLISION | E_UNDERRUN | E_ERRORS | E_IDLE)
 +#define E_ALL_IRQS	0x3fffff
 +#define E_PANEL_RES	((600 << 16) | 800)
 +
@@ -2267,7 +2316,7 @@
 +	*hw = (struct imx50_epdc_hw){ .base = base };
 +	mutex_init(&hw->lock);
 +	spin_lock_init(&hw->irq_lock);
-+	init_completion(&hw->done);
++
 +}
 +
 +/* STATUS.LUTS_BUSY means ALL LUTs busy, not that there are no active LUTs.
@@ -2409,9 +2458,7 @@
 +	u32 pending;
 +	irqreturn_t handled = IRQ_NONE;
 +
-+	(void)irq;
 +	spin_lock_irqsave(&hw->irq_lock, flags);
-+	/* An IRQ before configure or after stop must not touch gated MMIO. */
 +	if (!hw->configured)
 +		goto out;
 +	pending = readl(hw->base + E_IRQ) & readl(hw->base + E_MASK);
@@ -2419,24 +2466,60 @@
 +		goto out;
 +	handled = IRQ_HANDLED;
 +	hw->interrupts++;
-+	writel(pending, hw->base + E_IRQ_CLR);
-+	if (!hw->running || (pending & (E_ERRORS | 0xfffe))) {
-+		hw->fault = -EIO;
-+		hw->result = -EIO;
-+		goto finish;
++	hw->events.luts |= pending & 0xffff;
++	if (pending & E_COLLISION) {
++		hw->events.collision = true;
++		hw->events.collision_mask |= readl(hw->base + E_COL) & 0xffff;
 +	}
-+	hw->seen |= pending & (E_WB | E_LUT0);
-+	/* Do not mistake an idle event before this LUT completed for its drain. */
-+	if ((hw->seen & E_LUT0) && (pending & E_IDLE))
-+		hw->seen |= E_IDLE;
-+	if ((hw->seen & E_DONE) != E_DONE)
-+		goto out;
-+finish:
-+	writel(0, hw->base + E_MASK);
-+	complete(&hw->done);
++	if (pending & E_WB)
++		hw->events.wb = true;
++	if (pending & E_EOF)
++		hw->events.eof = true;
++	if (pending & E_UNDERRUN)
++		pr_warn_ratelimited("imx50-epdc: TCE underrun\n");
++	if (pending & E_BUS_ERROR) {
++		hw->fault = hw->events.error = -EIO;
++		writel(0, hw->base + E_MASK);
++	} else {
++		u32 mask = readl(hw->base + E_MASK);
++
++		mask &= ~(pending & (0xffff | E_EOF | E_WB | E_COLLISION));
++		writel(mask, hw->base + E_MASK);
++	}
++	writel(pending, hw->base + E_IRQ_CLR);
++	if ((pending & E_IDLE) && epdc_hw_quiet(hw)) {
++		hw->drained = true;
++		hw->running = false;
++		hw->events.idle = true;
++	}
++	if (hw->notify)
++		hw->notify(hw->notify_data);
 +out:
 +	spin_unlock_irqrestore(&hw->irq_lock, flags);
 +	return handled;
++}
++
++void imx50_epdc_hw_events(struct imx50_epdc_hw *hw, struct imx50_epdc_events *events)
++{
++	unsigned long flags;
++
++	spin_lock_irqsave(&hw->irq_lock, flags);
++	*events = hw->events;
++	hw->events = (struct imx50_epdc_events){};
++	spin_unlock_irqrestore(&hw->irq_lock, flags);
++}
++
++void imx50_epdc_hw_fault(struct imx50_epdc_hw *hw, int error)
++{
++	unsigned long flags;
++
++	spin_lock_irqsave(&hw->irq_lock, flags);
++	hw->fault = hw->events.error = error;
++	if (hw->configured)
++		writel(0, hw->base + E_MASK);
++	if (hw->notify)
++		hw->notify(hw->notify_data);
++	spin_unlock_irqrestore(&hw->irq_lock, flags);
 +}
 +
 +void imx50_epdc_hw_power_fault(struct imx50_epdc_hw *hw)
@@ -2447,9 +2530,9 @@
 +	hw->supply_fault = true;
 +	if (hw->configured && hw->running) {
 +		writel(0, hw->base + E_MASK);
-+		hw->fault = -EIO;
-+		hw->result = -EIO;
-+		complete(&hw->done);
++		hw->fault = hw->events.error = -EIO;
++		if (hw->notify)
++			hw->notify(hw->notify_data);
 +	}
 +	spin_unlock_irqrestore(&hw->irq_lock, flags);
 +}
@@ -2470,145 +2553,104 @@
 +	return ret;
 +}
 +
-+/* Called with irq_lock held after masking IRQs at the wait deadline. A missed
-+ * final interrupt can leave its completion bit latched. Do not infer the order
-+ * of an accumulated IDLE/LUT pair: only a previously witnessed LUT completion
-+ * permits a new raw IDLE to establish final blanking. No extra wait or reset.
-+ */
-+static int epdc_hw_deadline(struct imx50_epdc_hw *hw)
++int imx50_epdc_hw_next_lut(struct imx50_epdc_hw *hw, bool *sync_eof)
 +{
-+	u32 pending = readl(hw->base + E_IRQ) & E_IRQS;
++	u32 active, next;
++	int lut;
 +
-+	if (pending & (E_ERRORS | 0xfffe))
-+		return -EIO;
-+	if (hw->seen & E_LUT0)
-+		hw->seen |= pending & E_DONE;
-+	else
-+		hw->seen |= pending & (E_WB | E_LUT0);
-+	if ((hw->seen & E_DONE) != E_DONE)
-+		return -ETIMEDOUT;
-+	writel(pending, hw->base + E_IRQ_CLR);
-+	return readl(hw->base + E_IRQ) & pending ? -EIO : 0;
++	if (hw->fault || !hw->configured)
++		return hw->fault ? hw->fault : -ENODEV;
++	active = readl(hw->base + E_LUTS) & 0xffff;
++	if (active == 0xffff)
++		return -EBUSY;
++	*sync_eof = !!(active & BIT(15));
++	lut = fls(active);
++	if (lut > 15) {
++		next = readl(hw->base + E_NEXTLUT);
++		if (!(next & BIT(8)))
++			return -EBUSY;
++		lut = next & 15;
++	}
++	return lut;
 +}
 +
-+int imx50_epdc_hw_submit(struct imx50_epdc_hw *hw, bool initialize, bool full,
-+			 u32 mode, u32 temperature, unsigned int timeout_ms)
++void imx50_epdc_hw_request_eof(struct imx50_epdc_hw *hw, bool enable)
 +{
-+	struct imx50_epdc_command command;
-+	unsigned long flags, waited;
-+	int ret;
++	unsigned long flags;
 +
-+	if (!timeout_ms)
-+		return -EINVAL;
-+	ret = mutex_lock_interruptible(&hw->lock);
-+	if (ret)
-+		return ret;
-+	if (hw->fault || !hw->configured) {
-+		ret = hw->fault ? hw->fault : -ENODEV;
-+		goto out;
-+	}
-+	if (!hw->drained || !epdc_hw_quiet(hw) || readl(hw->base + E_MASK) ||
-+	    (readl(hw->base + E_CTRL) & (E_RESET | E_GATE))) {
-+		hw->fault = -EBUSY;
-+		ret = hw->fault;
-+		goto out;
-+	}
-+	ret = imx50_epdc_buffers_begin(hw->buffers, initialize, full, mode,
-+				       temperature, &command);
-+	if (ret)
-+		goto out;
-+	if (command.resolution != E_PANEL_RES) {
-+		ret = -EINVAL;
-+		goto abort;
-+	}
-+	reinit_completion(&hw->done);
 +	spin_lock_irqsave(&hw->irq_lock, flags);
-+	/* Serialize the supply fault with the actual command write. A fault
-+	 * during begin() has not started DMA and must not quarantine its buffer.
-+	 */
-+	if (hw->supply_fault) {
-+		spin_unlock_irqrestore(&hw->irq_lock, flags);
-+		ret = imx50_epdc_buffers_abort_unsubmitted(hw->buffers);
-+		if (!ret)
-+			ret = -EIO;
++	writel(E_EOF, hw->base + E_IRQ_CLR);
++	writel(enable ? readl(hw->base + E_MASK) | E_EOF :
++	       readl(hw->base + E_MASK) & ~E_EOF, hw->base + E_MASK);
++	spin_unlock_irqrestore(&hw->irq_lock, flags);
++}
++
++int imx50_epdc_hw_submit(struct imx50_epdc_hw *hw,
++			 const struct imx50_epdc_command *c)
++{
++	unsigned long flags;
++	u32 lut = (c->control >> 16) & 15;
++	int ret = 0;
++
++	spin_lock_irqsave(&hw->irq_lock, flags);
++	if (hw->fault || hw->supply_fault || !hw->configured) {
++		ret = hw->fault ? hw->fault : -EIO;
 +		goto out;
 +	}
-+	writel(E_ALL_IRQS, hw->base + E_IRQ_CLR);
-+	hw->seen = 0;
-+	hw->result = 0;
-+	writel(command.waveform_addr, hw->base + E_WAVE);
-+	writel(command.working_addr, hw->base + E_WORK);
-+	writel(command.update_addr, hw->base + E_UPDATE);
-+	writel(command.coordinates, hw->base + E_COORD);
-+	writel(command.size, hw->base + E_SIZE);
-+	writel(command.fixed, hw->base + E_FIXED);
-+	writel(command.temperature, hw->base + E_TEMP);
-+	writel(E_IRQS, hw->base + E_MASK);
-+	if (readl(hw->base + E_WAVE) != command.waveform_addr ||
-+	    readl(hw->base + E_WORK) != command.working_addr ||
-+	    readl(hw->base + E_UPDATE) != command.update_addr ||
-+	    readl(hw->base + E_COORD) != command.coordinates ||
-+	    readl(hw->base + E_SIZE) != command.size ||
-+	    readl(hw->base + E_FIXED) != command.fixed ||
-+	    readl(hw->base + E_TEMP) != command.temperature ||
-+	    readl(hw->base + E_MASK) != E_IRQS ||
-+	    (readl(hw->base + E_IRQ) & E_ALL_IRQS)) {
-+		writel(0, hw->base + E_MASK);
-+		/* No command was written, but a stuck mask still forbids clock release. */
-+		if (readl(hw->base + E_MASK))
-+			hw->fault = -EIO;
-+		spin_unlock_irqrestore(&hw->irq_lock, flags);
-+		ret = -EIO;
-+		goto abort;
++	if ((readl(hw->base + E_STATUS) & BIT(0)) ||
++	    (readl(hw->base + E_LUTS) & BIT(lut))) {
++		ret = -EBUSY;
++		goto out;
 +	}
-+	/* Only UPD_CTRL can start this operation; register preparation is not DMA. */
++	writel(E_WB | E_COLLISION | E_IDLE | BIT(lut), hw->base + E_IRQ_CLR);
++	writel(c->waveform_addr, hw->base + E_WAVE);
++	writel(c->working_addr, hw->base + E_WORK);
++	writel(c->update_addr, hw->base + E_UPDATE);
++	writel(c->coordinates, hw->base + E_COORD);
++	writel(c->size, hw->base + E_SIZE);
++	writel(c->fixed, hw->base + E_FIXED);
++	writel(c->temperature, hw->base + E_TEMP);
++	writel(readl(hw->base + E_MASK) | E_WB | E_COLLISION | E_UNDERRUN |
++	       E_BUS_ERROR | E_IDLE | BIT(lut), hw->base + E_MASK);
 +	hw->running = true;
 +	hw->drained = false;
-+	/* begin() did dma_wmb(); ordered writel of UPD_CTRL starts DMA last. */
-+	writel(command.control, hw->base + E_COMMAND);
-+	spin_unlock_irqrestore(&hw->irq_lock, flags);
-+	waited = wait_for_completion_timeout(&hw->done, msecs_to_jiffies(timeout_ms));
-+	spin_lock_irqsave(&hw->irq_lock, flags);
-+	writel(0, hw->base + E_MASK);
-+	ret = hw->result;
-+	if (!waited && !ret)
-+		ret = epdc_hw_deadline(hw);
-+	if (!ret && ((hw->seen & E_DONE) != E_DONE || !epdc_hw_quiet(hw) ||
-+		     readl(hw->base + E_MASK) ||
-+		     (readl(hw->base + E_IRQ) & (E_ERRORS | 0xfffe))))
-+		ret = -EIO;
-+	hw->running = false;
-+	spin_unlock_irqrestore(&hw->irq_lock, flags);
-+	if (ret)
-+		goto quarantine;
-+	ret = imx50_epdc_buffers_complete(hw->buffers, 0);
-+	if (ret)
-+		goto quarantine;
-+	hw->drained = true;
-+	if (initialize)
++	writel(c->control, hw->base + E_COMMAND);
++	hw->last_coordinates = c->coordinates;
++	hw->last_size = c->size;
++	hw->last_mode = (c->control >> 8) & 255;
++	hw->last_full = c->control & 1;
++	if (c->control & BIT(31))
 +		hw->init_updates++;
-+	else if (command.size == E_PANEL_RES)
++	else if (c->size == E_PANEL_RES)
 +		hw->canvas_updates++;
 +	else
 +		hw->region_updates++;
-+	hw->last_coordinates = command.coordinates;
-+	hw->last_size = command.size;
-+	hw->last_mode = mode;
-+	hw->last_full = full;
-+	if (!waited) {
-+		hw->polled_completions++;
++out:
++	spin_unlock_irqrestore(&hw->irq_lock, flags);
++	return ret;
++}
++
++/* Restore the controller gate without resetting timing or DRAM history. */
++int imx50_epdc_hw_resume(struct imx50_epdc_hw *hw)
++{
++	unsigned long flags;
++	u32 value;
++	int ret;
++
++	mutex_lock(&hw->lock);
++	if (hw->fault || hw->configured || !hw->buffers || !hw->drained) {
++		ret = hw->fault ? hw->fault : -EINVAL;
++		goto out;
 +	}
-+	goto out;
-+abort:
-+	/* Withdraw only a command never written. An attempted command write, even
-+	 * one without completion/readback, must keep the existing DMA quarantine.
-+	 */
-+	if (imx50_epdc_buffers_abort_unsubmitted(hw->buffers))
-+		goto quarantine;
-+	goto out;
-+quarantine:
-+	hw->fault = ret;
-+	imx50_epdc_buffers_complete(hw->buffers, ret);
++	writel(E_GATE, hw->base + E_CTRL_CLR);
++	ret = readl_poll_timeout(hw->base + E_CTRL, value, !(value & E_GATE), 10, 1000);
++	if (ret) {
++		hw->fault = ret;
++		goto out;
++	}
++	spin_lock_irqsave(&hw->irq_lock, flags);
++	hw->configured = true;
++	spin_unlock_irqrestore(&hw->irq_lock, flags);
 +out:
 +	mutex_unlock(&hw->lock);
 +	return ret;
@@ -2630,11 +2672,6 @@
 +	if (!hw->drained || !epdc_hw_quiet(hw)) {
 +		hw->fault = -EBUSY;
 +		ret = hw->fault;
-+		goto out;
-+	}
-+	ret = imx50_epdc_buffers_invalidate(hw->buffers);
-+	if (ret) {
-+		hw->fault = ret;
 +		goto out;
 +	}
 +	spin_lock_irqsave(&hw->irq_lock, flags);
@@ -2659,7 +2696,7 @@
 +MODULE_LICENSE("GPL");
 --- /dev/null
 +++ b/drivers/video/fbdev/imx50-epdc-hw.h
-@@ -0,0 +1,63 @@
+@@ -0,0 +1,67 @@
 +/* SPDX-License-Identifier: GPL-2.0-only */
 +#ifndef _IMX50_EPDC_HW_H
 +#define _IMX50_EPDC_HW_H
@@ -2672,30 +2709,31 @@
 +
 +struct imx50_epdc_buffers;
 +
-+/* Private backend for the forthcoming controller owner. No platform binding.
-+ * The owner must keep APBH/AXI/pixel clocks and the MMIO mapping valid for
-+ * every configure/submit/stop call and until stop succeeds. It owns
-+ * the sole IRQ, buffer and MMIO mapping. No other caller may prepare/free the
-+ * buffer during submit. Never release clocks, DMA or this object after fault.
-+ * Submit additionally requires validated panel supplies, pins and waveform;
-+ * the owner must handle emergency panel-power shutdown separately on fault.
-+ * A successful reset/configure is NOT a panel INIT or permission to submit
-+ * an unvalidated waveform. This backend currently programs K4 800x600 timing.
-+ */
++struct imx50_epdc_command;
++struct imx50_epdc_events {
++	u32 luts, collision_mask;
++	bool wb, collision, idle, eof;
++	int error;
++};
++
++/* Owner preserves MMIO/clocks and quarantines shared DMA after a fault. */
 +struct imx50_epdc_hw {
 +	void __iomem *base;
 +	struct imx50_epdc_buffers *buffers;
-+	struct mutex lock; /* Serializes reset/submit/stop and buffer ownership. */
++	struct mutex lock; /* Serializes reset and clock-gating transitions. */
 +	spinlock_t irq_lock; /* Covers IRQ MMIO, running/configured and event state. */
-+	struct completion done;
++	struct imx50_epdc_events events;
++	void (*notify)(void *data);
++	void *notify_data;
 +	/* Read-only preflight snapshot, cached while access clocks are held. */
 +	u32 preflight_version, preflight_ctrl, preflight_status;
 +	u32 preflight_luts, preflight_irq, preflight_count;
 +	int preflight_result;
-+	u32 seen, interrupts, polled_completions;
++	u32 interrupts, polled_completions;
 +	u32 init_updates, canvas_updates, region_updates;
 +	u32 last_coordinates, last_size, last_mode, last_full;
-+	int fault, result;
++	int fault;
++	/* configured means MMIO is accessible; stop retains registers/buffers. */
 +	bool configured, running, drained, supply_fault;
 +};
 +
@@ -2703,13 +2741,14 @@
 +/* Only APBH/AXI access clocks needed; read-only before touching inherited pins. */
 +int imx50_epdc_hw_inherited_idle(struct imx50_epdc_hw *hw);
 +int imx50_epdc_hw_configure(struct imx50_epdc_hw *hw, struct imx50_epdc_buffers *buffers);
-+/* Synchronous serial LUT0 submission; waits for WB + LUT0 + final TCE idle.
-+ * timeout_ms is a nonzero finite waveform-aware deadline, not a cancel.
-+ * At the deadline, a latched final IRQ may establish the same completion proof;
-+ * otherwise timeout/error quarantines the active DMA until system reset.
-+ */
-+int imx50_epdc_hw_submit(struct imx50_epdc_hw *hw, bool initialize, bool full,
-+			 u32 mode, u32 temperature, unsigned int timeout_ms);
++/* One WB submission; LUTs continue asynchronously after WB completes. */
++int imx50_epdc_hw_submit(struct imx50_epdc_hw *hw,
++			 const struct imx50_epdc_command *command);
++void imx50_epdc_hw_events(struct imx50_epdc_hw *hw, struct imx50_epdc_events *events);
++/* Stock fls(active) selection; fallback to STATUS_NEXTLUT when LUT15 is active. */
++int imx50_epdc_hw_next_lut(struct imx50_epdc_hw *hw, bool *sync_eof);
++void imx50_epdc_hw_request_eof(struct imx50_epdc_hw *hw, bool enable);
++void imx50_epdc_hw_fault(struct imx50_epdc_hw *hw, int error);
 +irqreturn_t imx50_epdc_hw_irq(int irq, void *data);
 +/* Supplier fault notification: wake a running submit and quarantine its DMA.
 + * No MMIO while unconfigured; owner preserves clocks while configured.
@@ -2721,11 +2760,13 @@
 +int imx50_epdc_hw_power_reset(struct imx50_epdc_hw *hw);
 +/* Only success permits the owner to gate clocks or release the IRQ/mapping. */
 +int imx50_epdc_hw_stop(struct imx50_epdc_hw *hw);
++/* Access/pixel clocks enabled; restore a stopped, retained configuration. */
++int imx50_epdc_hw_resume(struct imx50_epdc_hw *hw);
 +
 +#endif
 --- /dev/null
 +++ b/drivers/video/fbdev/imx50-epdc-image.c
-@@ -0,0 +1,173 @@
+@@ -0,0 +1,199 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/* EPDC update image preparation: snapshot, block padding, PxP, exact crop. */
 +#include <linux/imx50-epdc-image.h>
@@ -2849,10 +2890,10 @@
 +	}
 +}
 +
-+int imx50_epdc_prepare(struct imx50_pxp *pxp,
++int imx50_epdc_prepare_update(struct imx50_pxp *pxp,
 +		       const struct imx50_epdc_source *s,
 +		       void *dst, size_t dst_size, u32 dst_stride,
-+		       struct imx50_epdc_rect *update)
++		       struct imx50_epdc_rect *update, u32 flags, u32 *histogram)
 +{
 +	struct imx50_epdc_layout l;
 +	struct imx50_pxp_image image;
@@ -2866,6 +2907,23 @@
 +	ret = imx50_epdc_layout(s, dst_size, dst_stride, &l);
 +	if (ret)
 +		return ret;
++	if (s->invert)
++		flags ^= IMX50_PXP_INVERT;
++	/*
++	 * Equal RGB channels give Y8 exactly: 77 + 150 + 29 = 256.
++	 * With no rotation/LUT/histogram, block padding is cropped away.
++	 */
++	if (s->format == IMX50_EPDC_Y8 && !s->rotation && !flags && !histogram) {
++		for (y = 0; y < s->region.height; y++) {
++			const u8 *row = (const u8 *)s->pixels +
++				(size_t)(s->region.top + y) * s->stride + s->region.left;
++
++			memcpy((u8 *)dst + (size_t)y * dst_stride, row, s->region.width);
++			cond_resched();
++		}
++		*update = l.update;
++		return 0;
++	}
 +	pixels = l.padded_width * l.padded_height;
 +	rgb = kvmalloc(pixels * 4, GFP_KERNEL);
 +	grey = kvmalloc(pixels, GFP_KERNEL);
@@ -2873,7 +2931,8 @@
 +		ret = -ENOMEM;
 +		goto out;
 +	}
-+	memset(rgb, 0xff, pixels * 4);
++	/* Stock copy_before_process pads with black for AUTO classification. */
++	memset(rgb, 0, pixels * 4);
 +	imx50_epdc_snapshot(s, &l, rgb);
 +	image = (struct imx50_pxp_image) {
 +		.src = rgb, .dst = grey, .src_size = pixels * 4, .dst_size = pixels,
@@ -2881,7 +2940,7 @@
 +		.src_stride = l.padded_width * 4, .dst_stride = l.output_stride,
 +		.rotation = s->rotation,
 +	};
-+	ret = imx50_pxp_convert(pxp, &image);
++	ret = imx50_pxp_process(pxp, &image, flags, histogram);
 +	if (ret)
 +		goto out;
 +	for (y = 0; y < l.update.height; y++) {
@@ -2889,7 +2948,7 @@
 +		u8 *out = (u8 *)dst + (size_t)y * dst_stride;
 +
 +		for (x = 0; x < l.update.width; x++)
-+			out[x] = s->invert ? 255 - row[x] : row[x];
++			out[x] = row[x];
 +		cond_resched();
 +	}
 +	*update = l.update;
@@ -2897,6 +2956,14 @@
 +	kvfree(grey);
 +	kvfree(rgb);
 +	return ret;
++}
++int imx50_epdc_prepare(struct imx50_pxp *pxp,
++		       const struct imx50_epdc_source *src,
++		       void *dst, size_t dst_size, u32 dst_stride,
++		       struct imx50_epdc_rect *update)
++{
++	return imx50_epdc_prepare_update(pxp, src, dst, dst_size, dst_stride,
++					  update, 0, NULL);
 +}
 +MODULE_LICENSE("GPL");
 --- /dev/null
@@ -3389,9 +3456,9 @@
 +#endif
 --- /dev/null
 +++ b/drivers/video/fbdev/imx50-epdc.c
-@@ -0,0 +1,610 @@
+@@ -0,0 +1,1371 @@
 +// SPDX-License-Identifier: GPL-2.0-only
-+/* K4 EPDC owner: clocks, panel supplies, firmware and serialized updates. */
++/* K4 EPDC owner: clocks, panel supplies, firmware and asynchronous updates. */
 +#include <linux/clk.h>
 +#include <linux/dma-mapping.h>
 +#include <linux/gpio/consumer.h>
@@ -3408,10 +3475,35 @@
 +#include <linux/platform_device.h>
 +#include <linux/regulator/consumer.h>
 +#include <linux/slab.h>
++#include <linux/overflow.h>
 +#include <linux/workqueue.h>
++#include <linux/refcount.h>
++#include <linux/wait.h>
++#include <linux/delay.h>
 +
 +#include "imx50-epdc-hw.h"
 +#include "imx50-epdc-waveform.h"
++
++struct epdc_marker {
++	struct list_head all, update;
++	struct completion done;
++	refcount_t refs;
++	u32 value;
++	int result;
++};
++
++struct epdc_update {
++	struct list_head list, markers;
++	struct imx50_epdc_source source;
++	struct imx50_epdc_update data;
++	void *snapshot;
++	struct imx50_epdc_rect panel_region;
++	u64 order;
++	u32 collision_mask, file_mode;
++	int slot, lut;
++	unsigned long deadline;
++	bool lut_done;
++};
 +
 +struct imx50_epdc {
 +	struct device *dev, *papyrus;
@@ -3427,14 +3519,27 @@
 +	struct pinctrl_state *active, *idle;
 +	struct gpio_desc *gdsp, *sdce;
 +	struct notifier_block power_nb;
-+	struct work_struct power_work;
++	struct work_struct power_work, submit_work;
++	struct delayed_work done_work, watchdog;
++	struct list_head pending, collisions, markers;
++	struct epdc_update *wb, *prepared, *luts[IMX50_EPDC_NUM_LUTS];
++	u64 orders[IMX50_EPDC_NUM_LUTS], order;
++	u32 completed_wb, active_luts, wb_collision_mask;
++	bool wb_collision;
++	unsigned long lut_deadlines[IMX50_EPDC_NUM_LUTS], drain_deadline;
++	int queue_error;
++	wait_queue_head_t idle_wait;
++	enum imx50_epdc_update_scheme scheme;
++	int powerdown_delay, init_slot;
++	unsigned long init_deadline, eof_deadline;
++	bool in_init, init_wb, init_lut, waiting_eof, eof_ready;
 +	const char *wbf_name, *wrf_name;
 +	u32 timeout_ms;
 +	const char *startup_stage; /* Last attempted initialization step. */
 +	int irq, fault, cleanup_error;
 +	bool access_on, pixel_on, pixel_exclusive, axi_exclusive, irq_on;
 +	bool pins_owned, display_held, vcom_held, initialized;
-+	bool suspended, stopped, ready;
++	bool suspended, stopped, ready, restore_pending;
 +};
 +
 +/* Same pad handoff as gpio_epdc_pins_enable(0) in the original K4 kernel.
@@ -3461,12 +3566,8 @@
 +{
 +	int ret = 0, err;
 +
-+	e->initialized = false;
-+	if (e->pins_owned) {
-+		err = epdc_idle_pins(e);
-+		if (err)
-+			ret = err;
-+	}
++	if (READ_ONCE(e->hw.supply_fault) || e->hw.fault)
++		e->initialized = false;
 +	if (e->vcom_held) {
 +		err = regulator_disable(e->vcom);
 +		if (!err)
@@ -3509,6 +3610,11 @@
 +			e->axi_exclusive = false;
 +		}
 +	}
++	if (e->pins_owned) {
++		err = epdc_idle_pins(e);
++		if (err)
++			ret = err;
++	}
 +	e->cleanup_error = ret;
 +	return e->fault ? e->fault : ret;
 +}
@@ -3544,6 +3650,13 @@
 +	ret = imx50_epdc_hw_power_reset(&e->hw);
 +	if (ret)
 +		return ret;
++	if (e->initialized) {
++		e->startup_stage = "active-pins";
++		ret = pinctrl_select_state(e->pins, e->active);
++		if (ret)
++			return ret;
++		goto clocks;
++	}
 +	e->startup_stage = "access-clocks";
 +	ret = clk_bulk_prepare_enable(ARRAY_SIZE(e->access), e->access);
 +	if (ret)
@@ -3563,21 +3676,24 @@
 +	/* Only after inherited-idle proof may the owner stop/switch AXI. */
 +	clk_bulk_disable_unprepare(ARRAY_SIZE(e->access), e->access);
 +	e->access_on = false;
++clocks:
 +	e->startup_stage = "axi-exclusive";
 +	ret = clk_rate_exclusive_get(e->access[1].clk);
 +	if (ret)
 +		return ret;
 +	e->axi_exclusive = true;
-+	e->startup_stage = "axi-parent";
-+	ret = clk_set_parent(e->access[1].clk, e->pixel_parent);
-+	if (ret)
-+		return ret;
-+	e->startup_stage = "axi-rate";
-+	ret = clk_set_rate(e->access[1].clk, 200000000);
-+	if (ret)
-+		return ret;
-+	if (clk_get_rate(e->access[1].clk) != 200000000)
-+		return -ERANGE;
++	if (!e->initialized) {
++		e->startup_stage = "axi-parent";
++		ret = clk_set_parent(e->access[1].clk, e->pixel_parent);
++		if (ret)
++			return ret;
++		e->startup_stage = "axi-rate";
++		ret = clk_set_rate(e->access[1].clk, 200000000);
++		if (ret)
++			return ret;
++		if (clk_get_rate(e->access[1].clk) != 200000000)
++			return -ERANGE;
++	}
 +	e->startup_stage = "axi-enable";
 +	ret = clk_bulk_prepare_enable(ARRAY_SIZE(e->access), e->access);
 +	if (ret)
@@ -3588,37 +3704,42 @@
 +	if (ret)
 +		return ret;
 +	e->pixel_exclusive = true;
-+	e->startup_stage = "pixel-parent";
-+	ret = clk_set_parent(e->pixel, e->pixel_parent);
-+	if (ret)
-+		return ret;
-+	e->startup_stage = "pixel-rate";
-+	ret = clk_set_rate(e->pixel, 32000000);
-+	if (ret)
-+		return ret;
-+	/* K4 timing table is expressed in this panel's 32MHz pixel clock. */
-+	if (clk_get_rate(e->pixel) != 32000000)
-+		return -ERANGE;
++	if (!e->initialized) {
++		e->startup_stage = "pixel-parent";
++		ret = clk_set_parent(e->pixel, e->pixel_parent);
++		if (ret)
++			return ret;
++		e->startup_stage = "pixel-rate";
++		ret = clk_set_rate(e->pixel, 32000000);
++		if (ret)
++			return ret;
++		/* K4 timing table is expressed in this panel's 32MHz pixel clock. */
++		if (clk_get_rate(e->pixel) != 32000000)
++			return -ERANGE;
++	}
 +	e->startup_stage = "pixel-enable";
 +	ret = clk_prepare_enable(e->pixel);
 +	if (ret)
 +		return ret;
 +	e->pixel_on = true;
-+	e->startup_stage = "controller-configure";
-+	ret = imx50_epdc_hw_configure(&e->hw, e->buffers);
++	e->startup_stage = e->initialized ? "controller-resume" : "controller-configure";
++	ret = e->initialized ? imx50_epdc_hw_resume(&e->hw) :
++		imx50_epdc_hw_configure(&e->hw, e->buffers);
 +	if (ret)
 +		return ret;
 +	enable_irq(e->irq);
 +	e->irq_on = true;
++	if (!e->initialized) {
++		e->startup_stage = "active-pins";
++		ret = pinctrl_select_state(e->pins, e->active);
++		if (ret)
++			return ret;
++	}
 +	e->startup_stage = "display-enable";
 +	ret = regulator_enable(e->display);
 +	if (ret)
 +		return ret;
 +	e->display_held = true;
-+	e->startup_stage = "active-pins";
-+	ret = pinctrl_select_state(e->pins, e->active);
-+	if (ret)
-+		return ret;
 +	e->startup_stage = "vcom-enable";
 +	ret = regulator_enable(e->vcom);
 +	if (ret)
@@ -3632,97 +3753,781 @@
 +	long millicelsius;
 +	int ret;
 +
-+	ret = k4_papyrus_read_temperature(e->papyrus, &millicelsius);
++	ret = k4_papyrus_cached_temperature(e->papyrus, &millicelsius);
 +	if (ret)
 +		return ret;
 +	return imx50_epdc_waveform_temperature(e->wave, millicelsius);
 +}
 +
-+int imx50_epdc_update(struct imx50_epdc *e, const struct imx50_epdc_source *source,
-+		      enum imx50_epdc_mode mode, bool full)
++static bool epdc_queue_idle(struct imx50_epdc *e)
 +{
-+	struct imx50_epdc_source restore;
-+	int ret, temperature, file_mode;
++	unsigned int i;
 +
-+	if (!source || mode < IMX50_EPDC_MODE_DU || mode > IMX50_EPDC_MODE_GL16_FAST)
-+		return -EINVAL;
-+	ret = mutex_lock_interruptible(&e->lock);
-+	if (ret)
-+		return ret;
-+	if (e->stopped || e->suspended || e->fault) {
-+		ret = e->fault ? e->fault : -EBUSY;
++	if (e->wb || e->prepared || e->in_init || e->active_luts || !list_empty(&e->pending) ||
++	    !list_empty(&e->collisions))
++		return false;
++	for (i = 0; i < IMX50_EPDC_NUM_LUTS; i++)
++		if (e->luts[i])
++			return false;
++	return true;
++}
++
++static void epdc_marker_put(struct epdc_marker *m)
++{
++	if (refcount_dec_and_test(&m->refs))
++		kfree(m);
++}
++
++static void epdc_finish(struct imx50_epdc *e, struct epdc_update *u, int result)
++{
++	struct epdc_marker *m, *next;
++
++	list_for_each_entry_safe(m, next, &u->markers, update) {
++		list_del(&m->update);
++		list_del(&m->all);
++		m->result = result;
++		complete_all(&m->done);
++		epdc_marker_put(m);
++	}
++	if (u->slot >= 0 && !e->fault)
++		imx50_epdc_buffers_put(e->buffers, u->slot);
++	kvfree(u->snapshot);
++	kfree(u);
++}
++
++static void epdc_fail_queue(struct imx50_epdc *e, int error)
++{
++	struct epdc_update *u, *next;
++	unsigned int i;
++
++	e->fault = error;
++	e->active_luts = 0;
++	e->initialized = false;
++	imx50_epdc_hw_fault(&e->hw, error);
++	if (e->buffers)
++		imx50_epdc_buffers_fault(e->buffers, error);
++	/* WB descriptor also occupies a LUT; retire it only through that LUT. */
++	e->wb = NULL;
++	if (e->prepared) {
++		epdc_finish(e, e->prepared, error);
++		e->prepared = NULL;
++	}
++	for (i = 0; i < IMX50_EPDC_NUM_LUTS; i++) {
++		if (e->luts[i]) {
++			epdc_finish(e, e->luts[i], error);
++			e->luts[i] = NULL;
++		}
++	}
++	list_for_each_entry_safe(u, next, &e->pending, list) {
++		list_del(&u->list);
++		epdc_finish(e, u, error);
++	}
++	list_for_each_entry_safe(u, next, &e->collisions, list) {
++		list_del(&u->list);
++		epdc_finish(e, u, error);
++	}
++	e->in_init = false;
++	wake_up_all(&e->idle_wait);
++	epdc_off_locked(e);
++}
++
++/* mxc_epdc_fb.c:1927-2010. A flag mismatch stops the merge scan. */
++static int epdc_merge(struct epdc_update *a, struct epdc_update *b)
++{
++	struct imx50_epdc_rect *r = &a->data.region, *s = &b->data.region;
++	u32 aw = a->data.waveform_mode, bw = b->data.waveform_mode;
++	u32 right, bottom;
++
++	if (a->data.flags != b->data.flags)
++		return -1;
++	/* Internal API may serve distinct canvases; only a common source can merge. */
++	if (a->source.pixels != b->source.pixels ||
++	    a->source.width != b->source.width || a->source.height != b->source.height ||
++	    a->source.stride != b->source.stride || a->source.format != b->source.format ||
++	    a->source.rotation != b->source.rotation || a->source.invert != b->source.invert)
++		return 0;
++	if (r->left > s->left + s->width || s->left > r->left + r->width ||
++	    r->top > s->top + s->height || s->top > r->top + r->height)
++		return 0;
++	if (aw != bw) {
++		if (aw == IMX50_EPDC_MODE_A2 || bw == IMX50_EPDC_MODE_A2 ||
++		    aw == IMX50_EPDC_MODE_GL16 || bw == IMX50_EPDC_MODE_GL16 ||
++		    aw == IMX50_EPDC_MODE_GL16_FAST || bw == IMX50_EPDC_MODE_GL16_FAST)
++			return 0;
++		if (aw == IMX50_EPDC_MODE_GC16 || bw == IMX50_EPDC_MODE_GC16)
++			a->data.waveform_mode = IMX50_EPDC_MODE_GC16;
++		else
++			/* Preserve the K4 branch's update_mode assignment (1977). */
++			a->data.update_mode = IMX50_EPDC_MODE_AUTO;
++	}
++	if (a->data.update_mode == IMX50_EPDC_UPDATE_FULL ||
++	    b->data.update_mode == IMX50_EPDC_UPDATE_FULL)
++		a->data.update_mode = IMX50_EPDC_UPDATE_FULL;
++	right = max(r->left + r->width, s->left + s->width);
++	bottom = max(r->top + r->height, s->top + s->height);
++	r->left = min(r->left, s->left);
++	r->top = min(r->top, s->top);
++	r->width = right - r->left;
++	r->height = bottom - r->top;
++	a->order = max(a->order, b->order);
++	list_splice_tail_init(&b->markers, &a->markers);
++	return 1;
++}
++
++static struct epdc_update *epdc_select(struct imx50_epdc *e)
++{
++	struct epdc_update *u, *next, *selected = NULL;
++	int merged;
++
++	list_for_each_entry_safe(u, next, &e->collisions, list) {
++		if (u->collision_mask)
++			continue;
++		if (!selected) {
++			selected = u;
++			list_del_init(&u->list);
++			if (e->scheme != IMX50_EPDC_QUEUE_AND_MERGE)
++				return selected;
++			continue;
++		}
++		merged = epdc_merge(selected, u);
++		if (merged < 0)
++			break;
++		if (merged) {
++			list_del(&u->list);
++			epdc_finish(e, u, 0);
++		}
++	}
++	list_for_each_entry_safe(u, next, &e->pending, list) {
++		if (!selected) {
++			selected = u;
++			list_del_init(&u->list);
++			if (e->scheme != IMX50_EPDC_QUEUE_AND_MERGE)
++				break;
++			continue;
++		}
++		merged = epdc_merge(selected, u);
++		if (merged < 0)
++			break;
++		if (merged) {
++			list_del(&u->list);
++			epdc_finish(e, u, 0);
++		}
++	}
++	return selected;
++}
++
++static void epdc_done_work(struct work_struct *work)
++{
++	struct imx50_epdc *e = container_of(to_delayed_work(work),
++					  struct imx50_epdc, done_work);
++
++	mutex_lock(&e->lock);
++	if (epdc_queue_idle(e) && READ_ONCE(e->hw.drained))
++		epdc_off_locked(e);
++	mutex_unlock(&e->lock);
++}
++
++static void epdc_notify(void *data)
++{
++	struct imx50_epdc *e = data;
++
++	schedule_work(&e->submit_work);
++}
++
++static void epdc_watchdog(struct work_struct *work)
++{
++	struct imx50_epdc *e = container_of(to_delayed_work(work),
++					  struct imx50_epdc, watchdog);
++
++	epdc_notify(e);
++}
++
++static void epdc_events(struct imx50_epdc *e, struct imx50_epdc_events *ev)
++{
++	struct epdc_update *u, *next;
++	unsigned int i;
++	bool retry = false;
++	int ret;
++
++	if (e->in_init) {
++		e->init_wb |= ev->wb;
++		e->init_lut |= !!(ev->luts & 1);
++		if (e->init_wb && e->init_lut) {
++			ret = imx50_epdc_buffers_complete(e->buffers, e->init_slot);
++			if (ret) {
++				epdc_fail_queue(e, ret);
++				return;
++			}
++			imx50_epdc_buffers_put(e->buffers, e->init_slot);
++			e->in_init = false;
++			e->initialized = true;
++			e->restore_pending = true;
++		}
++		return;
++	}
++	e->wb_collision |= ev->collision;
++	e->wb_collision_mask |= ev->collision_mask;
++	e->completed_wb |= ev->luts;
++	e->active_luts &= ~ev->luts;
++	for (i = 0; i < IMX50_EPDC_NUM_LUTS; i++) {
++		if (!(ev->luts & BIT(i)))
++			continue;
++		e->orders[i] = 0;
++		list_for_each_entry(u, &e->collisions, list)
++			u->collision_mask &= ~BIT(i);
++		u = e->luts[i];
++		if (!u)
++			continue;
++		u->lut_done = true;
++		if (u != e->wb) {
++			e->luts[i] = NULL;
++			epdc_finish(e, u, 0);
++		}
++	}
++	u = e->wb;
++	if (!u || !ev->wb)
++		return;
++	ret = imx50_epdc_buffers_complete(e->buffers, u->slot);
++	if (ret) {
++		epdc_fail_queue(e, ret);
++		return;
++	}
++	if (e->wb_collision) {
++		u->collision_mask = e->wb_collision_mask & ~e->completed_wb;
++		retry = true;
++		for (i = 0; i < IMX50_EPDC_NUM_LUTS; i++)
++			if ((u->collision_mask & BIT(i)) && e->orders[i] >= u->order)
++				retry = false;
++	}
++	e->wb = NULL;
++	if (retry) {
++		/* A collided marker must not follow its first (incomplete) LUT. */
++		e->luts[u->lut] = NULL;
++		list_add_tail(&u->list, &e->collisions);
++	} else {
++		imx50_epdc_buffers_put(e->buffers, u->slot);
++		u->slot = -1;
++		if (u->lut_done) {
++			e->luts[u->lut] = NULL;
++			epdc_finish(e, u, 0);
++		}
++	}
++	/* Completed masks are cleared above, including the WB/LUT same-IRQ race. */
++	list_for_each_entry_safe(u, next, &e->collisions, list)
++		u->collision_mask &= ~ev->luts;
++}
++
++/* AUTO precedence is DU, GC4/GU, GC8/GC, GC16/GC, GC32/GC.
++ * Lab126 sets GU and GC to GC16 for the supported mode versions 4/6/7.
++ */
++static u32 epdc_auto_mode(u32 histogram)
++{
++	if (histogram & 1)
++		return IMX50_EPDC_MODE_DU;
++	if (histogram & 2)
++		return IMX50_EPDC_MODE_GC16;
++	if (histogram & 4)
++		return IMX50_EPDC_MODE_GC16;
++	if (histogram & 8)
++		return IMX50_EPDC_MODE_GC16;
++	return IMX50_EPDC_MODE_GC16;
++}
++
++static void epdc_submit_work(struct work_struct *work)
++{
++	struct imx50_epdc *e = container_of(work, struct imx50_epdc, submit_work);
++	struct imx50_epdc_events ev;
++	struct imx50_epdc_command command;
++	struct epdc_update *u;
++	unsigned long deadline = 0;
++	u32 histogram, mode;
++	bool sync_eof;
++	int ret, lut, temperature, i;
++
++	mutex_lock(&e->lock);
++	imx50_epdc_hw_events(&e->hw, &ev);
++	if (e->fault) {
++		if (!epdc_queue_idle(e))
++			epdc_fail_queue(e, e->fault);
 +		goto out;
 +	}
-+	if (e->cleanup_error || READ_ONCE(e->hw.supply_fault)) {
-+		ret = epdc_off_locked(e);
-+		if (ret)
++	if (ev.error) {
++		epdc_fail_queue(e, ev.error);
++		goto out;
++	}
++	epdc_events(e, &ev);
++	if (e->fault)
++		goto out;
++	if (e->in_init) {
++		deadline = e->init_deadline;
++		goto watch;
++	}
++	for (i = 0; i < IMX50_EPDC_NUM_LUTS; i++) {
++		if (!(e->active_luts & BIT(i)))
++			continue;
++		if (time_after_eq(jiffies, e->lut_deadlines[i])) {
++			epdc_fail_queue(e, -ETIMEDOUT);
 +			goto out;
++		}
++		if (!deadline || time_before(e->lut_deadlines[i], deadline))
++			deadline = e->lut_deadlines[i];
++	}
++	if (e->wb)
++		goto watch;
++	if (epdc_queue_idle(e)) {
++		if (e->pixel_on && !READ_ONCE(e->hw.drained)) {
++			deadline = e->drain_deadline;
++			goto watch;
++		}
++		cancel_delayed_work(&e->watchdog);
++		if (READ_ONCE(e->hw.drained)) {
++			wake_up_all(&e->idle_wait);
++			if (e->powerdown_delay != IMX50_EPDC_POWERDOWN_DISABLE)
++				mod_delayed_work(system_wq, &e->done_work,
++					msecs_to_jiffies(e->powerdown_delay));
++		}
++		goto out;
 +	}
 +	if (!e->wave) {
 +		e->wave = imx50_epdc_waveform_load(e->dev, e->wbf_name, e->wrf_name, 800, 600);
 +		if (IS_ERR(e->wave)) {
 +			ret = PTR_ERR(e->wave);
 +			e->wave = NULL;
-+			goto out;
++			goto pending_error;
 +		}
 +		e->buffers = imx50_epdc_waveform_buffers(e->wave);
 +	}
-+	file_mode = imx50_epdc_waveform_mode(e->wave, (enum imx50_epdc_waveform_mode)mode);
-+	if (file_mode < 0) {
-+		ret = file_mode;
-+		goto fail;
++	if (!e->pixel_on) {
++		ret = epdc_start_locked(e);
++		if (ret)
++			goto pending_error;
 +	}
-+	/* Validate/convert before changing panel power; INIT overwrites this copy. */
-+	ret = imx50_epdc_buffers_prepare(e->buffers, e->pxp, source);
-+	if (ret)
-+		goto fail;
++	if (!e->initialized) {
++		e->init_slot = imx50_epdc_buffers_get(e->buffers);
++		if (e->init_slot < 0) {
++			ret = e->init_slot;
++			goto pending_error;
++		}
++		temperature = epdc_temperature(e);
++		if (temperature < 0) {
++			imx50_epdc_buffers_put(e->buffers, e->init_slot);
++			ret = temperature;
++			goto pending_error;
++		}
++		ret = imx50_epdc_buffers_begin(e->buffers, e->init_slot, true, true,
++					      0, temperature, 0, &command);
++		if (ret) {
++			if (imx50_epdc_buffers_error(e->buffers)) {
++				epdc_fail_queue(e, ret);
++				goto out;
++			}
++			imx50_epdc_buffers_put(e->buffers, e->init_slot);
++			goto pending_error;
++		}
++		e->in_init = true;
++		e->init_wb = e->init_lut = false;
++		e->init_deadline = e->drain_deadline = jiffies + msecs_to_jiffies(e->timeout_ms);
++		ret = imx50_epdc_hw_submit(&e->hw, &command);
++		if (ret && !e->hw.fault && !e->hw.running) {
++			imx50_epdc_buffers_abort_unsubmitted(e->buffers, e->init_slot);
++			imx50_epdc_buffers_put(e->buffers, e->init_slot);
++			e->in_init = false;
++			goto pending_error;
++		}
++		if (ret) {
++			epdc_fail_queue(e, ret);
++			goto out;
++		}
++		deadline = e->init_deadline;
++		goto watch;
++	}
++	lut = imx50_epdc_hw_next_lut(&e->hw, &sync_eof);
++	if (lut == -EBUSY)
++		goto watch;
++	if (lut < 0) {
++		epdc_fail_queue(e, lut);
++		goto out;
++	}
++	if (e->active_luts & BIT(lut))
++		goto watch; /* IRQ completion is pending owner processing. */
++	u = e->prepared;
++	if (!u) {
++		u = epdc_select(e);
++		if (!u)
++			goto watch;
++		if (u->slot < 0)
++			u->slot = imx50_epdc_buffers_get(e->buffers);
++		if (u->slot < 0) {
++			list_add(&u->list, &e->pending);
++			goto watch;
++		}
++		if (!u->snapshot)
++			u->source.region = u->data.region;
++		if (e->restore_pending) {
++			if (!u->snapshot)
++				u->source.region = (struct imx50_epdc_rect){
++					0, 0, u->source.width, u->source.height };
++			u->data.update_mode = IMX50_EPDC_UPDATE_FULL;
++		}
++		ret = imx50_epdc_buffers_prepare(e->buffers, u->slot, e->pxp,
++						&u->source,
++						u->snapshot ? &u->panel_region : NULL,
++						u->data.flags,
++						u->data.waveform_mode == IMX50_EPDC_MODE_AUTO ?
++						&histogram : NULL);
++		if (ret)
++			goto update_error;
++		mode = u->data.waveform_mode;
++		if (mode == IMX50_EPDC_MODE_AUTO)
++			mode = epdc_auto_mode(histogram);
++		u->data.waveform_mode = mode;
++		ret = imx50_epdc_waveform_mode(e->wave, mode);
++		if (ret < 0)
++			goto update_error;
++		u->file_mode = ret;
++		e->prepared = u;
++	}
++	/* Stock default tce_prevent=0: sync with EOF if LUT15 is active.
++	 * E60 timing: (holdoff+1)*1000000/(refresh*vertical_total)+25 us.
++	 */
++	if (sync_eof && !e->eof_ready) {
++		if (!e->waiting_eof) {
++			imx50_epdc_hw_request_eof(&e->hw, true);
++			e->waiting_eof = true;
++			e->eof_deadline = jiffies + msecs_to_jiffies(1000);
++		}
++		if (!ev.eof && time_before(jiffies, e->eof_deadline)) {
++			if (!deadline || time_before(e->eof_deadline, deadline))
++				deadline = e->eof_deadline;
++			goto watch;
++		}
++		udelay(5 * 1000000 / (85 * (4 + 600 + 18 + 4)) + 25);
++		e->eof_ready = true;
++	}
++	if (e->waiting_eof)
++		imx50_epdc_hw_request_eof(&e->hw, false);
++	mode = u->file_mode;
 +	temperature = epdc_temperature(e);
 +	if (temperature < 0) {
 +		ret = temperature;
-+		goto fail;
++		goto update_error;
 +	}
-+	if (!e->initialized) {
-+		ret = epdc_start_locked(e);
-+		if (ret)
-+			goto fail;
-+		ret = imx50_epdc_hw_submit(&e->hw, true, true, 0, temperature, e->timeout_ms);
-+		if (ret)
-+			goto fail;
-+		e->initialized = true;
-+		/* INIT erased the full panel, including pixels outside this request.
-+		 * The input describes a complete canvas; restore all of it after any
-+		 * power-loss epoch, including one the consumer did not observe.
-+		 */
-+		restore = *source;
-+		restore.region = (struct imx50_epdc_rect){ 0, 0, source->width, source->height };
-+		source = &restore;
-+		full = true;
-+		ret = imx50_epdc_buffers_prepare(e->buffers, e->pxp, source);
-+		if (ret)
-+			goto fail;
-+		/* INIT can take seconds; select the image mode using a fresh sample. */
-+		temperature = epdc_temperature(e);
-+		if (temperature < 0) {
-+			ret = temperature;
-+			goto fail;
-+		}
-+	}
-+	ret = imx50_epdc_hw_submit(&e->hw, false, full, file_mode, temperature, e->timeout_ms);
++	ret = imx50_epdc_buffers_begin(e->buffers, u->slot, false,
++				      u->data.update_mode, mode, temperature, lut, &command);
 +	if (ret)
-+		goto fail;
++		goto update_error;
++	e->prepared = NULL;
++	u->lut = lut;
++	u->lut_done = false;
++	u->deadline = jiffies + msecs_to_jiffies(e->timeout_ms);
++	e->luts[lut] = e->wb = u;
++	e->orders[lut] = u->order;
++	e->active_luts |= BIT(lut);
++	e->lut_deadlines[lut] = e->drain_deadline = u->deadline;
++	e->completed_wb = 0;
++	e->wb_collision = false;
++	e->wb_collision_mask = 0;
++	e->waiting_eof = e->eof_ready = false;
++	ret = imx50_epdc_hw_submit(&e->hw, &command);
++	if (ret && !e->hw.fault && !e->hw.running) {
++		imx50_epdc_buffers_abort_unsubmitted(e->buffers, u->slot);
++		e->luts[lut] = e->wb = NULL;
++		e->active_luts &= ~BIT(lut);
++		e->initialized = false;
++		goto update_error;
++	}
++	if (ret) {
++		epdc_fail_queue(e, ret);
++		goto out;
++	}
++	e->restore_pending = false;
++	if (!deadline || time_before(u->deadline, deadline))
++		deadline = u->deadline;
++	goto watch;
++update_error:
++	e->prepared = NULL;
++	if (e->waiting_eof)
++		imx50_epdc_hw_request_eof(&e->hw, false);
++	e->waiting_eof = e->eof_ready = false;
++	if (imx50_epdc_buffers_error(e->buffers)) {
++		list_add(&u->list, &e->pending);
++		epdc_fail_queue(e, ret);
++		goto out;
++	}
++	e->queue_error = ret;
++	epdc_finish(e, u, ret);
++	if (e->hw.fault) {
++		epdc_fail_queue(e, e->hw.fault);
++		goto out;
++	}
++	epdc_notify(e);
++	goto watch;
++pending_error:
++	e->queue_error = ret;
++	if (e->hw.fault) {
++		epdc_fail_queue(e, e->hw.fault);
++		goto out;
++	}
++	while (!list_empty(&e->pending)) {
++		u = list_first_entry(&e->pending, struct epdc_update, list);
++		list_del(&u->list);
++		epdc_finish(e, u, ret);
++	}
++	if (e->pixel_on && !READ_ONCE(e->hw.drained)) {
++		deadline = e->drain_deadline;
++		goto watch;
++	}
++	epdc_off_locked(e);
++	wake_up_all(&e->idle_wait);
 +	goto out;
-+fail:
-+	epdc_off_locked(e); /* Preserve primary errno and separate cleanup_error. */
++watch:
++	if (deadline) {
++		if (time_after_eq(jiffies, deadline))
++			epdc_fail_queue(e, -ETIMEDOUT);
++		else
++			mod_delayed_work(system_wq, &e->watchdog, deadline - jiffies);
++	}
 +out:
 +	mutex_unlock(&e->lock);
++}
++
++/* Capture raw source rows before queue publication; PxP remains asynchronous. */
++static int epdc_capture(struct epdc_update *u)
++{
++	struct imx50_epdc_source *s = &u->source;
++	const struct imx50_epdc_rect *r = &u->data.region;
++	size_t row, need, bytes;
++	u32 bpp, y;
++
++	switch (s->format) {
++	case IMX50_EPDC_XRGB8888:
++		bpp = 4;
++		break;
++	case IMX50_EPDC_RGB565:
++		bpp = 2;
++		break;
++	case IMX50_EPDC_Y8:
++		bpp = 1;
++		break;
++	default:
++		return -EINVAL;
++	}
++	if (s->rotation > 270 || s->rotation % 90 ||
++	    check_mul_overflow((size_t)s->width, (size_t)bpp, &row) ||
++	    s->stride < row ||
++	    check_mul_overflow((size_t)(s->height - 1), (size_t)s->stride, &need) ||
++	    check_add_overflow(need, row, &need) || need > s->size ||
++	    check_mul_overflow((size_t)r->width, (size_t)bpp, &row) ||
++	    row > U32_MAX || check_mul_overflow(row, (size_t)r->height, &bytes))
++		return -EINVAL;
++	u->snapshot = kvmalloc(bytes, GFP_KERNEL);
++	if (!u->snapshot)
++		return -ENOMEM;
++	for (y = 0; y < r->height; y++)
++		memcpy((u8 *)u->snapshot + y * row,
++		       (const u8 *)s->pixels + (size_t)(r->top + y) * s->stride +
++		       (size_t)r->left * bpp, row);
++	u->panel_region = *r;
++	switch (s->rotation) {
++	case 90:
++		u->panel_region.left = s->height - r->top - r->height;
++		u->panel_region.top = r->left;
++		break;
++	case 180:
++		u->panel_region.left = s->width - r->left - r->width;
++		u->panel_region.top = s->height - r->top - r->height;
++		break;
++	case 270:
++		u->panel_region.left = r->top;
++		u->panel_region.top = s->width - r->left - r->width;
++		break;
++	}
++	if (s->rotation % 180) {
++		u->panel_region.width = r->height;
++		u->panel_region.height = r->width;
++	}
++	s->pixels = u->snapshot;
++	s->size = bytes;
++	s->width = r->width;
++	s->height = r->height;
++	s->stride = row;
++	s->region = (struct imx50_epdc_rect){ 0, 0, r->width, r->height };
++	return 0;
++}
++
++int imx50_epdc_send_update(struct imx50_epdc *e,
++	const struct imx50_epdc_source *source, const struct imx50_epdc_update *data)
++{
++	struct epdc_update *u;
++	struct epdc_marker *m = NULL;
++	const struct imx50_epdc_rect *r;
++	int ret = 0;
++
++	if (!source || !source->pixels || !data ||
++	    (data->waveform_mode != IMX50_EPDC_MODE_AUTO &&
++	     (data->waveform_mode < IMX50_EPDC_MODE_DU ||
++	      data->waveform_mode > IMX50_EPDC_MODE_GL16_FAST)) ||
++	    data->update_mode > IMX50_EPDC_UPDATE_FULL ||
++	    data->flags & ~(IMX50_EPDC_ENABLE_INVERSION | IMX50_EPDC_FORCE_MONOCHROME))
++		return -EINVAL;
++	r = &data->region;
++	if (!r->width || !r->height || r->width > source->width ||
++	    r->height > source->height || r->left > source->width - r->width ||
++	    r->top > source->height - r->height)
++		return -EINVAL;
++	u = kzalloc(sizeof(*u), GFP_KERNEL);
++	if (!u)
++		return -ENOMEM;
++	INIT_LIST_HEAD(&u->markers);
++	u->source = *source;
++	u->data = *data;
++	u->slot = -1;
++	if (data->update_marker) {
++		m = kzalloc(sizeof(*m), GFP_KERNEL);
++		if (!m) {
++			kfree(u);
++			return -ENOMEM;
++		}
++		m->value = data->update_marker;
++		refcount_set(&m->refs, 1);
++		init_completion(&m->done);
++		list_add_tail(&m->update, &u->markers);
++	}
++	mutex_lock(&e->lock);
++	if (e->fault || e->stopped || e->suspended) {
++		ret = e->fault ? e->fault : -EBUSY;
++		goto fail;
++	}
++	if (e->cleanup_error || READ_ONCE(e->hw.supply_fault)) {
++		ret = epdc_off_locked(e);
++		if (ret)
++			goto fail;
++	}
++	if (e->scheme == IMX50_EPDC_SNAPSHOT) {
++		ret = epdc_capture(u);
++		if (ret)
++			goto fail;
++	}
++	cancel_delayed_work(&e->done_work);
++	if (epdc_queue_idle(e))
++		e->queue_error = 0;
++	u->order = ++e->order;
++	if (m)
++		list_add_tail(&m->all, &e->markers);
++	list_add_tail(&u->list, &e->pending);
++	epdc_notify(e);
++	mutex_unlock(&e->lock);
++	return 0;
++fail:
++	mutex_unlock(&e->lock);
++	kfree(m);
++	kvfree(u->snapshot);
++	kfree(u);
 +	return ret;
 +}
-+EXPORT_SYMBOL_GPL(imx50_epdc_update);
++EXPORT_SYMBOL_GPL(imx50_epdc_send_update);
++
++int imx50_epdc_wait_for_update_complete(struct imx50_epdc *e, u32 value,
++	unsigned int timeout_ms)
++{
++	struct epdc_marker *m, *found = NULL;
++	int ret;
++
++	if (!value)
++		return -EINVAL;
++	mutex_lock(&e->lock);
++	list_for_each_entry(m, &e->markers, all) {
++		if (m->value == value) {
++			found = m;
++			refcount_inc(&m->refs);
++			break;
++		}
++	}
++	ret = e->fault;
++	mutex_unlock(&e->lock);
++	if (!found)
++		return ret; /* Stock: an absent marker has already completed. */
++	ret = wait_for_completion_interruptible_timeout(&found->done,
++						       msecs_to_jiffies(timeout_ms));
++	if (ret > 0)
++		ret = found->result;
++	else if (!ret)
++		ret = -ETIMEDOUT;
++	epdc_marker_put(found);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(imx50_epdc_wait_for_update_complete);
++
++static bool epdc_idle_or_fault(struct imx50_epdc *e)
++{
++	bool idle;
++
++	mutex_lock(&e->lock);
++	idle = e->fault || (epdc_queue_idle(e) && (!e->pixel_on || READ_ONCE(e->hw.drained)));
++	mutex_unlock(&e->lock);
++	return idle;
++}
++
++int imx50_epdc_flush(struct imx50_epdc *e, unsigned int timeout_ms)
++{
++	long ret;
++
++	ret = wait_event_interruptible_timeout(e->idle_wait, epdc_idle_or_fault(e),
++					       msecs_to_jiffies(timeout_ms));
++	if (ret < 0)
++		return ret;
++	if (!ret)
++		return -ETIMEDOUT;
++	return READ_ONCE(e->fault) ?: READ_ONCE(e->queue_error);
++}
++EXPORT_SYMBOL_GPL(imx50_epdc_flush);
++
++int imx50_epdc_set_powerdown_delay(struct imx50_epdc *e, int delay)
++{
++	if (delay < IMX50_EPDC_POWERDOWN_DISABLE)
++		return -EINVAL;
++	mutex_lock(&e->lock);
++	e->powerdown_delay = delay;
++	cancel_delayed_work(&e->done_work);
++	if (delay != IMX50_EPDC_POWERDOWN_DISABLE && epdc_queue_idle(e) && e->pixel_on)
++		mod_delayed_work(system_wq, &e->done_work, msecs_to_jiffies(delay));
++	mutex_unlock(&e->lock);
++	return 0;
++}
++EXPORT_SYMBOL_GPL(imx50_epdc_set_powerdown_delay);
++
++int imx50_epdc_get_powerdown_delay(struct imx50_epdc *e)
++{
++	return READ_ONCE(e->powerdown_delay);
++}
++EXPORT_SYMBOL_GPL(imx50_epdc_get_powerdown_delay);
++
++int imx50_epdc_set_update_scheme(struct imx50_epdc *e,
++	enum imx50_epdc_update_scheme scheme)
++{
++	if (scheme != IMX50_EPDC_SNAPSHOT && scheme != IMX50_EPDC_QUEUE &&
++	    scheme != IMX50_EPDC_QUEUE_AND_MERGE)
++		return -EINVAL;
++	mutex_lock(&e->lock);
++	e->scheme = scheme;
++	mutex_unlock(&e->lock);
++	return 0;
++}
++EXPORT_SYMBOL_GPL(imx50_epdc_set_update_scheme);
++
++enum imx50_epdc_update_scheme imx50_epdc_get_update_scheme(struct imx50_epdc *e)
++{
++	return READ_ONCE(e->scheme);
++}
++EXPORT_SYMBOL_GPL(imx50_epdc_get_update_scheme);
 +
 +int imx50_epdc_powerdown(struct imx50_epdc *e)
 +{
 +	int ret;
 +
++	ret = imx50_epdc_flush(e, e->timeout_ms);
++	if (ret && !epdc_idle_or_fault(e))
++		return ret;
 +	mutex_lock(&e->lock);
 +	ret = epdc_off_locked(e);
 +	mutex_unlock(&e->lock);
@@ -3764,10 +4569,11 @@
 +	int ret;
 +
 +	mutex_lock(&e->lock);
-+	ret = epdc_off_locked(e);
-+	if (!ret)
-+		e->suspended = true;
++	e->suspended = true;
 +	mutex_unlock(&e->lock);
++	ret = imx50_epdc_powerdown(e);
++	if (ret)
++		WRITE_ONCE(e->suspended, false);
 +	return ret;
 +}
 +
@@ -3776,7 +4582,7 @@
 +	struct imx50_epdc *e = dev_get_drvdata(dev);
 +
 +	mutex_lock(&e->lock);
-+	e->suspended = false; /* Lazy power/INIT on the next image. */
++	e->suspended = false; /* Lazy powerup on the next image. */
 +	mutex_unlock(&e->lock);
 +	return 0;
 +}
@@ -3820,6 +4626,9 @@
 +	struct imx50_epdc *e = data;
 +
 +	cancel_work_sync(&e->power_work);
++	cancel_delayed_work_sync(&e->done_work);
++	cancel_delayed_work_sync(&e->watchdog);
++	cancel_work_sync(&e->submit_work);
 +}
 +
 +static void epdc_put_clocks(void *data)
@@ -3856,10 +4665,21 @@
 +	}
 +	mutex_init(&e->lock);
 +	INIT_WORK(&e->power_work, epdc_power_work);
++	INIT_WORK(&e->submit_work, epdc_submit_work);
++	INIT_DELAYED_WORK(&e->done_work, epdc_done_work);
++	INIT_DELAYED_WORK(&e->watchdog, epdc_watchdog);
++	INIT_LIST_HEAD(&e->pending);
++	INIT_LIST_HEAD(&e->collisions);
++	INIT_LIST_HEAD(&e->markers);
++	init_waitqueue_head(&e->idle_wait);
++	e->scheme = IMX50_EPDC_QUEUE_AND_MERGE;
++	e->powerdown_delay = 0;
 +	base = devm_platform_ioremap_resource(pdev, 0);
 +	if (IS_ERR(base))
 +		return PTR_ERR(base);
 +	imx50_epdc_hw_init(&e->hw, base);
++	e->hw.notify = epdc_notify;
++	e->hw.notify_data = e;
 +	ret = devm_k4_panel_flash_link(dev, "nvmem");
 +	if (ret)
 +		return dev_err_probe(dev, ret, "panel flash supplier\n");
@@ -3941,13 +4761,18 @@
 +static void epdc_shutdown(struct platform_device *pdev)
 +{
 +	struct imx50_epdc *e = platform_get_drvdata(pdev);
++	int ret;
 +
 +	mutex_lock(&e->lock);
 +	WRITE_ONCE(e->ready, false);
 +	e->stopped = true;
-+	epdc_off_locked(e);
 +	mutex_unlock(&e->lock);
-+	cancel_work_sync(&e->power_work);
++	ret = imx50_epdc_powerdown(e);
++	mutex_lock(&e->lock);
++	if (ret && !epdc_queue_idle(e))
++		epdc_fail_queue(e, ret);
++	mutex_unlock(&e->lock);
++	epdc_cancel_work(e);
 +}
 +
 +static void epdc_remove(struct platform_device *pdev)
@@ -3958,9 +4783,12 @@
 +	/* Managed links have detached fbdev and other consumers. Unregister the
 +	 * notifier before draining work so it cannot queue another power callback.
 +	 */
-+	WRITE_ONCE(e->ready, false);
++	epdc_shutdown(pdev);
 +	devm_regulator_unregister_notifier(e->display, &e->power_nb);
 +	cancel_work_sync(&e->power_work);
++	cancel_delayed_work_sync(&e->done_work);
++	cancel_delayed_work_sync(&e->watchdog);
++	cancel_work_sync(&e->submit_work);
 +	mutex_lock(&e->lock);
 +	e->stopped = true;
 +	epdc_off_locked(e);
@@ -4002,7 +4830,7 @@
 +MODULE_LICENSE("GPL");
 --- /dev/null
 +++ b/include/linux/imx50-epdc-buffer.h
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,49 @@
 +/* SPDX-License-Identifier: GPL-2.0-only */
 +#ifndef _LINUX_IMX50_EPDC_BUFFER_H
 +#define _LINUX_IMX50_EPDC_BUFFER_H
@@ -4012,13 +4840,13 @@
 +struct device;
 +struct imx50_pxp;
 +struct imx50_epdc_source;
++struct imx50_epdc_rect;
 +struct imx50_epdc_buffers;
 +
-+/* Controller submission values. Write UPD_CTRL last; it starts the update.
-+ * Only LUT0 is used: the controller owner must establish ALL LUTs/WB idle.
-+ * This descriptor is not permission to refresh without clocks/power/waveform
-+ * validation. Buffers remain owned by the object until completion.
-+ */
++#define IMX50_EPDC_NUM_LUTS 16
++#define IMX50_EPDC_MAX_UPDATES 20
++
++/* Controller submission values; UPD_CTRL starts DMA and is written last. */
 +struct imx50_epdc_command {
 +	u32 waveform_addr, working_addr, update_addr;
 +	u32 resolution, coordinates, size, fixed, control, temperature;
@@ -4032,30 +4860,29 @@
 +struct imx50_epdc_buffers *imx50_epdc_buffers_alloc(struct device *dev,
 +	u32 width, u32 height, const void *waveform, size_t waveform_size,
 +	u32 modes, u32 temperatures);
-+int imx50_epdc_buffers_prepare(struct imx50_epdc_buffers *b, struct imx50_pxp *pxp,
-+			       const struct imx50_epdc_source *src);
-+int imx50_epdc_buffers_begin(struct imx50_epdc_buffers *b, bool initialize,
-+			     bool full, u32 mode, u32 temperature,
-+			     struct imx50_epdc_command *command);
-+/* Zero requires IRQ/status proof that WB, every LUT and AXI are quiescent.
-+ * A nonzero error may be reported with DMA still in flight and quarantines
-+ * all DMA until system reset; it never claims to cancel. Success of INIT
-+ * establishes the working buffer's panel state; zero-filled RAM alone does not.
-+ */
-+int imx50_epdc_buffers_complete(struct imx50_epdc_buffers *b, int error);
-+/* Roll back begin ONLY before the first controller/DMA command write.
-+ * No cancellation of an issued command is possible through this function.
-+ */
-+int imx50_epdc_buffers_abort_unsubmitted(struct imx50_epdc_buffers *b);
-+/* Invalidate panel history after power loss, only when hardware is quiescent. */
++/* Owner reserves a slot through WB completion; collisions retain their slot. */
++int imx50_epdc_buffers_get(struct imx50_epdc_buffers *b);
++/* panel_region supplies panel coordinates for a compact captured source. */
++int imx50_epdc_buffers_prepare(struct imx50_epdc_buffers *b, unsigned int slot,
++	struct imx50_pxp *pxp, const struct imx50_epdc_source *src,
++	const struct imx50_epdc_rect *panel_region, u32 flags, u32 *histogram);
++int imx50_epdc_buffers_begin(struct imx50_epdc_buffers *b, unsigned int slot,
++	bool initialize, u32 update_mode, u32 mode, u32 temperature, unsigned int lut,
++	struct imx50_epdc_command *command);
++/* WB completion proves that the submitted update image is no longer read. */
++int imx50_epdc_buffers_complete(struct imx50_epdc_buffers *b, unsigned int slot);
++/* Only for a command that the backend has not written. */
++int imx50_epdc_buffers_abort_unsubmitted(struct imx50_epdc_buffers *b, unsigned int slot);
++int imx50_epdc_buffers_put(struct imx50_epdc_buffers *b, unsigned int slot);
++int imx50_epdc_buffers_error(struct imx50_epdc_buffers *b);
++void imx50_epdc_buffers_fault(struct imx50_epdc_buffers *b, int error);
 +int imx50_epdc_buffers_invalidate(struct imx50_epdc_buffers *b);
-+/* Refuses active/faulted objects; caller must not discard them on error. */
 +int imx50_epdc_buffers_free(struct imx50_epdc_buffers *b);
 +
 +#endif
 --- /dev/null
 +++ b/include/linux/imx50-epdc-image.h
-@@ -0,0 +1,43 @@
+@@ -0,0 +1,46 @@
 +/* SPDX-License-Identifier: GPL-2.0-only */
 +#ifndef _LINUX_IMX50_EPDC_IMAGE_H
 +#define _LINUX_IMX50_EPDC_IMAGE_H
@@ -4097,16 +4924,20 @@
 +		       const struct imx50_epdc_source *src,
 +		       void *dst, size_t dst_size, u32 dst_stride,
 +		       struct imx50_epdc_rect *update);
++int imx50_epdc_prepare_update(struct imx50_pxp *pxp,
++	const struct imx50_epdc_source *src, void *dst, size_t dst_size,
++	u32 dst_stride, struct imx50_epdc_rect *update, u32 flags, u32 *histogram);
 +
 +#endif
 --- /dev/null
 +++ b/include/linux/imx50-epdc.h
-@@ -0,0 +1,35 @@
+@@ -0,0 +1,64 @@
 +/* SPDX-License-Identifier: GPL-2.0-only */
 +#ifndef _LINUX_IMX50_EPDC_H
 +#define _LINUX_IMX50_EPDC_H
 +
 +#include <linux/types.h>
++#include <linux/imx50-epdc-image.h>
 +
 +struct device;
 +struct imx50_epdc;
@@ -4123,23 +4954,51 @@
 +};
 +
 +struct imx50_epdc *devm_imx50_epdc_get(struct device *consumer, const char *property);
-+/* Sleepable and serialized. Source stays immutable until return. First update
-+ * powers/configures the display and runs its full INIT before the image update.
-+ * No fixed test image, refresh count or automatic action is implied by probe.
-+ * Supplies stay enabled until powerdown or suspend. Consumers should powerdown
-+ * when their update queue is idle; they must not retain an unused powered panel.
-+ * Input must describe the desired complete canvas: after lost panel history,
-+ * INIT is followed by a full-canvas restore even for a partial request.
++#define IMX50_EPDC_MODE_AUTO 257U
++#define IMX50_EPDC_UPDATE_PARTIAL 0U
++#define IMX50_EPDC_UPDATE_FULL 1U
++#define IMX50_EPDC_ENABLE_INVERSION 1U
++#define IMX50_EPDC_FORCE_MONOCHROME 2U
++#define IMX50_EPDC_POWERDOWN_DISABLE (-1)
++
++struct imx50_epdc_update {
++	struct imx50_epdc_rect region;
++	u32 waveform_mode, update_mode, update_marker, flags;
++};
++
++enum imx50_epdc_auto_mode {
++	IMX50_EPDC_REGION_MODE,
++	IMX50_EPDC_AUTOMATIC_MODE,
++};
++
++enum imx50_epdc_update_scheme {
++	IMX50_EPDC_SNAPSHOT = 0,
++	IMX50_EPDC_QUEUE = 1,
++	IMX50_EPDC_QUEUE_AND_MERGE,
++};
++
++/* Sleepable queueing API. SNAPSHOT captures the region before returning.
++ * QUEUE and QUEUE_AND_MERGE require a valid canvas until completion and sample
++ * pixels when processing, including collision retries.
++ * Marker zero requests no completion tracking. Timeout does not cancel DMA.
 + */
-+int imx50_epdc_update(struct imx50_epdc *epdc, const struct imx50_epdc_source *source,
-+		      enum imx50_epdc_mode mode, bool full);
-+/* Quiescent power/clock shutdown. The next update requires a new panel INIT. */
++int imx50_epdc_send_update(struct imx50_epdc *epdc,
++	const struct imx50_epdc_source *source, const struct imx50_epdc_update *update);
++int imx50_epdc_wait_for_update_complete(struct imx50_epdc *epdc, u32 marker,
++	unsigned int timeout_ms);
++int imx50_epdc_flush(struct imx50_epdc *epdc, unsigned int timeout_ms);
++int imx50_epdc_set_powerdown_delay(struct imx50_epdc *epdc, int delay_ms);
++int imx50_epdc_get_powerdown_delay(struct imx50_epdc *epdc);
++int imx50_epdc_set_update_scheme(struct imx50_epdc *epdc,
++	enum imx50_epdc_update_scheme scheme);
++enum imx50_epdc_update_scheme imx50_epdc_get_update_scheme(struct imx50_epdc *epdc);
++/* Drain queued work, then gate clocks/power while retaining panel history. */
 +int imx50_epdc_powerdown(struct imx50_epdc *epdc);
 +
 +#endif
 --- /dev/null
 +++ b/include/linux/imx50-pxp.h
-@@ -0,0 +1,44 @@
+@@ -0,0 +1,49 @@
 +/* SPDX-License-Identifier: GPL-2.0-only */
 +#ifndef _LINUX_IMX50_PXP_H
 +#define _LINUX_IMX50_PXP_H
@@ -4179,8 +5038,215 @@
 +struct imx50_pxp *devm_imx50_pxp_get(struct device *consumer, const char *property);
 +/* Sleepable synchronous API; serialized across consumers, no FIFO guarantee. */
 +int imx50_pxp_convert(struct imx50_pxp *pxp, const struct imx50_pxp_image *image);
++/* Stock LUT transforms, followed by hardware histogram classification. */
++#define IMX50_PXP_INVERT 1U
++#define IMX50_PXP_MONOCHROME 2U
++int imx50_pxp_process(struct imx50_pxp *pxp, const struct imx50_pxp_image *image,
++		      u32 flags, u32 *histogram);
 +/* Release an idle healthy pool. A faulted pool cannot be freed until reboot. */
 +int imx50_pxp_trim(struct imx50_pxp *pxp);
 +void imx50_pxp_get_stats(struct imx50_pxp *pxp, struct imx50_pxp_stats *stats);
 +
++#endif
+--- /dev/null
++++ b/include/uapi/linux/mxcfb.h
+@@ -0,0 +1,199 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later WITH Linux-syscall-note */
++/*
++ * Copyright (C) 2013-2015 Freescale Semiconductor, Inc. All Rights Reserved
++ */
++
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License along
++ * with this program; if not, write to the Free Software Foundation, Inc.,
++ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++ */
++
++/*
++ * @file uapi/linux/mxcfb.h
++ *
++ * @brief Global header file for the MXC frame buffer
++ *
++ * @ingroup Framebuffer
++ */
++#ifndef __ASM_ARCH_MXCFB_H__
++#define __ASM_ARCH_MXCFB_H__
++
++#include <linux/fb.h>
++
++#define FB_SYNC_OE_LOW_ACT	0x80000000
++#define FB_SYNC_CLK_LAT_FALL	0x40000000
++#define FB_SYNC_DATA_INVERT	0x20000000
++#define FB_SYNC_CLK_IDLE_EN	0x10000000
++#define FB_SYNC_SHARP_MODE	0x08000000
++#define FB_SYNC_SWAP_RGB	0x04000000
++#define FB_ACCEL_TRIPLE_FLAG	0x00000000
++#define FB_ACCEL_DOUBLE_FLAG	0x00000001
++
++struct mxcfb_gbl_alpha {
++	int enable;
++	int alpha;
++};
++
++struct mxcfb_loc_alpha {
++	int enable;
++	int alpha_in_pixel;
++	unsigned long alpha_phy_addr0;
++	unsigned long alpha_phy_addr1;
++};
++
++struct mxcfb_color_key {
++	int enable;
++	__u32 color_key;
++};
++
++struct mxcfb_pos {
++	__u16 x;
++	__u16 y;
++};
++
++struct mxcfb_gamma {
++	int enable;
++	int constk[16];
++	int slopek[16];
++};
++
++struct mxcfb_gpu_split_fmt {
++	struct fb_var_screeninfo var;
++	unsigned long offset;
++};
++
++struct mxcfb_rect {
++	__u32 top;
++	__u32 left;
++	__u32 width;
++	__u32 height;
++};
++
++#define GRAYSCALE_8BIT				0x1
++#define GRAYSCALE_8BIT_INVERTED			0x2
++#define GRAYSCALE_4BIT                          0x3
++#define GRAYSCALE_4BIT_INVERTED                 0x4
++
++#define AUTO_UPDATE_MODE_REGION_MODE		0
++#define AUTO_UPDATE_MODE_AUTOMATIC_MODE		1
++
++#define UPDATE_SCHEME_SNAPSHOT			0
++#define UPDATE_SCHEME_QUEUE			1
++#define UPDATE_SCHEME_QUEUE_AND_MERGE		2
++
++#define UPDATE_MODE_PARTIAL			0x0
++#define UPDATE_MODE_FULL			0x1
++
++#define WAVEFORM_MODE_GLR16			4
++#define WAVEFORM_MODE_GLD16			5
++#define WAVEFORM_MODE_AUTO			257
++
++#define TEMP_USE_AMBIENT			0x1000
++
++#define EPDC_FLAG_ENABLE_INVERSION		0x01
++#define EPDC_FLAG_FORCE_MONOCHROME		0x02
++#define EPDC_FLAG_USE_CMAP			0x04
++#define EPDC_FLAG_USE_ALT_BUFFER		0x100
++#define EPDC_FLAG_TEST_COLLISION		0x200
++#define EPDC_FLAG_GROUP_UPDATE			0x400
++#define EPDC_FLAG_USE_DITHERING_Y1		0x2000
++#define EPDC_FLAG_USE_DITHERING_Y4		0x4000
++#define EPDC_FLAG_USE_REGAL				0x8000
++
++enum mxcfb_dithering_mode {
++	EPDC_FLAG_USE_DITHERING_PASSTHROUGH = 0x0,
++	EPDC_FLAG_USE_DITHERING_FLOYD_STEINBERG,
++	EPDC_FLAG_USE_DITHERING_ATKINSON,
++	EPDC_FLAG_USE_DITHERING_ORDERED,
++	EPDC_FLAG_USE_DITHERING_QUANT_ONLY,
++	EPDC_FLAG_USE_DITHERING_MAX,
++};
++
++#define FB_POWERDOWN_DISABLE			-1
++
++struct mxcfb_alt_buffer_data {
++	__u32 phys_addr;
++	__u32 width;	/* width of entire buffer */
++	__u32 height;	/* height of entire buffer */
++	struct mxcfb_rect alt_update_region;	/* region within buffer to update */
++};
++
++struct mxcfb_update_data {
++	struct mxcfb_rect update_region;
++	__u32 waveform_mode;
++	__u32 update_mode;
++	__u32 update_marker;
++	int temp;
++	unsigned int flags;
++	int dither_mode;
++	int quant_bit;
++	struct mxcfb_alt_buffer_data alt_buffer_data;
++};
++
++struct mxcfb_update_marker_data {
++	__u32 update_marker;
++	__u32 collision_test;
++};
++
++/*
++ * Structure used to define waveform modes for driver
++ * Needed for driver to perform auto-waveform selection
++ */
++struct mxcfb_waveform_modes {
++	int mode_init;
++	int mode_du;
++	int mode_gc4;
++	int mode_gc8;
++	int mode_gc16;
++	int mode_gc32;
++};
++
++/*
++ * Structure used to define a 5*3 matrix of parameters for
++ * setting IPU DP CSC module related to this framebuffer.
++ */
++struct mxcfb_csc_matrix {
++	int param[5][3];
++};
++
++#define MXCFB_WAIT_FOR_VSYNC	_IOW('F', 0x20, u_int32_t)
++#define MXCFB_SET_GBL_ALPHA     _IOW('F', 0x21, struct mxcfb_gbl_alpha)
++#define MXCFB_SET_CLR_KEY       _IOW('F', 0x22, struct mxcfb_color_key)
++#define MXCFB_SET_OVERLAY_POS   _IOWR('F', 0x24, struct mxcfb_pos)
++#define MXCFB_GET_FB_IPU_CHAN 	_IOR('F', 0x25, u_int32_t)
++#define MXCFB_SET_LOC_ALPHA     _IOWR('F', 0x26, struct mxcfb_loc_alpha)
++#define MXCFB_SET_LOC_ALP_BUF    _IOW('F', 0x27, unsigned long)
++#define MXCFB_SET_GAMMA	       _IOW('F', 0x28, struct mxcfb_gamma)
++#define MXCFB_GET_FB_IPU_DI 	_IOR('F', 0x29, u_int32_t)
++#define MXCFB_GET_DIFMT	       _IOR('F', 0x2A, u_int32_t)
++#define MXCFB_GET_FB_BLANK     _IOR('F', 0x2B, u_int32_t)
++#define MXCFB_SET_DIFMT		_IOW('F', 0x2C, u_int32_t)
++#define MXCFB_CSC_UPDATE	_IOW('F', 0x2D, struct mxcfb_csc_matrix)
++#define MXCFB_SET_GPU_SPLIT_FMT	_IOW('F', 0x2F, struct mxcfb_gpu_split_fmt)
++#define MXCFB_SET_PREFETCH	_IOW('F', 0x30, int)
++#define MXCFB_GET_PREFETCH	_IOR('F', 0x31, int)
++
++/* IOCTLs for E-ink panel updates */
++#define MXCFB_SET_WAVEFORM_MODES	_IOW('F', 0x2B, struct mxcfb_waveform_modes)
++#define MXCFB_SET_TEMPERATURE		_IOW('F', 0x2C, int32_t)
++#define MXCFB_SET_AUTO_UPDATE_MODE	_IOW('F', 0x2D, __u32)
++#define MXCFB_SEND_UPDATE		_IOW('F', 0x2E, struct mxcfb_update_data)
++#define MXCFB_WAIT_FOR_UPDATE_COMPLETE	_IOWR('F', 0x2F, struct mxcfb_update_marker_data)
++#define MXCFB_SET_PWRDOWN_DELAY		_IOW('F', 0x30, int32_t)
++#define MXCFB_GET_PWRDOWN_DELAY		_IOR('F', 0x31, int32_t)
++#define MXCFB_SET_UPDATE_SCHEME		_IOW('F', 0x32, __u32)
++#define MXCFB_GET_WORK_BUFFER		_IOWR('F', 0x34, unsigned long)
++#define MXCFB_DISABLE_EPDC_ACCESS	_IO('F', 0x35)
++#define MXCFB_ENABLE_EPDC_ACCESS	_IO('F', 0x36)
 +#endif

@@ -35,14 +35,14 @@ def main():
     a=argparse.ArgumentParser();a.add_argument('--cache',type=pathlib.Path,default=pathlib.Path.home()/'.cache/k4/sources');a.add_argument('--offline',action='store_true');a.add_argument('--out',default=os.environ.get('OUT',str(HERE.parents[1]/'out/userspace')))
     a.add_argument('--clean',action='store_true')
     a.add_argument('--busybox-cross-compile', help='override the compiler prefix for legacy BusyBox')
-    a.add_argument('--components',default='busybox,modutils,dropbear,wifi,regdb')
+    a.add_argument('--components',default='busybox,modutils,dropbear,wifi,regdb,epd')
     v=a.parse_args();OUT=pathlib.Path(v.out).resolve()
     CACHE=v.cache.resolve()
     OUT=output(OUT,[HERE,CACHE],v.clean)
     CACHE.mkdir(parents=True,exist_ok=True);BIN=OUT/'bin';BIN.mkdir(exist_ok=True)
     lock=json.loads((HERE/'sources.lock.json').read_text())
     components=v.components.split(',')
-    needed={'busybox':['busybox-1.31.1.tar.bz2'],'modutils':['busybox-1.31.1.tar.bz2'],'dropbear':['dropbear-2024.86.tar.bz2'],'wifi':['wpa_supplicant-2.11.tar.gz','libnl-3.12.0.tar.gz','iw-6.17.tar.xz'],'regdb':['wireless-regdb-2026.09.03.tar.xz']}
+    needed={'epd':[],'busybox':['busybox-1.31.1.tar.bz2'],'modutils':['busybox-1.31.1.tar.bz2'],'dropbear':['dropbear-2024.86.tar.bz2'],'wifi':['wpa_supplicant-2.11.tar.gz','libnl-3.12.0.tar.gz','iw-6.17.tar.xz'],'regdb':['wireless-regdb-2026.09.03.tar.xz']}
     names={name for c in components for name in needed[c]}
     if 'busybox' in components and not v.busybox_cross_compile:names.add('gcc-linaro-4.9.4-2017.01-x86_64_arm-linux-gnueabi.tar.xz')
     for name in sorted(names):
@@ -68,6 +68,12 @@ def main():
         elif c=='wifi':
             run(['bash',str(HERE/'wifi.sh'),str(CACHE),str(OUT/'wifi')],OUT)
             for f in ('wpa_supplicant','wpa_cli','iw'):shutil.copyfile(OUT/'wifi/bin'/f,BIN/f)
+        elif c=='epd':
+            run(['arm-linux-gnueabihf-gcc','-O2','-Wall','-Wextra','-Werror',
+                 '-mno-unaligned-access','-static','-idirafter',str(HERE.parents[1]/'include/uapi'),
+                 str(HERE/'k4-epd-update.c'),'-o',str(BIN/'k4-epd-update')],OUT)
+            run(['arm-linux-gnueabihf-strip','--strip-unneeded',str(BIN/'k4-epd-update')],OUT)
+            (BIN/'k4-epd-update').chmod(0o755)
         elif c=='regdb':
             src=extract('wireless-regdb-2026.09.03.tar.xz',OUT/'regdb')
             run(['python3','db2fw.py',str(BIN/'regulatory.db'),'db.txt'],src)

@@ -7,7 +7,7 @@ GROUPS={'01-platform':['arch/arm/configs/k4_defconfig','arch/arm/mach-imx','arch
 '02-clocks':['drivers/clk','drivers/pinctrl','include/dt-bindings/clock'],
 '03-power':['drivers/i2c','drivers/nvmem','drivers/mfd','drivers/regulator','drivers/power','drivers/rtc','drivers/watchdog','drivers/soc','include/linux/mfd','include/linux/k4'],
 '04-usb':['drivers/usb'],'05-wifi-mmc':['drivers/mmc','drivers/net/wireless/ath/ath6kl'],
-'06-display-input':['drivers/video','drivers/dma','drivers/input','drivers/hwmon','drivers/leds','drivers/misc','include/linux/imx50','include/linux/k4'],
+'06-display-input':['drivers/video','include/uapi/linux/mxcfb.h','drivers/dma','drivers/input','drivers/hwmon','drivers/leds','drivers/misc','include/linux/imx50','include/linux/k4'],
 '07-device-tree':['arch/arm/boot/dts','Documentation/devicetree/bindings']}
 DEBUG_CONFIGS={'CONFIG_K4_DIAGNOSTICS','CONFIG_K4_BOOT_TRACE','CONFIG_K4_PM_RAM_TRACE','CONFIG_IMX50_OCRAM_PROBE'}
 DEBUG_ONLY={'drivers/soc/imx/k4-pm-trace.c','drivers/power/supply/k4-mc13892-monitor.c','arch/arm/include/asm/k4-boot-trace.h'}
